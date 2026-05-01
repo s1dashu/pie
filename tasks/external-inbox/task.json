@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "external-inbox",
+  "description": "Sample webhook intake task.",
+  "trigger": {
+    "type": "webhook",
+    "path": "/tasks/external-inbox",
+    "secret": "change-me"
+  },
+  "action": {
+    "type": "exec",
+    "command": "true"
+  },
+  "sink": {
+    "type": "append_jsonl",
+    "path": "runtime/external-inbox.jsonl"
+  }
+}

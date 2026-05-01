@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "example-project-review",
+  "enabled": false,
+  "runAt": "2026-03-30T10:00:00.000Z",
+  "sessionKey": "wakeup:example-project-review",
+  "projectId": "example-project",
+  "prompt": "Review `projects/example-project/PROJECT.md`, check whether there has been new progress, update the project state if needed, and schedule another wakeup only if more follow-up is required."
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "runtime-health",
+  "description": "Sample Task Engine exec task.",
+  "trigger": {
+    "type": "interval",
+    "everySec": 180
+  },
+  "action": {
+    "type": "exec",
+    "command": "node -e 'console.log(JSON.stringify({ ok: true, now: new Date().toISOString() }))'",
+    "timeoutSec": 30
+  },
+  "sink": {
+    "type": "append_jsonl",
+    "path": "runtime/runtime-health.jsonl"
+  }
+}

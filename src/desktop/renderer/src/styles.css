@@ -1,0 +1,156 @@
+@import "tailwindcss";
+@import "@radix-ui/colors/slate.css";
+@import "@radix-ui/colors/slate-alpha.css";
+@import "@radix-ui/colors/lime.css";
+@import "@radix-ui/colors/lime-alpha.css";
+@import "@radix-ui/colors/red.css";
+@import "@radix-ui/colors/red-alpha.css";
+@import "@radix-ui/colors/white-alpha.css";
+@import "@radix-ui/colors/black-alpha.css";
+
+@theme {
+  --color-background: var(--slate-3);
+  --color-foreground: var(--slate-12);
+  --color-muted: var(--slate-4);
+  --color-muted-foreground: var(--slate-11);
+  --color-border: var(--slate-6);
+  --color-border-subtle: var(--slate-5);
+  --color-card: white;
+  --color-card-hover: var(--white-a8);
+  
+  --color-primary: var(--lime-9);
+  --color-primary-foreground: var(--lime-12);
+  --color-primary-hover: var(--lime-10);
+  
+  --color-accent: var(--lime-4);
+  --color-accent-foreground: var(--lime-11);
+  
+  --color-danger: var(--red-9);
+  --color-danger-foreground: var(--red-1);
+  --color-danger-hover: var(--red-10);
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-xs--letter-spacing: 0;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-sm--letter-spacing: 0;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-base--letter-spacing: 0;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-lg--letter-spacing: 0;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-xl--letter-spacing: 0;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.875rem;
+  --text-2xl--letter-spacing: 0;
+}
+
+:root {
+	--app-shell-radius: 60px;
+	--app-shell-gap: 6px;
+	--agent-detail-radius: var(--app-shell-radius);
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: var(--color-foreground);
+	background: transparent;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+}
+
+#root {
+	border-radius: var(--app-shell-radius);
+	corner-shape: squircle;
+	background: transparent;
+	overflow: hidden;
+}
+
+.app-continuous-corner {
+	border-radius: var(--app-shell-radius);
+	corner-shape: squircle;
+}
+
+.agent-detail-corner {
+	border-radius: var(--agent-detail-radius);
+	corner-shape: squircle;
+}
+
+[class*="rounded-"] {
+	corner-shape: squircle;
+}
+
+.agent-avatar-frame {
+	corner-shape: circle;
+}
+
+.agent-tabs-label {
+	font-size: var(--font-size-1);
+	line-height: var(--line-height-1);
+}
+
+button,
+input,
+select {
+	font: inherit;
+}
+
+input,
+textarea,
+select,
+[role="combobox"],
+[role="checkbox"] {
+	box-shadow: none;
+}
+
+button {
+	cursor: default;
+}
+
+.drag-region {
+	-webkit-app-region: drag;
+}
+
+.no-drag {
+	-webkit-app-region: no-drag;
+}
+
+/* Subtle Scrollbar */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: rgba(0, 0, 0, 0);
+	border-radius: 10px;
+	transition: background 0.2s ease-in-out;
+}
+
+*:hover > ::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+	background: var(--black-a3);
+}
+
+::-webkit-scrollbar-thumb:active {
+	background: var(--black-a4);
+}

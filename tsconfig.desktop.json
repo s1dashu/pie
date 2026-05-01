@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "moduleResolution": "Bundler",
+    "types": ["node", "electron", "vite/client"],
+    "noEmit": true
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "src/desktop/**/*.ts",
+    "src/desktop/**/*.tsx"
+  ]
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+out/
+.DS_Store
+.crush/
+.firecrawl/
+superhuman_refund_email.txt

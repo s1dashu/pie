@@ -1,0 +1,58 @@
+{
+  "name": "pie",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "out/main/index.js",
+  "bin": {
+    "pie": "dist/cli/index.js",
+    "pi-feishu": "dist/cli/index.js"
+  },
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js",
+    "start": "tsx src/cli/index.ts",
+    "start:onboard": "tsx src/cli/index.ts --onboard",
+    "dev": "PIE_RUN_MODE=dev tsx src/cli/index.ts",
+    "dev:onboard": "PIE_RUN_MODE=dev tsx src/cli/index.ts --onboard",
+    "desktop:dev": "electron-vite dev",
+    "desktop:build": "electron-vite build",
+    "desktop:start": "electron ."
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.3.0",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@mariozechner/pi-agent-core": "^0.71.1",
+    "@mariozechner/pi-ai": "^0.71.1",
+    "@mariozechner/pi-coding-agent": "^0.71.1",
+    "@radix-ui/colors": "^3.0.0",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/themes": "^3.3.0",
+    "@sinclair/typebox": "^0.34.48",
+    "@tailwindcss/vite": "^4.2.4",
+    "@tanstack/react-query": "^5.100.6",
+    "@types/electron": "^1.4.38",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@vitejs/plugin-react": "^6.0.1",
+    "chalk": "^5.6.2",
+    "clsx": "^2.1.1",
+    "cron-parser": "^5.5.0",
+    "qrcode-terminal": "^0.12.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-nice-avatar": "^1.5.0",
+    "solar-icon-set": "^2.0.1",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "electron": "^41.3.0",
+    "electron-vite": "^5.0.0",
+    "shx": "^0.4.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "vite": "^8.0.10"
+  }
+}
