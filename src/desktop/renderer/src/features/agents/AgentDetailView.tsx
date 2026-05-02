@@ -8,7 +8,7 @@ import { AgentHeader } from "./AgentHeader";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { emptyUsage, type AgentTab, tabs } from "./agent-display";
 
-const MAX_RESOURCE_HISTORY_POINTS = 120;
+const MAX_RESOURCE_HISTORY_POINTS = 240;
 
 function createEmptyResourceHistory(): ResourceChartHistory {
 	return { memory: [], cpu: [] };
@@ -71,8 +71,6 @@ export function AgentDetailView({
 	});
 	const usage = usageQuery.data ?? emptyUsage();
 	const resources = resourceQuery.data;
-	const todayMessages = usage.today.incomingMessages + usage.today.outgoingMessages;
-	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
 	const providerOptions = useMemo(() => {
 		const values = new Set(modelCatalogQuery.data?.providers ?? []);
 		if (draft.provider) {
@@ -307,8 +305,6 @@ export function AgentDetailView({
 						usage={usage}
 						resources={resources}
 						resourceHistory={resourceHistory}
-						todayMessages={todayMessages}
-						totalMessages={totalMessages}
 						draft={draft}
 						channelDraft={channelDraft}
 						modelSaveMessage={modelSaveMessage}

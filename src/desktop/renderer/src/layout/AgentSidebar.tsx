@@ -43,8 +43,8 @@ export function AgentSidebar({
 									size="inline"
 									onClick={() => onSelectAgent(agent.id)}
 									className={cn(
-										"pie-smooth-corner flex min-h-[72px] w-full items-center gap-3 rounded-[36px] px-2.5 py-3 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.96]",
-										isSelected ? "bg-white text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.04)]" : "text-foreground/80 hover:bg-white/60 hover:text-foreground",
+										"pie-smooth-corner flex min-h-[72px] w-full items-center gap-3 rounded-[36px] border-0 px-2.5 py-3 text-left transition-[background-color,color,scale] duration-200 hover:scale-[1.01] active:scale-[0.96]",
+										isSelected ? "bg-white text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.025)]" : "text-foreground/80 shadow-none hover:bg-white/60 hover:text-foreground",
 									)}
 								>
 									<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />

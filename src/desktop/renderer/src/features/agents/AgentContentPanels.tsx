@@ -12,7 +12,7 @@ import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { TerminalLog } from "../logs/TerminalLog";
 import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLevelOptions, type AgentTab } from "./agent-display";
-import { CacheHitTrend, UsageTrend } from "./UsageTrend";
+import { UsageTrend } from "./UsageTrend";
 
 export interface ResourceChartHistory {
 	updatedAt?: string;
@@ -26,8 +26,6 @@ export function AgentContentPanels({
 	usage,
 	resources,
 	resourceHistory,
-	todayMessages,
-	totalMessages,
 	draft,
 	channelDraft,
 	modelSaveMessage,
@@ -57,8 +55,6 @@ export function AgentContentPanels({
 	usage: AgentUsageStats;
 	resources?: AgentResourceStats;
 	resourceHistory: ResourceChartHistory;
-	todayMessages: number;
-	totalMessages: number;
 	draft: AgentDraft;
 	channelDraft: AgentDraft;
 	modelSaveMessage?: string;
@@ -84,20 +80,34 @@ export function AgentContentPanels({
 	onSaveChannel: () => void;
 }): JSX.Element {
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
+	const currentRunMessages = usage.currentRun.incomingMessages + usage.currentRun.outgoingMessages;
+	const cacheStats = getCacheStats(usage);
 
 	return (
 		<div className={activeTab === "overview" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-3" : ""}>
 			{activeTab === "overview" ? (
 				<>
 					<div className="grid grid-cols-4 gap-3">
-						<CompactMetric label="今日消息" value={formatCount(todayMessages)} />
-						<CompactMetric label="完成 Action" value={formatCount(usage.today.actions)} />
-						<CompactMetric label="今日 Token" value={formatTokenCount(usage.today.tokens)} />
-						<CompactMetric label="运行时长" value={formatDuration(usage.today.runDurationMs)} />
+						<CompactMetric
+							label="消息数"
+							value={formatCount(currentRunMessages)}
+						/>
+						<CompactMetric
+							label="工具调用次数"
+							value={formatCount(usage.currentRun.actions)}
+						/>
+						<CompactMetric
+							label="Token 消耗"
+							value={formatTokenCount(usage.currentRun.tokens)}
+						/>
+						<CompactMetric
+							label="运行时长"
+							value={formatDuration(usage.currentRun.runDurationMs)}
+						/>
 					</div>
 					<div className="pie-smooth-corner flex min-h-0 flex-1 flex-col overflow-hidden rounded-[42px] bg-[var(--slate-2)] pb-4 pt-5">
-						<div className="flex items-center justify-between px-4 pb-3">
-							<div className="text-sm font-medium text-foreground text-balance">运行日志</div>
+						<div className="flex items-center justify-between px-4 pb-2">
+							<SectionTitle title="运行日志" />
 						</div>
 						<TerminalLog agent={agent} />
 					</div>
@@ -105,7 +115,7 @@ export function AgentContentPanels({
 			) : activeTab === "model" ? (
 				<div className="mx-auto max-w-5xl space-y-4">
 					<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-						<div className="text-sm font-medium text-foreground text-balance">模型配置</div>
+						<SectionTitle title="模型配置" />
 						<div className="grid grid-cols-2 gap-4">
 							<Field label="Provider">
 								<Select
@@ -183,10 +193,7 @@ export function AgentContentPanels({
 			) : activeTab === "skills" ? (
 				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] p-5">
 					<div className="flex items-center justify-between gap-4">
-						<div>
-							<div className="text-sm font-medium text-foreground text-balance">Skills 管理</div>
-							<div className="mt-1 text-xs text-muted-foreground text-pretty">按目录来源管理；打开 folder 后直接增删或编辑 Skills。</div>
-						</div>
+						<SectionTitle title="Skills 管理" description="按目录来源管理；打开 folder 后直接增删或编辑 Skills。" />
 					</div>
 					<div className="mt-4 grid gap-3">
 						{isLoadingSkillSources ? (
@@ -208,10 +215,7 @@ export function AgentContentPanels({
 			) : activeTab === "channels" ? (
 				<div className="pie-smooth-corner mx-auto max-w-5xl space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
 					<div className="flex items-center justify-between gap-4">
-						<div>
-							<div className="text-sm font-medium text-foreground text-balance">渠道管理</div>
-							<div className="mt-1 text-xs text-muted-foreground text-pretty">当前仅支持飞书渠道。保存前会验证 App ID 和 App Secret。</div>
-						</div>
+						<SectionTitle title="渠道管理" description="当前仅支持飞书渠道。保存前会验证 App ID 和 App Secret。" />
 						<div className="pie-smooth-corner rounded-full bg-white px-3 py-1 text-xs font-medium text-muted-foreground">
 							飞书
 						</div>
@@ -261,37 +265,58 @@ export function AgentContentPanels({
 				</div>
 			) : (
 				<div className="mx-auto max-w-6xl space-y-4">
-					<div className="grid grid-cols-12 gap-4">
-						<UsageMetric className="col-span-3" label="今日消息" value={formatCount(todayMessages)} />
-						<UsageMetric className="col-span-3" label="今日 Token" value={formatTokenCount(usage.today.tokens)} />
-						<UsageMetric className="col-span-3" label="运行时长" value={formatDuration(usage.today.runDurationMs)} />
-						<StorageCard className="col-span-3" resources={resources} />
-						<ResourceChartCard
-								className="col-span-6 bg-[var(--slate-2)]"
-								title="内存"
-								value={formatBytes(resources?.memoryBytes ?? 0)}
-								tone="slate"
-								points={resourceHistory.memory}
-							/>
-							<ResourceChartCard
-								className="col-span-6 bg-[var(--slate-2)]"
-								title="CPU"
-								value={formatPercent(resources?.cpuPercent ?? 0)}
-								tone="slate"
-								points={resourceHistory.cpu}
-							/>
+					<div className="grid grid-cols-4 gap-4">
+						<UsageMetric
+							label="缓存命中率"
+							value={formatPercent(cacheStats.hitRate)}
+							hint={`${formatTokenCount(cacheStats.read)} / ${formatTokenCount(cacheStats.denom)}`}
+						/>
+						<UsageMetric
+							label="输入 Token"
+							value={formatTokenCount(cacheStats.totalInput)}
+							hint="含缓存"
+						/>
+						<UsageMetric
+							label="缓存 Token"
+							value={formatTokenCount(cacheStats.read)}
+							hint="缓存读取"
+						/>
+						<UsageMetric
+							label="输出 Token"
+							value={formatTokenCount(cacheStats.output)}
+							hint="模型输出"
+						/>
 					</div>
-					<div className="grid grid-cols-2 gap-4">
-						<div className="pie-smooth-corner rounded-[36px] bg-[var(--slate-2)] p-4">
-							<div className="flex items-center justify-between gap-4">
-								<div className="text-sm font-medium text-foreground text-balance">近一周 Token 用量</div>
-								<div className="text-xs text-muted-foreground tabular-nums">更新于 {new Date(usage.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
+					<div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2">
+						<ResourceChartCard
+							className="min-w-0 bg-[var(--slate-2)]"
+							title="内存"
+							value={formatBytes(resources?.memoryBytes ?? 0)}
+							hint="近期占用曲线"
+							tone="slate"
+							points={resourceHistory.memory}
+						/>
+						<ResourceChartCard
+							className="min-w-0 bg-[var(--slate-2)]"
+							title="CPU"
+							value={formatPercent(resources?.cpuPercent ?? 0)}
+							hint="主进程占用"
+							tone="slate"
+							points={resourceHistory.cpu}
+						/>
+					</div>
+					<div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2">
+						<StorageDetailCard resources={resources} />
+						<div className="pie-smooth-corner min-w-0 rounded-[36px] bg-[var(--slate-2)] p-4">
+							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+								<div className="min-w-0">
+									<SectionTitle title="近一周 Token 用量" description="每日消耗列表" />
+								</div>
+								<div className="shrink-0 text-xs text-muted-foreground tabular-nums sm:pt-0.5 sm:text-right">
+									更新于 {new Date(usage.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+								</div>
 							</div>
 							<UsageTrend usage={usage} />
-						</div>
-						<div className="pie-smooth-corner rounded-[36px] bg-[var(--slate-2)] p-4">
-							<div className="text-sm font-medium text-foreground text-balance">近一周缓存命中率</div>
-							<CacheHitTrend usage={usage} />
 						</div>
 					</div>
 				</div>
@@ -314,7 +339,7 @@ function SystemPromptCard({
 	return (
 		<div className="pie-smooth-corner group/system-prompt relative rounded-[42px] bg-[var(--slate-2)] p-5">
 			<div className="pr-9">
-				<div className="text-sm font-medium text-foreground text-balance">系统提示词</div>
+				<SectionTitle title="系统提示词" />
 				<div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
 					{source?.path ?? "Loading..."}
 				</div>
@@ -323,7 +348,7 @@ function SystemPromptCard({
 				<Button
 					variant="unstyled"
 					size="inline"
-					className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--lime-12)] focus:opacity-100 group-hover/system-prompt:opacity-100"
+					className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--slate-12)] focus:opacity-100 group-hover/system-prompt:opacity-100"
 					onClick={onOpen}
 					disabled={isLoading || isOpening || !source}
 					aria-label="Open System Prompt"
@@ -340,15 +365,36 @@ function SystemPromptCard({
 	);
 }
 
+function SectionTitle({
+	title,
+	description,
+	className,
+}: {
+	title: string;
+	description?: string;
+	className?: string;
+}): JSX.Element {
+	return (
+		<div className={cn("min-w-0", className)}>
+			<div className="truncate text-xs font-medium uppercase text-muted-foreground">{title}</div>
+			{description ? (
+				<div className="mt-1 text-xs leading-snug text-muted-foreground text-pretty">{description}</div>
+			) : null}
+		</div>
+	);
+}
+
 function ResourceChartCard({
 	title,
 	value,
+	hint,
 	tone,
 	points,
 	className,
 	}: {
 		title: string;
 		value: string;
+		hint?: string;
 		tone: "slate";
 		points: number[];
 		className?: string;
@@ -360,11 +406,14 @@ function ResourceChartCard({
 	const areaPath = path ? `${path} L 100 44 L 0 44 Z` : "";
 
 	return (
-		<div className={cn("pie-smooth-corner flex flex-col overflow-hidden rounded-[36px] p-4", className)}>
+		<div className={cn("pie-smooth-corner flex min-h-[8.5rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-4", className)}>
 			<div className="flex items-start justify-between gap-3">
-				<div className="min-w-0 text-sm font-medium text-foreground">{title}</div>
-				<div className="text-right text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</div>
+				<SectionTitle title={title} className="min-w-0" />
+				<div className="shrink-0 text-right text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</div>
 			</div>
+			{hint ? (
+				<p className="mt-1 min-w-0 text-xs leading-snug text-balance text-muted-foreground">{hint}</p>
+			) : null}
 			<div className="pie-smooth-corner relative mt-2 h-[72px] overflow-hidden rounded-2xl">
 				<svg viewBox="0 0 100 44" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
 					<path d={areaPath} fill={fill} />
@@ -376,13 +425,72 @@ function ResourceChartCard({
 	);
 }
 
-function StorageCard({ resources, className }: { resources?: AgentResourceStats; className?: string }): JSX.Element {
+function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): JSX.Element {
+	const storageBytes = resources?.storageBytes ?? 0;
+	const diskAvailableBytes = resources?.diskAvailableBytes;
+	const diskTotalBytes = resources?.diskTotalBytes;
+	const usedPercent = diskTotalBytes && diskTotalBytes > 0 ? (storageBytes / diskTotalBytes) * 100 : 0;
+
 	return (
-		<div className={cn("pie-smooth-corner flex flex-col rounded-[36px] bg-[var(--slate-2)] p-4", className)}>
-			<div className="text-sm font-medium text-foreground">存储空间</div>
-			<div className="mt-auto pt-2 truncate text-2xl font-bold tracking-tight text-foreground tabular-nums">{formatBytes(resources?.storageBytes ?? 0)}</div>
+		<div className="pie-smooth-corner min-w-0 rounded-[36px] bg-[var(--slate-2)] p-4">
+			<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+				<div className="min-w-0">
+					<SectionTitle title="存储空间" description="Profile home 与磁盘余量" />
+				</div>
+				<div className="shrink-0 text-2xl font-bold tracking-tight text-foreground tabular-nums">
+					{formatBytes(storageBytes)}
+				</div>
+			</div>
+			<div className="pie-smooth-corner mt-3 space-y-3 rounded-[24px] px-4 py-3">
+				<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
+					<div
+						className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
+						style={{ width: `${Math.min(100, Math.max(2, usedPercent))}%` }}
+					/>
+				</div>
+				<div className="grid gap-2 text-xs">
+					<StorageDetailRow label="Profile 占用" value={formatBytes(storageBytes)} />
+					<StorageDetailRow label="磁盘可用" value={diskAvailableBytes === undefined ? "未知" : formatBytes(diskAvailableBytes)} />
+					<StorageDetailRow label="磁盘容量" value={diskTotalBytes === undefined ? "未知" : formatBytes(diskTotalBytes)} />
+				</div>
+			</div>
 		</div>
 	);
+}
+
+function StorageDetailRow({ label, value }: { label: string; value: string }): JSX.Element {
+	return (
+		<div className="flex items-center justify-between gap-4">
+			<span className="min-w-0 truncate text-muted-foreground">{label}</span>
+			<span className="shrink-0 text-right text-foreground tabular-nums">{value}</span>
+		</div>
+	);
+}
+
+function getCacheStats(usage: AgentUsageStats): {
+	hitRate: number;
+	read: number;
+	write: number;
+	input: number;
+	totalInput: number;
+	output: number;
+	denom: number;
+} {
+	const read = usage.total.cacheReadTokens;
+	const write = usage.total.cacheWriteTokens;
+	const input = usage.total.inputTokens;
+	const totalInput = input + read + write;
+	const output = usage.total.outputTokens;
+	const denom = totalInput;
+	return {
+		hitRate: denom > 0 ? (read / denom) * 100 : 0,
+		read,
+		write,
+		input,
+		totalInput,
+		output,
+		denom,
+	};
 }
 
 function buildLinePath(points: number[], width: number, height: number): string {
@@ -475,7 +583,7 @@ function SkillSourceRow({
 				<Button
 					variant="unstyled"
 					size="inline"
-					className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--lime-12)] focus:opacity-100 group-hover/skill-source:opacity-100"
+					className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--slate-12)] focus:opacity-100 group-hover/skill-source:opacity-100"
 					onClick={onOpen}
 					disabled={isOpening}
 					aria-label="Open Skills Folder"

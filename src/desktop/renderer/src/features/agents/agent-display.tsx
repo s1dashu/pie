@@ -80,9 +80,11 @@ export function formatDuration(ms: number): string {
 }
 
 export function emptyUsage(): AgentUsageStats {
+	const emptyBucket = { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 };
 	return {
-		today: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 },
-		total: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 },
+		today: { ...emptyBucket },
+		total: { ...emptyBucket },
+		currentRun: { ...emptyBucket },
 		recentDays: [],
 		updatedAt: new Date(0).toISOString(),
 	};

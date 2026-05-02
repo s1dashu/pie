@@ -152,37 +152,42 @@ export function AgentHeader({
 								<PopoverTitle>Agent 信息</PopoverTitle>
 								<PopoverDescription className="mt-1">编辑头像和显示名称。</PopoverDescription>
 							</div>
-							<div className="pie-smooth-corner flex justify-center rounded-[24px] bg-[var(--slate-2)] p-4">
-								<button
-									type="button"
-									className="group/avatar-upload relative rounded-full outline-none transition-transform active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-[var(--lime-6)]"
-									onClick={() => fileInputRef.current?.click()}
-									disabled={isUploadingAvatar}
-									aria-label="更换头像"
-								>
-									<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={72} />
-									<span className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/35 text-white opacity-0 transition-opacity group-hover/avatar-upload:opacity-100 group-focus-visible/avatar-upload:opacity-100">
-										<AppIcon IconComponent={isUploadingAvatar ? RestartCircleBoldDuotone : GalleryAddLineDuotone} className={isUploadingAvatar ? "size-6 animate-spin" : "size-6"} />
-									</span>
-								</button>
-							</div>
-							<label className="pie-smooth-corner block space-y-2 rounded-[24px] bg-[var(--slate-2)] p-3">
-								<span className="text-xs font-medium text-muted-foreground">Agent 名称</span>
-								<Input
-									className="bg-white"
-									value={nameDraft}
-									onChange={(event) => setNameDraft(event.target.value)}
-									onKeyDown={(event) => {
-										if (event.key === "Enter") {
-											saveName();
-										}
-										if (event.key === "Escape") {
-											setNameDraft(agent.name);
-										}
-									}}
-									aria-label="Agent 名称"
-								/>
-							</label>
+								<div className="pie-smooth-corner space-y-5 rounded-[24px] bg-[var(--slate-2)] p-4">
+									<div>
+										<div className="mb-3.5 text-xs font-medium text-muted-foreground">Agent 头像</div>
+										<div className="flex justify-center">
+											<button
+												type="button"
+												className="group/avatar-upload relative rounded-full outline-none transition-transform active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+												onClick={() => fileInputRef.current?.click()}
+												disabled={isUploadingAvatar}
+												aria-label="更换头像"
+											>
+												<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={72} />
+												<span className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/35 text-white opacity-0 transition-opacity group-hover/avatar-upload:opacity-100 group-focus-visible/avatar-upload:opacity-100">
+													<AppIcon IconComponent={isUploadingAvatar ? RestartCircleBoldDuotone : GalleryAddLineDuotone} className={isUploadingAvatar ? "size-6 animate-spin" : "size-6"} />
+												</span>
+											</button>
+										</div>
+									</div>
+									<label className="block">
+										<span className="mb-4 block text-xs font-medium text-muted-foreground">Agent 名称</span>
+										<Input
+											className="bg-white"
+											value={nameDraft}
+											onChange={(event) => setNameDraft(event.target.value)}
+											onKeyDown={(event) => {
+												if (event.key === "Enter") {
+													saveName();
+												}
+												if (event.key === "Escape") {
+													setNameDraft(agent.name);
+												}
+											}}
+											aria-label="Agent 名称"
+										/>
+									</label>
+								</div>
 							<div className="flex justify-end">
 								<Button
 									size="sm"
@@ -227,7 +232,7 @@ export function AgentHeader({
 							<Button
 								variant="unstyled"
 								size="inline"
-								className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--lime-11)]"
+								className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
 								onClick={onStart}
 								aria-label="Start Agent"
 							>

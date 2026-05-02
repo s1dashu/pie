@@ -13,38 +13,47 @@ function PopoverTrigger({ ...props }: PopoverPrimitive.Trigger.Props) {
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />
 }
 
-function PopoverPortal({ ...props }: PopoverPrimitive.Portal.Props) {
-  return <PopoverPrimitive.Portal data-slot="popover-portal" {...props} />
-}
-
 function PopoverContent({
   className,
-  sideOffset = 8,
-  align = "start",
+  align = "center",
+  alignOffset = 0,
   side = "bottom",
-  children,
+  sideOffset = 4,
   ...props
-}: PopoverPrimitive.Popup.Props & PopoverPrimitive.Positioner.Props) {
+}: PopoverPrimitive.Popup.Props &
+  Pick<
+    PopoverPrimitive.Positioner.Props,
+    "align" | "alignOffset" | "side" | "sideOffset"
+  >) {
   return (
-    <PopoverPortal>
+    <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner
-        side={side}
         align={align}
+        alignOffset={alignOffset}
+        side={side}
         sideOffset={sideOffset}
-        className="z-50 outline-none"
+        className="isolate z-50"
       >
         <PopoverPrimitive.Popup
           data-slot="popover-content"
           className={cn(
-            "pie-smooth-corner w-80 origin-(--transform-origin) rounded-[32px] bg-popover p-4 text-popover-foreground shadow-[0_12px_40px_rgba(15,23,42,0.14),0_2px_8px_rgba(15,23,42,0.08)] ring-1 ring-foreground/5 outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2",
+            "z-50 flex w-72 origin-(--transform-origin) flex-col gap-4 rounded-2xl bg-popover p-4 text-sm text-popover-foreground shadow-2xl ring-1 ring-foreground/5 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className
           )}
           {...props}
-        >
-          {children}
-        </PopoverPrimitive.Popup>
+        />
       </PopoverPrimitive.Positioner>
-    </PopoverPortal>
+    </PopoverPrimitive.Portal>
+  )
+}
+
+function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="popover-header"
+      className={cn("flex flex-col gap-1 text-sm", className)}
+      {...props}
+    />
   )
 }
 
@@ -52,17 +61,20 @@ function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
   return (
     <PopoverPrimitive.Title
       data-slot="popover-title"
-      className={cn("text-sm font-bold leading-none text-foreground", className)}
+      className={cn("text-base font-medium", className)}
       {...props}
     />
   )
 }
 
-function PopoverDescription({ className, ...props }: PopoverPrimitive.Description.Props) {
+function PopoverDescription({
+  className,
+  ...props
+}: PopoverPrimitive.Description.Props) {
   return (
     <PopoverPrimitive.Description
       data-slot="popover-description"
-      className={cn("text-xs leading-relaxed text-muted-foreground", className)}
+      className={cn("text-muted-foreground", className)}
       {...props}
     />
   )
@@ -72,7 +84,7 @@ export {
   Popover,
   PopoverContent,
   PopoverDescription,
-  PopoverPortal,
+  PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
 }

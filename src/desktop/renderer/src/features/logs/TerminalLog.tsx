@@ -22,13 +22,14 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 				return;
 			}
 			setLogs((current) => {
-				const existingIndex = current.findIndex((line) => line.id === entry.id);
+				const entryKey = agentLogEntryKey(entry);
+				const existingIndex = current.findIndex((line) => agentLogEntryKey(line) === entryKey);
 				if (existingIndex !== -1) {
 					const next = [...current];
 					next[existingIndex] = entry;
 					return next;
 				}
-				return [...current.slice(-999), entry];
+				return [...current, entry].sort(compareAgentLogEntries).slice(-1000);
 			});
 		});
 		return () => {
@@ -59,7 +60,7 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			}];
 
 	return (
-		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-xs leading-5 text-[var(--slate-12)] [scrollbar-gutter:stable]">
+		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-[10px] leading-[14px] text-[var(--slate-12)] [scrollbar-gutter:stable]">
 			{lines.map((line) => (
 				<div key={line.id} className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
 					<span className={cn(
@@ -79,4 +80,16 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			))}
 		</div>
 	);
+}
+
+function agentLogEntryKey(entry: AgentLogEntry): string {
+	return `${entry.agentId}:${entry.id}:${entry.timestamp}`;
+}
+
+function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {
+	const timestampOrder = Date.parse(left.timestamp) - Date.parse(right.timestamp);
+	if (timestampOrder !== 0) {
+		return timestampOrder;
+	}
+	return left.id - right.id;
 }
