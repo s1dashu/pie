@@ -67,6 +67,10 @@ export default defineConfig({
 			alias: {
 				"@": resolve(__dirname, "src/desktop/renderer/src"),
 			},
+			dedupe: ["react", "react-dom"],
+		},
+		optimizeDeps: {
+			include: ["react", "react-dom", "@tanstack/react-query", "sonner", "next-themes", "qrcode.react"],
 		},
 	},
 });
