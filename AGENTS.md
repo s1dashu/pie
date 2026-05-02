@@ -13,6 +13,7 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 
 ## 当前真实状态
 
 - 根目录 `pie` 是产品 runtime：desktop、CLI/onboard、Feishu channel、Task Engine、system prompt、agent home。
+- 当前主要开发对象是桌面端；CLI/onboard、Feishu channel、Task Engine 等能力服务于桌面端的 Agent 客户端体验。
 - `pi-feishu/` 是独立子包，定位为纯 Feishu/Lark channel package；不要把根目录产品能力写进子包文档。
 - 当前完成度较高的 channel 只有 `feishu`；`wechat/slack/discord/telegram` 只能作为规划或占位，不要描述为已支持。
 - 当前真正运行的 backend 是 Pi / `pi-coding-agent`；Openclaw、Hermes 只是架构预留。
@@ -43,12 +44,24 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 
 
 这是当前阶段的 UI 架构规划，不是永远不变的规则；后续如果 shadcn/Base UI/Radix 生态或产品需求变化，可以重新调整。
 
-- Desktop UI 采用 shadcn-style 的 source-owned components：组件源码放在项目里，由 Pie 自己维护视觉和 API。
-- 新增 headless primitives 优先考虑 Base UI；存量 Radix primitives 可以继续保留，避免为了迁移而迁移。
+- Desktop UI 明确采用 **Shadcn UI** 的 source-owned components 模式：组件源码放在项目里，由 Pie 自己维护视觉和 API，不把 shadcn 当成运行时组件库使用。
+- 新增 Shadcn UI 组件时必须选择 **Base UI** 作为底层 primitive。使用 CLI 时在 renderer 项目内执行，并显式使用 `--base base` 初始化或查看文档，例如 `npx shadcn@latest init --base base --cwd src/desktop/renderer`、`npx shadcn@latest docs <component> --base base --cwd src/desktop/renderer`。
+- 新增或迁移 headless primitives 时优先使用 Base UI；存量 Radix primitives 可以继续保留，避免为了迁移而迁移。新增 `components/ui/*` 不应引入新的 `@radix-ui/react-*` 依赖，除非本条规划被明确更新。
 - Tailwind CSS 是样式表达层，用来消费 Pie 的设计 tokens，不把零散 utility 当成设计系统本身。
 - Pie 自己拥有设计 tokens：颜色、字号、圆角、间距、状态等应集中定义并逐步收敛。
 - Radix Colors 可以作为颜色 scale 的主要来源；Radix Themes 的 typography scale 可以作为字号参考。
 - Radix Themes components 不作为默认组件库，避免和 shadcn/Base UI + Tailwind 的样式控制模型混用；只有在明确隔离或临时原型场景下再考虑使用。
+
+## Desktop Skills 管理
+
+桌面端要真正实现 Skills 管理，但当前管理能力的边界很轻：**展示分组 + 打开对应 folder**。不要把它设计成复杂的 marketplace、安装器、权限系统或插件运行时。
+
+- Agent 独有 Skills：保存在该 Agent 自己 profile home 下的 `skills/`，例如 `<profile-home>/skills/`。
+- 同类型 Agent 共享 Skills：来自同 backend / 同 agent 类型自己的全局目录，例如 Codex 使用 `~/.codex/skills/`，Claude 使用 `~/.claude/skills/`。
+- 通用 Skills：来自跨 agent 的全局目录 `~/.agents/skills/`。
+- Desktop UI 中可以展示上述来源、路径和当前是否存在；主要操作是用系统文件管理器打开 folder。
+- 如果目录不存在，可以在用户打开时创建目录，或明确显示为空目录状态；不要把缺目录解释成配置错误。
+- Skills 的发现和展示只按目录来源分组，不要在还没有真实需求前引入数据库、同步状态或跨 backend 抽象。
 
 ## 配置与状态
 
@@ -58,6 +71,7 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 
 - profile registry：`~/.pie/profiles.json`
 - profile config：`<profile-home>/config.json`
 - secrets：`<profile-home>/.env`
+- profile-scoped skills：`<profile-home>/skills/`
 - runtime state：`sessions/`、`tasks/`、`projects/`、`runtime/`、`docs/`
 
 ## 开发命令
