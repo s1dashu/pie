@@ -105,6 +105,8 @@ export interface DesktopFeishuAppCredentials {
 	appId: string;
 	appSecret: string;
 	brand: "feishu" | "lark";
+	appName?: string;
+	avatarUrl?: string;
 }
 
 export interface AgentCreationDraft {
@@ -157,6 +159,7 @@ export interface AgentUsageDailyPoint extends UsageBucket {
 export interface AgentUsageStats {
 	today: UsageBucket;
 	total: UsageBucket;
+	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
 	runningSince?: string;
 	updatedAt: string;

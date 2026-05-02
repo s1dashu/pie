@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
 	upsertAgentEnv,
 } from "../../core/agent-home.js";
+import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import {
 	createAgentProfile,
 	getProfileModel,
@@ -56,6 +57,7 @@ const PROVIDER_CREDENTIAL_ENV: Record<string, string> = {
 	opencode: "OPENCODE_API_KEY",
 	"opencode-go": "OPENCODE_API_KEY",
 	"kimi-coding": "KIMI_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
 	"github-copilot": "COPILOT_GITHUB_TOKEN",
 	"amazon-bedrock": "AWS_BEARER_TOKEN_BEDROCK",
@@ -185,8 +187,31 @@ export async function createFeishuAppForSession(
 			appSecret: result.client_secret,
 			brand: result.user_info?.tenant_brand === "lark" ? "lark" as const : "feishu" as const,
 		};
-		emit({ sessionId, type: "done", message: `已创建 ${feishu.brand === "lark" ? "Lark" : "飞书"} 应用 ${feishu.appId}`, feishu });
-		return feishu;
+		emit({ sessionId, type: "status", message: "正在读取飞书应用名称和头像..." });
+		const probe = await LarkClient.fromCredentials({
+			accountId: `desktop-onboard-${sessionId}`,
+			appId: feishu.appId,
+			appSecret: feishu.appSecret,
+			brand: feishu.brand,
+		}).probe();
+		const syncedFeishu = {
+			...feishu,
+			...(probe.ok && probe.botName ? { appName: probe.botName } : {}),
+			...(probe.ok && probe.botAvatarUrl ? { avatarUrl: probe.botAvatarUrl } : {}),
+		};
+		const syncParts = [
+			syncedFeishu.appName ? "名称" : undefined,
+			syncedFeishu.avatarUrl ? "头像" : undefined,
+		].filter(Boolean);
+		emit({
+			sessionId,
+			type: "done",
+			message: syncParts.length
+				? `已创建 ${syncedFeishu.brand === "lark" ? "Lark" : "飞书"} 应用，并同步${syncParts.join("和")}`
+				: `已创建 ${syncedFeishu.brand === "lark" ? "Lark" : "飞书"} 应用，但未从开放平台读取到名称和头像`,
+			feishu: syncedFeishu,
+		});
+		return syncedFeishu;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		emit({ sessionId, type: "error", message });
@@ -254,7 +279,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	}
 	upsertAgentEnv(savedEnv, homeDir);
 	registerProfileHome(profileId, {
-		displayName: draft.name?.trim() || profileId,
+		displayName: draft.feishu.appName?.trim() || draft.name?.trim() || profileId,
 		enabled: false,
 		active: true,
 	});

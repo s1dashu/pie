@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../../components/ui/dialog";
 import { cn } from "../../lib/utils";
 import { brandOptions, thinkingLevelOptions } from "./agent-display";
+import { ProviderSelect } from "./ProviderSelect";
 
 export function CreateAgentDialog({
 	open,
@@ -49,6 +50,12 @@ export function CreateAgentDialog({
 		queryFn: () => window.pie.listBotAvatars(),
 		enabled: open,
 	});
+	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
+		setFeishu(created);
+		if (created.appName?.trim()) {
+			setName(created.appName.trim());
+		}
+	};
 
 	const begin = useMutation({
 		mutationFn: () => window.pie.beginAgentCreation(),
@@ -68,7 +75,7 @@ export function CreateAgentDialog({
 	const createFeishu = useMutation({
 		mutationFn: (sessionId: string) => window.pie.createFeishuApp(sessionId),
 		onSuccess: (created) => {
-			setFeishu(created);
+			applyFeishuApp(created);
 			setStep("model");
 		},
 		onError: (err: Error) => onError(err.message),
@@ -129,13 +136,17 @@ export function CreateAgentDialog({
 				setStatus(event.message);
 			}
 			if (event.feishu) {
-				setFeishu(event.feishu);
+				applyFeishuApp(event.feishu);
 			}
 		});
 	}, [session?.sessionId]);
 
 	const modelsForProvider = session?.models.filter((item) => item.provider === provider) ?? [];
 	const providers = session?.providers.length ? session.providers : [provider];
+	const updateProviderSelection = (nextProvider: string) => {
+		setProvider(nextProvider);
+		setModel(session?.models.find((item) => item.provider === nextProvider)?.id ?? "");
+	};
 
 	return (
 		<Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -197,22 +208,14 @@ export function CreateAgentDialog({
 						</div>
 					) : (
 						<div className="space-y-4 rounded-3xl bg-[var(--slate-2)] p-5">
+							<FeishuSyncPreview feishu={feishu} />
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="供应商">
-									<Select
+									<ProviderSelect
 										value={provider}
-										onValueChange={(nextProvider) => {
-											setProvider(nextProvider);
-											setModel(session.models.find((item) => item.provider === nextProvider)?.id ?? "");
-										}}
-									>
-										<SelectTrigger>
-											<SelectValue />
-										</SelectTrigger>
-										<SelectContent>
-											{providers.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-										</SelectContent>
-									</Select>
+										providers={providers}
+										onValueChange={updateProviderSelection}
+									/>
 								</Field>
 								<Field label="模型">
 									{modelsForProvider.length ? (
@@ -221,7 +224,7 @@ export function CreateAgentDialog({
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												{modelsForProvider.map((item) => <SelectItem key={item.id} value={item.id}>{item.name && item.name !== item.id ? `${item.id} · ${item.name}` : item.id}</SelectItem>)}
+												{modelsForProvider.map((item) => <SelectItem key={item.id} value={item.id}>{item.name || item.id}</SelectItem>)}
 											</SelectContent>
 										</Select>
 									) : (
@@ -270,6 +273,36 @@ export function CreateAgentDialog({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | undefined }): JSX.Element {
+	const hasAvatar = Boolean(feishu?.avatarUrl?.trim());
+	return (
+		<div className="flex items-center gap-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
+			<div
+				className={cn(
+					"grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full ring-1 ring-foreground/10",
+					hasAvatar
+						? "bg-white"
+						: "bg-[linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%),linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%)] bg-[length:12px_12px] bg-[position:0_0,6px_6px]",
+				)}
+			>
+				{hasAvatar ? (
+					<img src={feishu?.avatarUrl} alt="" className="h-full w-full object-cover" draggable={false} />
+				) : (
+					<span className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/60" />
+				)}
+			</div>
+			<div className="min-w-0 text-left">
+				<div className="truncate text-sm font-medium text-foreground">
+					{feishu?.appName?.trim() || "未读取到开放平台应用名称"}
+				</div>
+				<div className="mt-0.5 text-xs text-muted-foreground">
+					{hasAvatar ? "已读取开放平台头像" : "未读取到开放平台头像，创建后不会使用本地头像兜底"}
+				</div>
+			</div>
+		</div>
 	);
 }
 

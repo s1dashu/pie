@@ -65,4 +65,5 @@ export interface LarkProbeResult {
 	appId?: string;
 	botName?: string;
 	botOpenId?: string;
+	botAvatarUrl?: string;
 }

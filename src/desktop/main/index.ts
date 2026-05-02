@@ -159,6 +159,49 @@ function writeUploadToProfileAvatar(upload: AgentAvatarUpload, homeDir: string):
 	writeFileSync(join(homeDir, `${PROFILE_AVATAR_STEM}${ext}`), data);
 }
 
+function avatarExtensionFromContent(contentType: string | null, url: string): ".png" | ".jpg" | ".webp" {
+	const type = contentType?.split(";")[0]?.trim().toLowerCase();
+	if (type === "image/png") {
+		return ".png";
+	}
+	if (type === "image/jpeg" || type === "image/jpg") {
+		return ".jpg";
+	}
+	if (type === "image/webp") {
+		return ".webp";
+	}
+	const pathExt = extname(new URL(url).pathname).toLowerCase();
+	if (PROFILE_AVATAR_EXTENSIONS.includes(pathExt as (typeof PROFILE_AVATAR_EXTENSIONS)[number])) {
+		return pathExt === ".jpeg" ? ".jpg" : pathExt as ".png" | ".jpg" | ".webp";
+	}
+	return ".png";
+}
+
+async function downloadRemoteAvatarToProfile(url: string | undefined, homeDir: string): Promise<boolean> {
+	if (!url?.trim()) {
+		return false;
+	}
+	try {
+		const response = await fetch(url.trim());
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}`);
+		}
+		const contentType = response.headers.get("content-type");
+		const ext = avatarExtensionFromContent(contentType, url.trim());
+		const data = Buffer.from(await response.arrayBuffer());
+		if (!data.length) {
+			throw new Error("empty response");
+		}
+		mkdirSync(homeDir, { recursive: true });
+		clearProfileAvatarFiles(homeDir);
+		writeFileSync(join(homeDir, `${PROFILE_AVATAR_STEM}${ext}`), data);
+		return true;
+	} catch (error) {
+		console.warn("[desktop] failed to download Feishu app avatar:", error);
+		return false;
+	}
+}
+
 function botAvatarLabel(fileName: string): string {
 	const stem = fileName.replace(/\.[^.]+$/, "");
 	return stem
@@ -1038,12 +1081,9 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("agents:create-complete", async (_event, draft: AgentCreationDraft) => {
 		try {
-			if (draft.avatarId?.trim()) {
-				resolveBotAvatarPath(draft.avatarId.trim());
-			}
 			completeCreationSession(draft);
 			const agent = await getAgent(draft.sessionId);
-			copyDefaultAvatarToProfile(draft.avatarId, agent.home);
+			await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
 			return await getAgent(draft.sessionId);
 		} catch (error) {
 			console.error("[ipc] agents:create-complete failed:", error);

@@ -65,6 +65,7 @@ export class LarkClient {
 	private wsClient: Lark.WSClient | null = null;
 	private botOpenIdValue: string | undefined;
 	private botNameValue: string | undefined;
+	private botAvatarUrlValue: string | undefined;
 	private lastProbeResult: LarkProbeResult | null = null;
 	private lastProbeAt = 0;
 
@@ -95,6 +96,10 @@ export class LarkClient {
 
 	get botName(): string | undefined {
 		return this.botNameValue;
+	}
+
+	get botAvatarUrl(): string | undefined {
+		return this.botAvatarUrlValue;
 	}
 
 	get wsConnected(): boolean {
@@ -210,12 +215,14 @@ export class LarkClient {
 
 			const bot = response?.bot ?? response?.data?.bot;
 			this.botOpenIdValue = bot?.open_id;
-			this.botNameValue = bot?.name ?? bot?.bot_name;
+			this.botNameValue = bot?.app_name ?? bot?.name ?? bot?.bot_name;
+			this.botAvatarUrlValue = bot?.avatar_url;
 			const result = {
 				ok: true,
 				appId: this.account.appId,
 				botOpenId: this.botOpenIdValue,
 				botName: this.botNameValue,
+				botAvatarUrl: this.botAvatarUrlValue,
 			} satisfies LarkProbeResult;
 			this.lastProbeResult = result;
 			this.lastProbeAt = Date.now();
