@@ -85,7 +85,7 @@ function getAgentTypeSkillDir(profile: AgentConfigStore["profile"]): { label: st
 		return { label: "Claude 共享 Skills", path: join(homedir(), ".claude", "skills") };
 	}
 	if (kind === "pi") {
-		return { label: "Pi 共享 Skills", path: join(getDefaultPieRootDir(), "skills") };
+		return { label: "Pi 共享 Skills", path: join(homedir(), ".pi", "skills") };
 	}
 	return { label: `${kind} 共享 Skills`, path: join(homedir(), `.${kind}`, "skills") };
 }
