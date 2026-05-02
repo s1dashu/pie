@@ -1,8 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentCreationDraft, AgentDraft, AgentLogEntry, AgentOnboardEvent, PieDesktopApi } from "../shared/types.js";
+import type { AgentAvatarUpload, AgentCreationDraft, AgentDraft, AgentLogEntry, AgentOnboardEvent, DesktopSettingsDraft, PieDesktopApi } from "../shared/types.js";
 
 const api: PieDesktopApi = {
+	getSettings: () => ipcRenderer.invoke("settings:get"),
+	updateSettings: (draft: DesktopSettingsDraft) => ipcRenderer.invoke("settings:update", draft),
 	listAgents: () => ipcRenderer.invoke("agents:list"),
+	listBotAvatars: () => ipcRenderer.invoke("bot-avatars:list"),
+	downloadBotAvatar: (id: string) => ipcRenderer.invoke("bot-avatars:download", id),
+	uploadAgentAvatar: (id: string, upload: AgentAvatarUpload) => ipcRenderer.invoke("agents:avatar-upload", id, upload),
+	downloadAgentAvatar: (id: string) => ipcRenderer.invoke("agents:avatar-download", id),
 	beginAgentCreation: () => ipcRenderer.invoke("agents:create-begin"),
 	createFeishuApp: (sessionId: string) => ipcRenderer.invoke("agents:create-feishu-app", sessionId),
 	completeAgentCreation: (draft: AgentCreationDraft) => ipcRenderer.invoke("agents:create-complete", draft),
@@ -18,6 +24,8 @@ const api: PieDesktopApi = {
 	getAgentModelCatalog: (id: string) => ipcRenderer.invoke("agents:model-catalog", id),
 	getAgentSkillSources: (id: string) => ipcRenderer.invoke("agents:skill-sources", id),
 	openAgentSkillSource: (id: string, sourceId: string) => ipcRenderer.invoke("agents:skill-source-open", id, sourceId),
+	getAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt", id),
+	openAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt-open", id),
 	getAgentLogs: (id: string) => ipcRenderer.invoke("agents:logs", id),
 	onAgentLog: (callback: (entry: AgentLogEntry) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentLogEntry) => callback(payload);

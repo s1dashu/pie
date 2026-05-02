@@ -61,6 +61,36 @@ const PROVIDER_CREDENTIAL_ENV: Record<string, string> = {
 	"amazon-bedrock": "AWS_BEARER_TOKEN_BEDROCK",
 };
 
+const DEFAULT_BOT_NAMES = [
+	"Mia",
+	"Ava",
+	"Eva",
+	"Ivy",
+	"Zoe",
+	"Amy",
+	"May",
+	"Ada",
+	"Elsa",
+	"Nora",
+	"Lily",
+	"Yui",
+	"Lua",
+	"Luna",
+	"Mimi",
+	"Kiki",
+];
+
+function pickDefaultBotName(): string {
+	return DEFAULT_BOT_NAMES[Math.floor(Math.random() * DEFAULT_BOT_NAMES.length)] ?? "Mia";
+}
+
+export function getProviderCredentialEnv(provider: string): string | undefined {
+	if (provider === "pie-openai-proxy") {
+		return "PIE_OPENAI_PROXY_API_KEY";
+	}
+	return PROVIDER_CREDENTIAL_ENV[provider];
+}
+
 function modelToOption(model: Model<any>): DesktopModelOption {
 	return {
 		id: String(model.id),
@@ -115,7 +145,7 @@ export function beginAgentCreation(): AgentCreationSession {
 	return {
 		sessionId: profileId,
 		profileId,
-		name: profileId,
+		name: pickDefaultBotName(),
 		home,
 		models,
 		providers,
@@ -210,7 +240,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 			tools: exModel?.tools ?? "coding",
 			debug: exModel?.debug ?? false,
 			resumeSessions: true,
-			outputToolCallsToIm: false,
+			outputToolCallsToIm: true,
 		},
 	});
 
@@ -218,7 +248,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const savedEnv: Record<string, string> = {
 		FEISHU_APP_SECRET: draft.feishu.appSecret.trim(),
 	};
-	const envKey = provider === "pie-openai-proxy" ? "PIE_OPENAI_PROXY_API_KEY" : PROVIDER_CREDENTIAL_ENV[provider];
+	const envKey = getProviderCredentialEnv(provider);
 	if (envKey && apiKey) {
 		savedEnv[envKey] = apiKey;
 	}

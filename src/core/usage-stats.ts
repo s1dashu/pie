@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pruneJsonlFile } from "./agent-logs.js";
 
 export type AgentUsageEventType = "message" | "action" | "runtime";
 
@@ -9,6 +10,11 @@ export interface AgentUsageEvent {
 	direction?: "incoming" | "outgoing";
 	textChars?: number;
 	estimatedTokens?: number;
+	actualTokens?: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
 	actionName?: string;
 	status?: "success" | "error";
 	runtimeEvent?: "start" | "stop";
@@ -21,6 +27,10 @@ export interface UsageBucket {
 	actions: number;
 	failedActions: number;
 	tokens: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	runDurationMs: number;
 }
 
@@ -45,6 +55,10 @@ function createBucket(): UsageBucket {
 		actions: 0,
 		failedActions: 0,
 		tokens: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
 		runDurationMs: 0,
 	};
 }
@@ -98,11 +112,17 @@ export function readAgentUsageEvents(homeDir: string): AgentUsageEvent[] {
 	return events;
 }
 
+export function pruneAgentUsageEvents(homeDir: string, retentionDays?: number, now = Date.now()): void {
+	pruneJsonlFile(getAgentUsageFilePath(homeDir), retentionDays, now);
+}
+
 export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runningSince?: number; now?: number }): AgentUsageStats {
 	const now = options?.now ?? Date.now();
 	const todayKey = dateKey(now);
 	const total = createBucket();
 	const byDate = new Map<string, UsageBucket>();
+	const estimatedTokensByDate = new Map<string, number>();
+	const actualTokensByDate = new Map<string, number>();
 	let activeRuntimeStart: number | undefined;
 
 	function bucketFor(timestamp: string): UsageBucket {
@@ -134,9 +154,26 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 				total.outgoingMessages += 1;
 				bucket.outgoingMessages += 1;
 			}
-			const tokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
-			total.tokens += tokens;
-			bucket.tokens += tokens;
+			const key = dateKey(event.timestamp);
+			const actualTokens = typeof event.actualTokens === "number" && Number.isFinite(event.actualTokens) ? event.actualTokens : undefined;
+			if (actualTokens !== undefined) {
+				actualTokensByDate.set(key, (actualTokensByDate.get(key) ?? 0) + actualTokens);
+				const inputTokens = typeof event.inputTokens === "number" && Number.isFinite(event.inputTokens) ? event.inputTokens : 0;
+				const outputTokens = typeof event.outputTokens === "number" && Number.isFinite(event.outputTokens) ? event.outputTokens : 0;
+				const cacheReadTokens = typeof event.cacheReadTokens === "number" && Number.isFinite(event.cacheReadTokens) ? event.cacheReadTokens : 0;
+				const cacheWriteTokens = typeof event.cacheWriteTokens === "number" && Number.isFinite(event.cacheWriteTokens) ? event.cacheWriteTokens : 0;
+				bucket.inputTokens += inputTokens;
+				bucket.outputTokens += outputTokens;
+				bucket.cacheReadTokens += cacheReadTokens;
+				bucket.cacheWriteTokens += cacheWriteTokens;
+				total.inputTokens += inputTokens;
+				total.outputTokens += outputTokens;
+				total.cacheReadTokens += cacheReadTokens;
+				total.cacheWriteTokens += cacheWriteTokens;
+			} else {
+				const estimatedTokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
+				estimatedTokensByDate.set(key, (estimatedTokensByDate.get(key) ?? 0) + estimatedTokens);
+			}
 			continue;
 		}
 		if (event.type === "action") {
@@ -166,6 +203,11 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 		addRuntimeDuration(options.runningSince, now);
 	} else if (activeRuntimeStart !== undefined) {
 		addRuntimeDuration(activeRuntimeStart, now);
+	}
+
+	for (const [key, bucket] of byDate) {
+		bucket.tokens = actualTokensByDate.get(key) ?? estimatedTokensByDate.get(key) ?? 0;
+		total.tokens += bucket.tokens;
 	}
 
 	return {

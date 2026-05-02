@@ -6,6 +6,7 @@ export interface AgentSummary {
 	name: string;
 	status: AgentStatus;
 	avatarSeed: string;
+	avatarUrl?: string;
 	enabled: boolean;
 	active: boolean;
 	home: string;
@@ -23,10 +24,38 @@ export interface AgentDetails extends AgentSummary {
 		model?: string;
 		thinkingLevel?: string;
 		outputToolCallsToIm?: boolean;
+		apiKey?: string;
+		apiKeyEnv?: string;
 	};
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type DesktopLanguage = "zh" | "en";
+export type DesktopCloseWindowBehavior = "hide" | "quit";
+export type DesktopLogRetention = "7d" | "30d" | "90d" | "forever";
+
+export interface DesktopSettings {
+	language: DesktopLanguage;
+	closeWindowBehavior: DesktopCloseWindowBehavior;
+	quitTerminatesAgents: boolean;
+	restoreRunningAgentsOnLaunch: boolean;
+	openAtLogin: boolean;
+	runtimeLogRetention: DesktopLogRetention;
+	usageEventRetention: DesktopLogRetention;
+}
+
+export type DesktopSettingsDraft = Partial<
+	Pick<
+		DesktopSettings,
+		| "language"
+		| "closeWindowBehavior"
+		| "quitTerminatesAgents"
+		| "restoreRunningAgentsOnLaunch"
+		| "openAtLogin"
+		| "runtimeLogRetention"
+		| "usageEventRetention"
+	>
+>;
 
 export interface AgentDraft {
 	name?: string;
@@ -34,6 +63,7 @@ export interface AgentDraft {
 	model?: string;
 	thinkingLevel?: DesktopThinkingLevel;
 	outputToolCallsToIm?: boolean;
+	apiKey?: string;
 	appId?: string;
 	appSecret?: string;
 	brand?: "feishu" | "lark";
@@ -59,6 +89,18 @@ export interface AgentCreationSession {
 	providers: string[];
 }
 
+export interface BotAvatarOption {
+	id: string;
+	fileName: string;
+	label: string;
+	dataUrl: string;
+}
+
+export interface AgentAvatarUpload {
+	fileName: string;
+	dataUrl: string;
+}
+
 export interface DesktopFeishuAppCredentials {
 	appId: string;
 	appSecret: string;
@@ -68,6 +110,7 @@ export interface DesktopFeishuAppCredentials {
 export interface AgentCreationDraft {
 	sessionId: string;
 	name?: string;
+	avatarId?: string;
 	feishu: DesktopFeishuAppCredentials;
 	provider: string;
 	model: string;
@@ -100,6 +143,10 @@ export interface UsageBucket {
 	actions: number;
 	failedActions: number;
 	tokens: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	runDurationMs: number;
 }
 
@@ -140,8 +187,22 @@ export interface AgentSkillSource {
 	skills: string[];
 }
 
+export interface AgentSystemPromptSource {
+	label: string;
+	description: string;
+	path: string;
+	exists: boolean;
+	content: string;
+}
+
 export interface PieDesktopApi {
+	getSettings(): Promise<DesktopSettings>;
+	updateSettings(draft: DesktopSettingsDraft): Promise<DesktopSettings>;
 	listAgents(): Promise<AgentSummary[]>;
+	listBotAvatars(): Promise<BotAvatarOption[]>;
+	downloadBotAvatar(id: string): Promise<void>;
+	uploadAgentAvatar(id: string, upload: AgentAvatarUpload): Promise<AgentDetails>;
+	downloadAgentAvatar(id: string): Promise<void>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
 	completeAgentCreation(draft: AgentCreationDraft): Promise<AgentDetails>;
@@ -157,6 +218,8 @@ export interface PieDesktopApi {
 	getAgentModelCatalog(id: string): Promise<DesktopModelCatalog>;
 	getAgentSkillSources(id: string): Promise<AgentSkillSource[]>;
 	openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]>;
+	getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
+	openAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;

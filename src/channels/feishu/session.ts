@@ -122,6 +122,44 @@ function extractTaskText(content: unknown): string | undefined {
 	return undefined;
 }
 
+function readNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function extractModelUsage(message: unknown): {
+	actualTokens: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+} | undefined {
+	if (!message || typeof message !== "object") {
+		return undefined;
+	}
+	const usage = (message as { usage?: unknown }).usage;
+	if (!usage || typeof usage !== "object") {
+		return undefined;
+	}
+	const typedUsage = usage as Record<string, unknown>;
+	const inputTokens = readNumber(typedUsage.input);
+	const outputTokens = readNumber(typedUsage.output);
+	const cacheReadTokens = readNumber(typedUsage.cacheRead);
+	const cacheWriteTokens = readNumber(typedUsage.cacheWrite);
+	const totalTokens = readNumber(typedUsage.totalTokens);
+	const calculatedTokens = (inputTokens ?? 0) + (outputTokens ?? 0) + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+	const actualTokens = totalTokens ?? calculatedTokens;
+	if (!Number.isFinite(actualTokens) || actualTokens <= 0) {
+		return undefined;
+	}
+	return {
+		actualTokens,
+		...(inputTokens !== undefined ? { inputTokens } : {}),
+		...(outputTokens !== undefined ? { outputTokens } : {}),
+		...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+		...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+	};
+}
+
 function attachSessionLogging(session: AgentSession, homeDir: string): void {
 	let activeStream: "assistant" | "thinking" | null = null;
 	let sawAssistantTextDelta = false;
@@ -218,15 +256,16 @@ function attachSessionLogging(session: AgentSession, homeDir: string): void {
 				break;
 			}
 			case "message_end": {
-				const message = event.message as { role?: string; content?: unknown };
+				const message = event.message as { role?: string; content?: unknown; usage?: unknown };
 				if (message.role === "assistant") {
 					flushStream();
 					const finalText = extractAssistantText(session);
+					const modelUsage = extractModelUsage(message);
 					appendAgentUsageEvent(homeDir, {
 						type: "message",
 						direction: "outgoing",
 						textChars: Array.from(finalText).length,
-						estimatedTokens: estimateTokensFromText(finalText),
+						...(modelUsage ?? { estimatedTokens: estimateTokensFromText(finalText) }),
 					});
 					if (finalText && !sawAssistantTextDelta) {
 						console.log(`${chalk.green("Agent:")} ${truncate(finalText)}`);

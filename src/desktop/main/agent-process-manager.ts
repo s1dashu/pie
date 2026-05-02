@@ -10,9 +10,12 @@ export interface AgentProcessManagerOptions {
 	getNodeExecPath(): string;
 	getAgentHome(agentId: string): Promise<string>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
+	recordLogEntry?(entry: AgentLogEntry): Promise<void> | void;
 }
 
 const MAX_AGENT_LOGS = 1000;
+const AGENT_READY_LOG_MARKER = "Pi Feishu bot ready";
+const AGENT_START_TIMEOUT_MS = 30_000;
 
 async function getAvailableLocalPort(): Promise<number> {
 	return new Promise((resolvePort, reject) => {
@@ -48,12 +51,18 @@ export class AgentProcessManager {
 	private readonly agentLogBuffers = new Map<string, { stdout: string; stderr: string }>();
 	private readonly activeAgentReplyLogs = new Map<string, AgentLogEntry>();
 	private readonly agentStartedAt = new Map<string, number>();
+	private readonly readyAgents = new Set<string>();
+	private readonly agentReadyWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 	private nextLogId = 1;
 
 	constructor(private readonly options: AgentProcessManagerOptions) {}
 
 	isRunning(agentId: string): boolean {
 		return this.runningAgents.has(agentId);
+	}
+
+	isReady(agentId: string): boolean {
+		return this.readyAgents.has(agentId);
 	}
 
 	getStartedAt(agentId: string): number | undefined {
@@ -70,12 +79,17 @@ export class AgentProcessManager {
 
 	async start(agentId: string): Promise<void> {
 		if (this.runningAgents.has(agentId)) {
+			if (this.readyAgents.has(agentId)) {
+				return;
+			}
+			await this.waitForAgentReady(agentId);
 			return;
 		}
 		const command = this.getBotLaunchCommand();
 		const home = await this.options.getAgentHome(agentId);
 		const [gatewayPort, webhookPort] = await getDistinctAvailableLocalPorts(2);
 		this.appendAgentLog(agentId, "system", `starting bot: ${command.execPath} ${command.argv.join(" ")}`);
+		const readyPromise = this.createReadyPromise(agentId);
 		const child = spawn(command.execPath, command.argv, {
 			cwd: this.options.getAppRoot(),
 			stdio: ["ignore", "pipe", "pipe"],
@@ -99,11 +113,12 @@ export class AgentProcessManager {
 		});
 		this.runningAgents.set(agentId, child);
 		this.agentStartedAt.set(agentId, Date.now());
-		await this.options.recordRuntimeEvent(agentId, "start");
 		child.once("exit", () => {
 			this.flushAgentLogBuffers(agentId);
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
+			this.readyAgents.delete(agentId);
+			this.rejectAgentReady(agentId, new Error("Bot process exited before it was ready."));
 			void this.options.recordRuntimeEvent(agentId, "stop", "exit");
 			this.appendAgentLog(agentId, "system", "bot process exited");
 		});
@@ -111,10 +126,24 @@ export class AgentProcessManager {
 			this.flushAgentLogBuffers(agentId);
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
+			this.readyAgents.delete(agentId);
+			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(String(error)));
 			void this.options.recordRuntimeEvent(agentId, "stop", "error");
 			this.appendAgentLog(agentId, "stderr", `bot process error: ${error instanceof Error ? error.message : String(error)}`);
 			console.error(`[agent:${agentId}] failed:`, error);
 		});
+		try {
+			await readyPromise;
+			await this.options.recordRuntimeEvent(agentId, "start");
+		} catch (error) {
+			if (this.runningAgents.get(agentId) === child) {
+				this.runningAgents.delete(agentId);
+				this.agentStartedAt.delete(agentId);
+				this.readyAgents.delete(agentId);
+				child.kill("SIGTERM");
+			}
+			throw error;
+		}
 	}
 
 	async stop(agentId: string, reason: string): Promise<void> {
@@ -125,6 +154,8 @@ export class AgentProcessManager {
 		}
 		this.runningAgents.delete(agentId);
 		this.agentStartedAt.delete(agentId);
+		this.readyAgents.delete(agentId);
+		this.rejectAgentReady(agentId, new Error(`Bot start was interrupted: ${reason}.`));
 		this.appendAgentLog(agentId, "system", "stopping bot");
 		await new Promise<void>((resolveStop) => {
 			let exited = false;
@@ -168,6 +199,9 @@ export class AgentProcessManager {
 	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string): void {
 		if (!text) {
 			return;
+		}
+		if (stream === "stdout" && text.includes(AGENT_READY_LOG_MARKER)) {
+			this.markAgentReady(agentId);
 		}
 		if (stream === "stdout" && text.startsWith("Agent: ")) {
 			this.appendAgentReplyDelta(agentId, text.slice("Agent: ".length));
@@ -217,6 +251,7 @@ export class AgentProcessManager {
 	}
 
 	private emitAgentLog(entry: AgentLogEntry): void {
+		void this.options.recordLogEntry?.(entry);
 		for (const win of BrowserWindow.getAllWindows()) {
 			win.webContents.send("agents:log", entry);
 		}
@@ -260,5 +295,50 @@ export class AgentProcessManager {
 			this.appendAgentLog(agentId, "stderr", buffer.stderr);
 		}
 		this.agentLogBuffers.delete(agentId);
+	}
+
+	private createReadyPromise(agentId: string): Promise<void> {
+		return new Promise((resolveReady, rejectReady) => {
+			const timeout = setTimeout(() => {
+				this.agentReadyWaiters.delete(agentId);
+				rejectReady(new Error("Bot did not become ready within 30s."));
+			}, AGENT_START_TIMEOUT_MS);
+			this.agentReadyWaiters.set(agentId, {
+				resolve: () => {
+					clearTimeout(timeout);
+					resolveReady();
+				},
+				reject: (error) => {
+					clearTimeout(timeout);
+					rejectReady(error);
+				},
+			});
+		});
+	}
+
+	private waitForAgentReady(agentId: string): Promise<void> {
+		if (this.readyAgents.has(agentId)) {
+			return Promise.resolve();
+		}
+		return this.createReadyPromise(agentId);
+	}
+
+	private markAgentReady(agentId: string): void {
+		this.readyAgents.add(agentId);
+		const waiter = this.agentReadyWaiters.get(agentId);
+		if (!waiter) {
+			return;
+		}
+		this.agentReadyWaiters.delete(agentId);
+		waiter.resolve();
+	}
+
+	private rejectAgentReady(agentId: string, error: Error): void {
+		const waiter = this.agentReadyWaiters.get(agentId);
+		if (!waiter) {
+			return;
+		}
+		this.agentReadyWaiters.delete(agentId);
+		waiter.reject(error);
 	}
 }
