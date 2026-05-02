@@ -1084,7 +1084,7 @@ app.whenReady().then(() => {
 			completeCreationSession(draft);
 			const agent = await getAgent(draft.sessionId);
 			await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
-			return await getAgent(draft.sessionId);
+			return await withAgentOperation(draft.sessionId, () => startAgent(draft.sessionId));
 		} catch (error) {
 			console.error("[ipc] agents:create-complete failed:", error);
 			throw error;
