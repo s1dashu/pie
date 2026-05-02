@@ -87,6 +87,10 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 					"im.message.receive_v1": async (data: unknown) => {
 						await this.handleMessageEvent(data as LarkMessageEvent, client.botOpenId);
 					},
+					// Feishu sends this when a user opens the bot p2p chat. Pie has no
+					// product action for it yet, but registering it keeps the SDK from
+					// logging a misleading "no handle" warning for normal user entry.
+					"im.chat.access_event.bot_p2p_chat_entered_v1": () => undefined,
 					"im.message.reaction.created_v1": () => undefined,
 					"im.message.reaction.deleted_v1": () => undefined,
 				},

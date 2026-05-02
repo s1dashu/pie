@@ -119,7 +119,7 @@ export class AgentProcessManager {
 			this.agentStartedAt.delete(agentId);
 			this.readyAgents.delete(agentId);
 			this.rejectAgentReady(agentId, new Error("Bot process exited before it was ready."));
-			void this.options.recordRuntimeEvent(agentId, "stop", "exit");
+			this.recordRuntimeEvent(agentId, "stop", "exit");
 			this.appendAgentLog(agentId, "system", "bot process exited");
 		});
 		child.once("error", (error) => {
@@ -128,13 +128,13 @@ export class AgentProcessManager {
 			this.agentStartedAt.delete(agentId);
 			this.readyAgents.delete(agentId);
 			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(String(error)));
-			void this.options.recordRuntimeEvent(agentId, "stop", "error");
+			this.recordRuntimeEvent(agentId, "stop", "error");
 			this.appendAgentLog(agentId, "stderr", `bot process error: ${error instanceof Error ? error.message : String(error)}`);
 			console.error(`[agent:${agentId}] failed:`, error);
 		});
 		try {
 			await readyPromise;
-			await this.options.recordRuntimeEvent(agentId, "start");
+			this.recordRuntimeEvent(agentId, "start");
 		} catch (error) {
 			if (this.runningAgents.get(agentId) === child) {
 				this.runningAgents.delete(agentId);
@@ -172,7 +172,7 @@ export class AgentProcessManager {
 			});
 			child.kill("SIGTERM");
 		});
-		await this.options.recordRuntimeEvent(agentId, "stop", reason);
+		this.recordRuntimeEvent(agentId, "stop", reason);
 		this.appendAgentLog(agentId, "system", "bot stopped");
 	}
 
@@ -251,10 +251,32 @@ export class AgentProcessManager {
 	}
 
 	private emitAgentLog(entry: AgentLogEntry): void {
-		void this.options.recordLogEntry?.(entry);
+		this.recordLogEntry(entry);
 		for (const win of BrowserWindow.getAllWindows()) {
-			win.webContents.send("agents:log", entry);
+			if (win.isDestroyed() || win.webContents.isDestroyed()) {
+				continue;
+			}
+			try {
+				win.webContents.send("agents:log", entry);
+			} catch (error) {
+				console.error(`[agent:${entry.agentId}] failed to emit log to renderer:`, error);
+			}
 		}
+	}
+
+	private recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): void {
+		Promise.resolve(this.options.recordRuntimeEvent(agentId, event, reason)).catch((error) => {
+			console.error(`[agent:${agentId}] failed to persist runtime event:`, error);
+		});
+	}
+
+	private recordLogEntry(entry: AgentLogEntry): void {
+		if (!this.options.recordLogEntry) {
+			return;
+		}
+		Promise.resolve(this.options.recordLogEntry(entry)).catch((error) => {
+			console.error(`[agent:${entry.agentId}] failed to persist log entry:`, error);
+		});
 	}
 
 	private getAgentLogBuffer(agentId: string): { stdout: string; stderr: string } {

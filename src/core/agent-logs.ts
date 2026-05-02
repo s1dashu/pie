@@ -19,7 +19,7 @@ export function readAgentLogEntries(homeDir: string, limit = 1000): AgentLogEntr
 	if (!existsSync(filePath)) {
 		return [];
 	}
-	const entriesById = new Map<number, AgentLogEntry>();
+	const entries: AgentLogEntry[] = [];
 	for (const line of readFileSync(filePath, "utf8").split(/\r?\n/)) {
 		const trimmed = line.trim();
 		if (!trimmed) {
@@ -34,13 +34,21 @@ export function readAgentLogEntries(homeDir: string, limit = 1000): AgentLogEntr
 				typeof parsed.timestamp === "string" &&
 				(parsed.stream === "stdout" || parsed.stream === "stderr" || parsed.stream === "system")
 			) {
-				entriesById.set(parsed.id, parsed);
+				entries.push(parsed);
 			}
 		} catch {
 			// Ignore malformed append-only log lines.
 		}
 	}
-	return [...entriesById.values()].sort((left, right) => left.id - right.id).slice(-limit);
+	return entries.sort(compareAgentLogEntries).slice(-limit);
+}
+
+function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {
+	const timestampOrder = Date.parse(left.timestamp) - Date.parse(right.timestamp);
+	if (timestampOrder !== 0) {
+		return timestampOrder;
+	}
+	return left.id - right.id;
 }
 
 export function pruneAgentLogEntries(homeDir: string, retentionDays?: number, now = Date.now()): void {

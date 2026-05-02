@@ -41,6 +41,7 @@ export interface AgentUsageDailyPoint extends UsageBucket {
 export interface AgentUsageStats {
 	today: UsageBucket;
 	total: UsageBucket;
+	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
 	runningSince?: string;
 	updatedAt: string;
@@ -120,9 +121,13 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 	const now = options?.now ?? Date.now();
 	const todayKey = dateKey(now);
 	const total = createBucket();
+	const currentRun = createBucket();
+	const runningSince = options?.runningSince;
 	const byDate = new Map<string, UsageBucket>();
 	const estimatedTokensByDate = new Map<string, number>();
 	const actualTokensByDate = new Map<string, number>();
+	let currentRunActualTokens = 0;
+	let currentRunEstimatedTokens = 0;
 	let activeRuntimeStart: number | undefined;
 
 	function bucketFor(timestamp: string): UsageBucket {
@@ -144,15 +149,30 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 		bucketFor(new Date(startMs).toISOString()).runDurationMs += durationMs;
 	}
 
+	function isInCurrentRun(timestamp: string): boolean {
+		if (runningSince === undefined) {
+			return false;
+		}
+		const at = Date.parse(timestamp);
+		return Number.isFinite(at) && at >= runningSince;
+	}
+
 	for (const event of [...events].sort((left, right) => left.timestamp.localeCompare(right.timestamp))) {
 		const bucket = bucketFor(event.timestamp);
+		const inCurrentRun = isInCurrentRun(event.timestamp);
 		if (event.type === "message") {
 			if (event.direction === "incoming") {
 				total.incomingMessages += 1;
 				bucket.incomingMessages += 1;
+				if (inCurrentRun) {
+					currentRun.incomingMessages += 1;
+				}
 			} else if (event.direction === "outgoing") {
 				total.outgoingMessages += 1;
 				bucket.outgoingMessages += 1;
+				if (inCurrentRun) {
+					currentRun.outgoingMessages += 1;
+				}
 			}
 			const key = dateKey(event.timestamp);
 			const actualTokens = typeof event.actualTokens === "number" && Number.isFinite(event.actualTokens) ? event.actualTokens : undefined;
@@ -170,18 +190,34 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 				total.outputTokens += outputTokens;
 				total.cacheReadTokens += cacheReadTokens;
 				total.cacheWriteTokens += cacheWriteTokens;
+				if (inCurrentRun) {
+					currentRunActualTokens += actualTokens;
+					currentRun.inputTokens += inputTokens;
+					currentRun.outputTokens += outputTokens;
+					currentRun.cacheReadTokens += cacheReadTokens;
+					currentRun.cacheWriteTokens += cacheWriteTokens;
+				}
 			} else {
 				const estimatedTokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
 				estimatedTokensByDate.set(key, (estimatedTokensByDate.get(key) ?? 0) + estimatedTokens);
+				if (inCurrentRun) {
+					currentRunEstimatedTokens += estimatedTokens;
+				}
 			}
 			continue;
 		}
 		if (event.type === "action") {
 			total.actions += 1;
 			bucket.actions += 1;
+			if (inCurrentRun) {
+				currentRun.actions += 1;
+			}
 			if (event.status === "error") {
 				total.failedActions += 1;
 				bucket.failedActions += 1;
+				if (inCurrentRun) {
+					currentRun.failedActions += 1;
+				}
 			}
 			continue;
 		}
@@ -201,6 +237,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 
 	if (options?.runningSince !== undefined) {
 		addRuntimeDuration(options.runningSince, now);
+		currentRun.runDurationMs = Math.max(0, now - options.runningSince);
 	} else if (activeRuntimeStart !== undefined) {
 		addRuntimeDuration(activeRuntimeStart, now);
 	}
@@ -209,10 +246,12 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 		bucket.tokens = actualTokensByDate.get(key) ?? estimatedTokensByDate.get(key) ?? 0;
 		total.tokens += bucket.tokens;
 	}
+	currentRun.tokens = currentRunActualTokens || currentRunEstimatedTokens;
 
 	return {
 		today: byDate.get(todayKey) ?? createBucket(),
 		total,
+		currentRun,
 		recentDays: [...byDate.entries()]
 			.sort(([left], [right]) => left.localeCompare(right))
 			.slice(-14)
