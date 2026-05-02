@@ -27,6 +27,7 @@ import type {
 	AgentAvatarUpload,
 	AgentDetails,
 	AgentDraft,
+	AgentLogEntry,
 	AgentOnboardEvent,
 	AgentResourceStats,
 	AgentSkillSource,
@@ -55,6 +56,18 @@ const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 let isQuitting = false;
 let didStopAgentsForQuit = false;
+
+function logUnhandledMainProcessError(kind: string, error: unknown): void {
+	console.error(`[desktop] ${kind}:`, error);
+}
+
+process.on("unhandledRejection", (reason) => {
+	logUnhandledMainProcessError("unhandled rejection", reason);
+});
+
+process.on("uncaughtException", (error) => {
+	logUnhandledMainProcessError("uncaught exception", error);
+});
 
 function getAppRoot(): string {
 	return app.isPackaged ? app.getAppPath() : process.cwd();
@@ -658,11 +671,23 @@ async function getAgentLogs(id: string) {
 	const agent = await getAgent(id);
 	const persisted = readAgentLogEntries(agent.home);
 	const live = agentProcesses.getLogs(id);
-	const byId = new Map(persisted.map((entry) => [entry.id, entry]));
+	const byKey = new Map(persisted.map((entry) => [agentLogEntryKey(entry), entry]));
 	for (const entry of live) {
-		byId.set(entry.id, entry);
+		byKey.set(agentLogEntryKey(entry), entry);
 	}
-	return [...byId.values()].sort((left, right) => left.id - right.id).slice(-1000);
+	return [...byKey.values()].sort(compareAgentLogEntries).slice(-1000);
+}
+
+function agentLogEntryKey(entry: AgentLogEntry): string {
+	return `${entry.agentId}:${entry.id}:${entry.timestamp}`;
+}
+
+function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {
+	const timestampOrder = Date.parse(left.timestamp) - Date.parse(right.timestamp);
+	if (timestampOrder !== 0) {
+		return timestampOrder;
+	}
+	return left.id - right.id;
 }
 
 async function getAgentResources(id: string): Promise<AgentResourceStats> {
@@ -903,7 +928,7 @@ function createWindow(): void {
 	const preloadPath = join(appRoot, "out/preload/index.cjs");
 	const win = new BrowserWindow({
 		width: 960,
-		height: 540,
+		height: 680,
 		minWidth: 800,
 		minHeight: 480,
 		show: false,
@@ -1157,7 +1182,9 @@ app.whenReady().then(() => {
 		return getAgentLogs(id);
 	});
 	createWindow();
-	void restoreEnabledAgents();
+	void restoreEnabledAgents().catch((error) => {
+		console.error("[desktop] failed to restore enabled agents:", error);
+	});
 });
 
 app.on("window-all-closed", () => {
