@@ -115,6 +115,31 @@ export interface AgentUsageStats {
 	updatedAt: string;
 }
 
+export interface AgentResourceStats {
+	cpuPercent: number;
+	memoryBytes: number;
+	memoryPercent: number;
+	storageBytes: number;
+	diskTotalBytes?: number;
+	diskAvailableBytes?: number;
+	pid?: number;
+	running: boolean;
+	updatedAt: string;
+}
+
+export type AgentSkillSourceKind = "profile" | "agent-type" | "universal";
+
+export interface AgentSkillSource {
+	id: string;
+	kind: AgentSkillSourceKind;
+	label: string;
+	description: string;
+	path: string;
+	exists: boolean;
+	skillCount: number;
+	skills: string[];
+}
+
 export interface PieDesktopApi {
 	listAgents(): Promise<AgentSummary[]>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
@@ -128,7 +153,10 @@ export interface PieDesktopApi {
 	openAgentInEditor(id: string): Promise<void>;
 	revealAgentInFinder(id: string): Promise<void>;
 	getAgentUsage(id: string): Promise<AgentUsageStats>;
+	getAgentResources(id: string): Promise<AgentResourceStats>;
 	getAgentModelCatalog(id: string): Promise<DesktopModelCatalog>;
+	getAgentSkillSources(id: string): Promise<AgentSkillSource[]>;
+	openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]>;
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import {
 	deleteProfileRegistryEntry,
@@ -25,6 +26,8 @@ import type {
 	AgentDetails,
 	AgentDraft,
 	AgentOnboardEvent,
+	AgentResourceStats,
+	AgentSkillSource,
 	AgentSummary,
 	DesktopModelCatalog,
 	DesktopFeishuAppCredentials,
@@ -38,6 +41,7 @@ import {
 import { AgentProcessManager } from "./agent-process-manager.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
+const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
 
 function getAppRoot(): string {
 	return app.isPackaged ? app.getAppPath() : process.cwd();
@@ -70,6 +74,117 @@ function writeProfileConfig(homeDir: string, store: AgentConfigStore): void {
 
 function readProfileEnv(homeDir: string): Record<string, string> {
 	return readAgentEnvFile(getAgentEnvFilePath(homeDir));
+}
+
+function getAgentTypeSkillDir(profile: AgentConfigStore["profile"]): { label: string; path: string } {
+	const kind = String(profile?.backend.kind ?? "pi");
+	if (kind === "codex") {
+		return { label: "Codex 共享 Skills", path: join(homedir(), ".codex", "skills") };
+	}
+	if (kind === "claude" || kind === "claude-code") {
+		return { label: "Claude 共享 Skills", path: join(homedir(), ".claude", "skills") };
+	}
+	if (kind === "pi") {
+		return { label: "Pi 共享 Skills", path: join(getDefaultPieRootDir(), "skills") };
+	}
+	return { label: `${kind} 共享 Skills`, path: join(homedir(), `.${kind}`, "skills") };
+}
+
+function readSkillNames(path: string): string[] {
+	if (!existsSync(path)) {
+		return [];
+	}
+	try {
+		return readdirSync(path)
+			.filter((name) => !name.startsWith("."))
+			.filter((name) => {
+				try {
+					return statSync(join(path, name)).isDirectory();
+				} catch {
+					return false;
+				}
+			})
+			.sort((left, right) => left.localeCompare(right));
+	} catch {
+		return [];
+	}
+}
+
+function readDirectorySize(path: string): number {
+	if (!existsSync(path)) {
+		return 0;
+	}
+	try {
+		const stat = lstatSync(path);
+		if (!stat.isDirectory()) {
+			return stat.size;
+		}
+		return readdirSync(path).reduce((total, child) => total + readDirectorySize(join(path, child)), 0);
+	} catch {
+		return 0;
+	}
+}
+
+function readDiskStats(path: string): { diskTotalBytes?: number; diskAvailableBytes?: number } {
+	const df = spawnSync("df", ["-k", path], { encoding: "utf8" });
+	if (df.status !== 0 || !df.stdout.trim()) {
+		return {};
+	}
+	const line = df.stdout.trim().split("\n").at(-1);
+	if (!line) {
+		return {};
+	}
+	const parts = line.trim().split(/\s+/);
+	const totalKb = Number(parts[1]);
+	const availableKb = Number(parts[3]);
+	return {
+		...(Number.isFinite(totalKb) ? { diskTotalBytes: totalKb * 1024 } : {}),
+		...(Number.isFinite(availableKb) ? { diskAvailableBytes: availableKb * 1024 } : {}),
+	};
+}
+
+function readProcessResourceStats(pid: number | undefined): Pick<AgentResourceStats, "cpuPercent" | "memoryBytes" | "memoryPercent" | "pid" | "running"> {
+	if (!pid) {
+		return { cpuPercent: 0, memoryBytes: 0, memoryPercent: 0, running: false };
+	}
+	const ps = spawnSync("ps", ["-o", "rss=,%cpu=", "-p", String(pid)], { encoding: "utf8" });
+	const line = ps.stdout.trim().split("\n").find((item) => item.trim());
+	if (ps.status !== 0 || !line) {
+		return { cpuPercent: 0, memoryBytes: 0, memoryPercent: 0, pid, running: false };
+	}
+	const [rssKbText, cpuText] = line.trim().split(/\s+/);
+	const memoryBytes = Number(rssKbText) * 1024;
+	const cpuPercent = Number(cpuText);
+	return {
+		cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : 0,
+		memoryBytes: Number.isFinite(memoryBytes) ? Math.max(0, memoryBytes) : 0,
+		memoryPercent: Number.isFinite(memoryBytes) ? Math.max(0, (memoryBytes / totalmem()) * 100) : 0,
+		pid,
+		running: true,
+	};
+}
+
+function readStorageResourceStats(path: string): Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes"> {
+	const cached = storageStatsCache.get(path);
+	if (cached && cached.expiresAt > Date.now()) {
+		return cached.value;
+	}
+	const value = {
+		storageBytes: readDirectorySize(path),
+		...readDiskStats(path),
+	};
+	storageStatsCache.set(path, { value, expiresAt: Date.now() + 15_000 });
+	return value;
+}
+
+function describeSkillSource(source: Omit<AgentSkillSource, "exists" | "skillCount" | "skills">): AgentSkillSource {
+	const skills = readSkillNames(source.path);
+	return {
+		...source,
+		exists: existsSync(source.path),
+		skillCount: skills.length,
+		skills,
+	};
 }
 
 const agentProcesses = new AgentProcessManager({
@@ -160,9 +275,61 @@ async function getAgentUsage(id: string) {
 	return summarizeAgentUsage(readAgentUsageEvents(agent.home), { runningSince: agentProcesses.getStartedAt(id) });
 }
 
+async function getAgentResources(id: string): Promise<AgentResourceStats> {
+	const agent = await getAgent(id);
+	const processStats = readProcessResourceStats(agentProcesses.getPid(id));
+	return {
+		...processStats,
+		...readStorageResourceStats(agent.home),
+		updatedAt: new Date().toISOString(),
+	};
+}
+
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
 	return loadModelCatalog(agent.home);
+}
+
+async function getAgentSkillSources(id: string): Promise<AgentSkillSource[]> {
+	const agent = await getAgent(id);
+	const profile = readProfileConfig(agent.home)?.profile;
+	const typeSource = getAgentTypeSkillDir(profile);
+	return [
+		describeSkillSource({
+			id: "profile",
+			kind: "profile",
+			label: "Agent 独有 Skills",
+			description: "只属于这个 Agent profile 的 Skills。",
+			path: join(agent.home, "skills"),
+		}),
+		describeSkillSource({
+			id: "agent-type",
+			kind: "agent-type",
+			label: typeSource.label,
+			description: "同类型 Agent 共享的 Skills。",
+			path: typeSource.path,
+		}),
+		describeSkillSource({
+			id: "universal",
+			kind: "universal",
+			label: "通用 Skills",
+			description: "所有 Agent 都可以看到的全局 Skills。",
+			path: join(homedir(), ".agents", "skills"),
+		}),
+	];
+}
+
+async function openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]> {
+	const source = (await getAgentSkillSources(id)).find((item) => item.id === sourceId);
+	if (!source) {
+		throw new Error(`Unknown skills source: ${sourceId}`);
+	}
+	mkdirSync(source.path, { recursive: true });
+	const result = await shell.openPath(source.path);
+	if (result) {
+		throw new Error(result);
+	}
+	return getAgentSkillSources(id);
 }
 
 async function validateFeishuCredentials(opts: {
@@ -314,7 +481,7 @@ function createWindow(): void {
 		title: "Pie",
 		transparent: true,
 		frame: false,
-		hasShadow: false,
+		hasShadow: true,
 		titleBarStyle: "hiddenInset",
 		trafficLightPosition: { x: 18, y: 18 },
 		backgroundColor: "#00000000",
@@ -447,11 +614,35 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:resources", async (_event, id: string) => {
+		try {
+			return await getAgentResources(id);
+		} catch (error) {
+			console.error("[ipc] agents:resources failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:model-catalog", async (_event, id: string) => {
 		try {
 			return await getAgentModelCatalog(id);
 		} catch (error) {
 			console.error("[ipc] agents:model-catalog failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:skill-sources", async (_event, id: string) => {
+		try {
+			return await getAgentSkillSources(id);
+		} catch (error) {
+			console.error("[ipc] agents:skill-sources failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:skill-source-open", async (_event, id: string, sourceId: string) => {
+		try {
+			return await openAgentSkillSource(id, sourceId);
+		} catch (error) {
+			console.error("[ipc] agents:skill-source-open failed:", error);
 			throw error;
 		}
 	});

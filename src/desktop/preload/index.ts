@@ -14,7 +14,10 @@ const api: PieDesktopApi = {
 	openAgentInEditor: (id: string) => ipcRenderer.invoke("agents:open-editor", id),
 	revealAgentInFinder: (id: string) => ipcRenderer.invoke("agents:reveal-finder", id),
 	getAgentUsage: (id: string) => ipcRenderer.invoke("agents:usage", id),
+	getAgentResources: (id: string) => ipcRenderer.invoke("agents:resources", id),
 	getAgentModelCatalog: (id: string) => ipcRenderer.invoke("agents:model-catalog", id),
+	getAgentSkillSources: (id: string) => ipcRenderer.invoke("agents:skill-sources", id),
+	openAgentSkillSource: (id: string, sourceId: string) => ipcRenderer.invoke("agents:skill-source-open", id, sourceId),
 	getAgentLogs: (id: string) => ipcRenderer.invoke("agents:logs", id),
 	onAgentLog: (callback: (entry: AgentLogEntry) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentLogEntry) => callback(payload);

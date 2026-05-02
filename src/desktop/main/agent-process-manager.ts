@@ -60,6 +60,10 @@ export class AgentProcessManager {
 		return this.agentStartedAt.get(agentId);
 	}
 
+	getPid(agentId: string): number | undefined {
+		return this.runningAgents.get(agentId)?.pid;
+	}
+
 	getLogs(agentId: string): AgentLogEntry[] {
 		return this.agentLogs.get(agentId) ?? [];
 	}
