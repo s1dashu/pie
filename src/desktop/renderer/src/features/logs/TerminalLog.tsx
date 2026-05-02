@@ -59,19 +59,19 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			}];
 
 	return (
-		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-xs leading-5 text-[#24292f] [scrollbar-gutter:stable]">
+		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-xs leading-5 text-[var(--slate-12)] [scrollbar-gutter:stable]">
 			{lines.map((line) => (
 				<div key={line.id} className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
 					<span className={cn(
-						"text-right font-bold",
-						line.stream === "stderr" ? "text-[#d1242f]" : line.stream === "system" ? "text-[#0969da]" : "text-[#1a7f37]",
+						"text-right font-medium",
+						line.stream === "stderr" ? "text-[var(--red-11)]" : line.stream === "system" ? "text-[var(--slate-10)]" : "text-[var(--lime-11)]",
 					)}>
 						{line.stream === "stderr" ? "err" : line.stream === "system" ? "sys" : "out"}
 					</span>
-					<span className="font-medium text-[#8250df] tabular-nums">{new Date(line.timestamp).toLocaleTimeString()}</span>
+					<span className="font-normal text-[var(--slate-9)] tabular-nums">{new Date(line.timestamp).toLocaleTimeString()}</span>
 					<span className={cn(
 						"min-w-0 whitespace-pre-wrap break-words text-pretty",
-						line.stream === "stderr" ? "text-[#82071e]" : line.stream === "system" ? "text-[#0550ae]" : "text-[#24292f]",
+						line.stream === "stderr" ? "text-[var(--red-12)]" : line.stream === "system" ? "text-[var(--slate-11)]" : "text-[var(--slate-12)]",
 					)}>
 						{line.text}
 					</span>

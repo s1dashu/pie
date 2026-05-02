@@ -5,10 +5,13 @@ import { CreateAgentDialog } from "./features/agents/CreateAgentDialog";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
 import { AgentSidebar } from "./layout/AgentSidebar";
 
+type AppSelection = { type: "agent"; id: string } | { type: "settings" };
+
 export function App(): JSX.Element {
-	const [selectedId, setSelectedId] = useState<string | undefined>();
+	const [selection, setSelection] = useState<AppSelection | undefined>();
 	const [creating, setCreating] = useState(false);
 	const queryClient = useQueryClient();
+	const selectedId = selection?.type === "agent" ? selection.id : undefined;
 
 	const handleError = (message: string) => {
 		toast.error(message);
@@ -43,17 +46,20 @@ export function App(): JSX.Element {
 			<AgentSidebar
 				agents={agents.data}
 				selectedId={selectedId}
+				settingsSelected={selection?.type === "settings"}
 				isLoading={agents.isLoading}
-				onSelectAgent={setSelectedId}
+				onSelectAgent={(id) => setSelection({ type: "agent", id })}
+				onSelectSettings={() => setSelection({ type: "settings" })}
 				onCreateAgent={() => {
 					setCreating(true);
 				}}
 			/>
 			<AgentDetailPane
 				agent={selectedId ? selected.data : undefined}
+				showSettings={selection?.type === "settings"}
 				onError={handleError}
 				onDeleted={() => {
-					setSelectedId(undefined);
+					setSelection(undefined);
 					queryClient.removeQueries({ queryKey: ["agent", selectedId] });
 				}}
 			/>
@@ -61,9 +67,9 @@ export function App(): JSX.Element {
 				open={creating}
 				onClose={() => setCreating(false)}
 				onError={handleError}
-				onCreated={(agent) => setSelectedId(agent.id)}
+				onCreated={(agent) => setSelection({ type: "agent", id: agent.id })}
 			/>
-			{/* <Toaster /> */}
+			<Toaster />
 		</main>
 	);
 }

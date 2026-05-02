@@ -34,7 +34,7 @@ export const brandOptions: Array<{ value: "feishu" | "lark"; label: string }> = 
 
 export function statusTone(status: AgentSummary["status"]): string {
 	if (status === "running") {
-		return "bg-primary";
+		return "bg-[var(--lime-9)]";
 	}
 	if (status === "paused") {
 		return "bg-accent";
@@ -56,6 +56,17 @@ export function formatCount(value: number): string {
 	return new Intl.NumberFormat("zh-CN").format(value);
 }
 
+export function formatTokenCount(value: number): string {
+	const abs = Math.abs(value);
+	if (abs >= 1_000_000) {
+		return `${(value / 1_000_000).toFixed(2)}M`;
+	}
+	if (abs >= 1_000) {
+		return `${(value / 1_000).toFixed(2)}K`;
+	}
+	return formatCount(value);
+}
+
 export function formatDuration(ms: number): string {
 	if (ms < 60_000) {
 		return `${Math.floor(ms / 1000)}s`;
@@ -70,8 +81,8 @@ export function formatDuration(ms: number): string {
 
 export function emptyUsage(): AgentUsageStats {
 	return {
-		today: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, runDurationMs: 0 },
-		total: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, runDurationMs: 0 },
+		today: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 },
+		total: { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 },
 		recentDays: [],
 		updatedAt: new Date(0).toISOString(),
 	};

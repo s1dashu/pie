@@ -1,9 +1,9 @@
-import type { MutableRefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-	CheckCircleLineDuotone,
+	AltArrowDownLineDuotone,
 	FolderOpenBoldDuotone,
+	GalleryAddLineDuotone,
 	PauseCircleBoldDuotone,
-	PenLineDuotone,
 	PlayCircleBoldDuotone,
 	RestartCircleBoldDuotone,
 	TrashBinMinimalisticBoldDuotone,
@@ -11,8 +11,10 @@ import {
 import type { AgentDetails } from "../../../shared/types";
 import { AgentAvatar } from "../../components/shared/agent-avatar";
 import { AppIcon } from "../../components/shared/app-icon";
+import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "../../components/ui/popover";
 
 import {
 	AlertDialog,
@@ -28,133 +30,234 @@ import {
 
 export function AgentHeader({
 	agent,
-	draftName,
-	isEditingName,
 	isSaving,
-	nameInputRef,
-	onDraftNameChange,
-	onCommitName,
-	onEditName,
-	onCancelNameEdit,
+	onSaveName,
+	isUploadingAvatar,
+	onUploadAvatar,
+	isStarting,
 	onStart,
 	onPause,
 	onReveal,
 	onDelete,
 }: {
 	agent: AgentDetails;
-	draftName: string;
-	isEditingName: boolean;
 	isSaving: boolean;
-	nameInputRef: MutableRefObject<HTMLInputElement | null>;
-	onDraftNameChange: (name: string) => void;
-	onCommitName: () => void;
-	onEditName: () => void;
-	onCancelNameEdit: () => void;
+	onSaveName: (name: string) => void;
+	isUploadingAvatar: boolean;
+	onUploadAvatar: (upload: { fileName: string; dataUrl: string }) => void;
+	isStarting: boolean;
 	onStart: () => void;
 	onPause: () => void;
 	onReveal: () => void;
 	onDelete: () => void;
 }): JSX.Element {
+	const [open, setOpen] = useState(false);
+	const [nameDraft, setNameDraft] = useState(agent.name);
+	const fileInputRef = useRef<HTMLInputElement | null>(null);
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const contentRef = useRef<HTMLDivElement | null>(null);
+
+	useEffect(() => {
+		setNameDraft(agent.name);
+	}, [agent.id, agent.name]);
+
+	useEffect(() => {
+		if (!open) {
+			return;
+		}
+		const closeOnOutsideInteraction = (event: PointerEvent | MouseEvent | FocusEvent) => {
+			const target = event.target as Node | null;
+			if (!target) {
+				return;
+			}
+			if (triggerRef.current?.contains(target) || contentRef.current?.contains(target)) {
+				return;
+			}
+			setOpen(false);
+		};
+		window.addEventListener("pointerdown", closeOnOutsideInteraction, true);
+		window.addEventListener("click", closeOnOutsideInteraction, true);
+		window.addEventListener("focusin", closeOnOutsideInteraction, true);
+		return () => {
+			window.removeEventListener("pointerdown", closeOnOutsideInteraction, true);
+			window.removeEventListener("click", closeOnOutsideInteraction, true);
+			window.removeEventListener("focusin", closeOnOutsideInteraction, true);
+		};
+	}, [open]);
+
+	const saveName = () => {
+		const nextName = nameDraft.trim();
+		if (!nextName) {
+			setNameDraft(agent.name);
+			return;
+		}
+		if (nextName !== agent.name) {
+			onSaveName(nextName);
+		}
+		setOpen(false);
+	};
+
+	const handleAvatarFile = (file: File | undefined) => {
+		if (!file) {
+			return;
+		}
+		const reader = new FileReader();
+		reader.addEventListener("load", () => {
+			if (typeof reader.result === "string") {
+				onUploadAvatar({ fileName: file.name, dataUrl: reader.result });
+			}
+		});
+		reader.readAsDataURL(file);
+	};
+
 	return (
-		<div className="drag-region shrink-0 bg-white px-7 pb-2 pt-5">
+		<div className={`${open ? "no-drag" : "drag-region"} shrink-0 bg-white px-7 pb-2 pt-5`}>
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept="image/png,image/jpeg,image/webp"
+				className="sr-only no-drag"
+				onChange={(event) => {
+					handleAvatarFile(event.target.files?.[0]);
+					event.currentTarget.value = "";
+				}}
+			/>
 			<div className="flex items-center justify-between gap-4">
-				<div className="flex min-w-0 items-center gap-4">
-					<AgentAvatar seed={agent.avatarSeed} size={40} />
-					<div className="group/name no-drag flex min-w-0 items-center gap-1.5">
-						{isEditingName ? (
-							<div className="pie-smooth-corner flex h-9 min-w-0 items-center rounded-[18px] bg-[var(--lime-3)] ring-2 ring-[var(--lime-8)]">
+				<Popover open={open} onOpenChange={setOpen}>
+					<PopoverTrigger
+						render={
+							<Button
+								ref={triggerRef}
+								variant="unstyled"
+								size="inline"
+								className="pie-smooth-corner no-drag flex h-12 min-w-0 max-w-[420px] items-center gap-3 rounded-[24px] px-1.5 pr-3 text-left transition-[background-color,transform] hover:bg-[var(--slate-2)] aria-expanded:bg-[var(--slate-2)]"
+								aria-label="编辑 Agent 信息"
+							/>
+						}
+					>
+						<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
+						<span className="min-w-0 truncate text-xl font-bold text-foreground">{agent.name}</span>
+						{isSaving ? (
+							<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+						) : (
+							<AppIcon
+								IconComponent={AltArrowDownLineDuotone}
+								className="size-4 shrink-0 text-muted-foreground transition-transform duration-100 group-aria-expanded/button:rotate-180"
+							/>
+						)}
+					</PopoverTrigger>
+					<PopoverContent ref={contentRef} className="no-drag" align="start" sideOffset={10}>
+						<div className="space-y-4">
+							<div>
+								<PopoverTitle>Agent 信息</PopoverTitle>
+								<PopoverDescription className="mt-1">编辑头像和显示名称。</PopoverDescription>
+							</div>
+							<div className="pie-smooth-corner flex justify-center rounded-[24px] bg-[var(--slate-2)] p-4">
+								<button
+									type="button"
+									className="group/avatar-upload relative rounded-full outline-none transition-transform active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-[var(--lime-6)]"
+									onClick={() => fileInputRef.current?.click()}
+									disabled={isUploadingAvatar}
+									aria-label="更换头像"
+								>
+									<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={72} />
+									<span className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/35 text-white opacity-0 transition-opacity group-hover/avatar-upload:opacity-100 group-focus-visible/avatar-upload:opacity-100">
+										<AppIcon IconComponent={isUploadingAvatar ? RestartCircleBoldDuotone : GalleryAddLineDuotone} className={isUploadingAvatar ? "size-6 animate-spin" : "size-6"} />
+									</span>
+								</button>
+							</div>
+							<label className="pie-smooth-corner block space-y-2 rounded-[24px] bg-[var(--slate-2)] p-3">
+								<span className="text-xs font-medium text-muted-foreground">Agent 名称</span>
 								<Input
-									ref={nameInputRef}
-									variant="unstyled"
-									className="h-full min-w-0 flex-1 bg-transparent px-3 text-xl font-semibold text-foreground caret-[var(--lime-11)] outline-none selection:bg-[var(--lime-6)]"
-									value={draftName}
-									onChange={(event) => onDraftNameChange(event.target.value)}
-									onBlur={onCommitName}
+									className="bg-white"
+									value={nameDraft}
+									onChange={(event) => setNameDraft(event.target.value)}
 									onKeyDown={(event) => {
 										if (event.key === "Enter") {
-											event.currentTarget.blur();
+											saveName();
 										}
 										if (event.key === "Escape") {
-											onCancelNameEdit();
+											setNameDraft(agent.name);
 										}
 									}}
-									aria-label="Agent Name"
+									aria-label="Agent 名称"
 								/>
+							</label>
+							<div className="flex justify-end">
 								<Button
-									variant="unstyled"
-									size="inline"
-									className="pie-smooth-corner flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--lime-11)] transition hover:bg-[var(--lime-5)] hover:text-[var(--lime-12)]"
-									onMouseDown={(event) => event.preventDefault()}
-									onClick={onCommitName}
-									aria-label="保存 Agent 名称"
-									title="保存"
+									size="sm"
+									className="rounded-2xl"
+									onClick={saveName}
+									disabled={isSaving || !nameDraft.trim()}
 								>
-									<AppIcon IconComponent={CheckCircleLineDuotone} className="size-5" />
+									{isSaving && <AppIcon IconComponent={RestartCircleBoldDuotone} className="size-4 animate-spin" />}
+									保存名称
 								</Button>
 							</div>
-						) : (
-							<>
-								<div className="min-w-0 truncate text-xl font-semibold text-foreground">{draftName}</div>
-								<Button
-									variant="unstyled"
-									size="inline"
-									className="pie-smooth-corner no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition hover:bg-[var(--slate-3)] hover:text-[var(--lime-11)] group-hover/name:opacity-100 focus:opacity-100"
-									onClick={onEditName}
-									aria-label="编辑 Agent 名称"
-									title="编辑名称"
-								>
-									<AppIcon IconComponent={PenLineDuotone} className="size-4" />
-								</Button>
-							</>
-						)}
-						{isSaving && <AppIcon IconComponent={RestartCircleBoldDuotone} className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
-					</div>
-				</div>
+						</div>
+					</PopoverContent>
+				</Popover>
 				<div className="no-drag flex items-center gap-2">
 					{agent.status === "running" ? (
-						<Button
-							variant="unstyled"
-							size="inline"
-							className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-11)] transition hover:text-[var(--slate-12)]"
-							onClick={onPause}
-							title="Pause Agent"
-							aria-label="Pause Agent"
-						>
-							<AppIcon IconComponent={PauseCircleBoldDuotone} className="size-7" />
-						</Button>
+						<AceternityTooltip content="暂停 Agent" side="bottom">
+							<Button
+								variant="unstyled"
+								size="inline"
+								className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
+								onClick={onPause}
+								aria-label="Pause Agent"
+							>
+								<AppIcon IconComponent={PauseCircleBoldDuotone} className="size-7" />
+							</Button>
+						</AceternityTooltip>
+					) : isStarting ? (
+						<AceternityTooltip content="启动中" side="bottom">
+							<Button
+								variant="unstyled"
+								size="inline"
+								className="inline-flex h-8 w-8 cursor-default items-center justify-center text-[var(--slate-10)]"
+								disabled
+								aria-label="Agent starting"
+							>
+								<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-7 animate-spin" />
+							</Button>
+						</AceternityTooltip>
 					) : (
+						<AceternityTooltip content="启动 Agent" side="bottom">
+							<Button
+								variant="unstyled"
+								size="inline"
+								className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--lime-11)]"
+								onClick={onStart}
+								aria-label="Start Agent"
+							>
+								<AppIcon IconComponent={PlayCircleBoldDuotone} className="size-7" />
+							</Button>
+						</AceternityTooltip>
+					)}
+					<AceternityTooltip content="打开 Agent Profile" side="bottom">
 						<Button
 							variant="unstyled"
 							size="inline"
-							className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
-							onClick={onStart}
-							title="Start Agent"
-							aria-label="Start Agent"
+							className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
+							onClick={onReveal}
+							aria-label="Open Agent Profile"
 						>
-							<AppIcon IconComponent={PlayCircleBoldDuotone} className="size-7" />
+							<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
 						</Button>
-					)}
-					<Button
-						variant="unstyled"
-						size="inline"
-						className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
-						onClick={onReveal}
-						title="Open Agent Profile"
-						aria-label="Open Agent Profile"
-					>
-						<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
-					</Button>
+					</AceternityTooltip>
 					<AlertDialog>
 						<AlertDialogTrigger
 							render={
 								<Button
 									variant="unstyled"
 									size="inline"
-									className="inline-flex h-8 w-8 items-center justify-center text-[var(--red-11)] transition hover:text-[var(--red-12)]"
-									title="Delete Agent"
+									className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--red-11)]"
 									aria-label="Delete Agent"
 								>
-									<AppIcon IconComponent={TrashBinMinimalisticBoldDuotone} className="size-7" color="var(--red-11)" />
+									<AceternityTooltip content="删除 Agent" side="bottom" className="h-full w-full items-center justify-center">
+										<AppIcon IconComponent={TrashBinMinimalisticBoldDuotone} className="size-7" />
+									</AceternityTooltip>
 								</Button>
 							}
 						/>

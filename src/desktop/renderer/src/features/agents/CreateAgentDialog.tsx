@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { RestartCircleBoldDuotone } from "solar-icon-set";
@@ -6,11 +6,13 @@ import type {
 	AgentCreationSession,
 	AgentDetails,
 	AgentOnboardEvent,
+	BotAvatarOption,
 	DesktopFeishuAppCredentials,
 	DesktopThinkingLevel,
 } from "../../../shared/types";
 import { AppIcon } from "../../components/shared/app-icon";
 import { Field } from "../../components/shared/field";
+import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -32,6 +34,7 @@ export function CreateAgentDialog({
 	const [session, setSession] = useState<AgentCreationSession | undefined>();
 	const [step, setStep] = useState<"config" | "auth" | "model">("config");
 	const [name, setName] = useState("");
+	const [avatarId, setAvatarId] = useState("");
 	const [manualMode, setManualMode] = useState(false);
 	const [feishu, setFeishu] = useState<DesktopFeishuAppCredentials | undefined>();
 	const [qrEvent, setQrEvent] = useState<AgentOnboardEvent | undefined>();
@@ -41,6 +44,11 @@ export function CreateAgentDialog({
 	const [thinkingLevel, setThinkingLevel] = useState<DesktopThinkingLevel>("off");
 	const [apiKey, setApiKey] = useState("");
 	const queryClient = useQueryClient();
+	const botAvatars = useQuery({
+		queryKey: ["bot-avatars"],
+		queryFn: () => window.pie.listBotAvatars(),
+		enabled: open,
+	});
 
 	const begin = useMutation({
 		mutationFn: () => window.pie.beginAgentCreation(),
@@ -73,6 +81,7 @@ export function CreateAgentDialog({
 			return window.pie.completeAgentCreation({
 				sessionId: session.sessionId,
 				name,
+				avatarId,
 				feishu,
 				provider,
 				model,
@@ -98,8 +107,15 @@ export function CreateAgentDialog({
 			setQrEvent(undefined);
 			setStatus("");
 			setManualMode(false);
+			setAvatarId("");
 		}
 	}, [open]);
+
+	useEffect(() => {
+		if (!avatarId && botAvatars.data?.[0]) {
+			setAvatarId(botAvatars.data[0].id);
+		}
+	}, [avatarId, botAvatars.data]);
 
 	useEffect(() => {
 		return window.pie.onAgentOnboardEvent((event) => {
@@ -133,16 +149,22 @@ export function CreateAgentDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="py-4">
+				<div>
 					{begin.isPending || !session ? (
 						<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
 							<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
 						</div>
 					) : step === "config" ? (
-						<div className="space-y-4">
+						<div className="space-y-4 rounded-3xl bg-[var(--slate-2)] p-5">
 							<Field label="Agent 名称">
 								<Input value={name} onChange={(event) => setName(event.target.value)} />
 							</Field>
+							<AvatarPicker
+								avatars={botAvatars.data ?? []}
+								isLoading={botAvatars.isLoading}
+								selectedId={avatarId}
+								onSelect={setAvatarId}
+							/>
 							<Field label="Agent 框架">
 								<Select defaultValue="pi">
 									<SelectTrigger>
@@ -157,86 +179,24 @@ export function CreateAgentDialog({
 									</SelectContent>
 								</Select>
 							</Field>
-							<div className="rounded-2xl bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-								配置将保存在本地 <code className="rounded bg-background px-1 py-0.5 font-mono text-[10px]">{session.home}</code>
-							</div>
 						</div>
 					) : step === "auth" ? (
-						<div className="space-y-5 text-left">
-							<div className="text-sm font-medium text-foreground">
-								{status || "请选择以下任意一种方式完成授权："}
+						<div className="space-y-4 text-center">
+							<div className="text-sm font-normal text-foreground">
+								{status || "请使用飞书或 Lark 扫码授权创建 bot"}
 							</div>
-							
-							<div className="space-y-5">
-								{/* 1. 扫码 */}
-								<div className="flex gap-3">
-									<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--slate-2)] text-xs font-medium text-foreground ring-1 ring-border">1</div>
-									<div className="space-y-3">
-										<div className="text-sm font-medium text-foreground">使用飞书或 Lark 扫码</div>
-										<div className="flex">
-											{qrEvent?.url ? (
-												<div className="rounded-2xl bg-white p-2 ring-1 ring-border">
-													<QRCodeSVG value={qrEvent.url} size={120} level="M" includeMargin={false} />
-												</div>
-											) : (
-												<div className="flex h-[136px] w-[136px] items-center justify-center rounded-2xl bg-muted text-sm text-muted-foreground ring-1 ring-border">
-													<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 等待...
-												</div>
-											)}
-										</div>
+							<div className="flex justify-center py-2">
+								{qrEvent?.url ? (
+									<div className="flex h-[196px] w-[196px] items-center justify-center rounded-2xl bg-white">
+										<QRCodeSVG value={qrEvent.url} size={180} level="M" includeMargin={false} />
 									</div>
-								</div>
-
-								{/* 2. 链接 */}
-								<div className="flex gap-3">
-									<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--slate-2)] text-xs font-medium text-foreground ring-1 ring-border">2</div>
-									<div className="space-y-1">
-										<div className="text-sm font-medium text-foreground">点击链接授权</div>
-										<div className="text-sm text-muted-foreground">
-											{qrEvent?.url ? (
-												<>点击<a href={qrEvent.url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">此链接</a>进行授权</>
-											) : (
-												"等待链接生成..."
-											)}
-										</div>
-									</div>
-								</div>
-
-								{/* 3. 手动 */}
-								<div className="flex gap-3">
-									<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--slate-2)] text-xs font-medium text-foreground ring-1 ring-border">3</div>
-									<div className="w-full space-y-2">
-										<div className="text-sm font-medium text-foreground">手动填写飞书应用 AppID 和 App Secret</div>
-										{!manualMode ? (
-											<Button variant="outline" size="sm" onClick={() => setManualMode(true)}>
-												展开填写表单
-											</Button>
-										) : (
-											<div className="grid grid-cols-2 gap-3 rounded-2xl bg-muted p-3">
-												<Input placeholder="App ID" onChange={(event) => setFeishu((old) => ({ appId: event.target.value, appSecret: old?.appSecret ?? "", brand: old?.brand ?? "feishu" }))} />
-												<Input placeholder="App Secret" type="password" onChange={(event) => setFeishu((old) => ({ appId: old?.appId ?? "", appSecret: event.target.value, brand: old?.brand ?? "feishu" }))} />
-												<Select
-													value={feishu?.brand ?? "feishu"}
-													onValueChange={(value) => setFeishu((old) => ({ appId: old?.appId ?? "", appSecret: old?.appSecret ?? "", brand: value as "feishu" | "lark" }))}
-												>
-													<SelectTrigger>
-														<SelectValue />
-													</SelectTrigger>
-													<SelectContent>
-														{brandOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-													</SelectContent>
-												</Select>
-												<Button onClick={() => feishu?.appId && feishu.appSecret ? setStep("model") : onError("请填写 App ID 和 App Secret")}>
-													继续
-												</Button>
-											</div>
-										)}
-									</div>
-								</div>
+								) : (
+									<div className="h-[196px] w-[196px] animate-pulse rounded-2xl bg-muted" />
+								)}
 							</div>
 						</div>
 					) : (
-						<div className="space-y-4">
+						<div className="space-y-4 rounded-3xl bg-[var(--slate-2)] p-5">
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="供应商">
 									<Select
@@ -310,5 +270,61 @@ export function CreateAgentDialog({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function AvatarPicker({
+	avatars,
+	isLoading,
+	selectedId,
+	onSelect,
+}: {
+	avatars: BotAvatarOption[];
+	isLoading: boolean;
+	selectedId: string;
+	onSelect: (id: string) => void;
+}): JSX.Element | null {
+	if (isLoading) {
+		return (
+			<Field label="Agent 头像">
+				<div className="grid grid-cols-8 gap-2">
+					{Array.from({ length: 8 }).map((_, index) => (
+						<div key={index} className="aspect-square animate-pulse rounded-full bg-muted" />
+					))}
+				</div>
+			</Field>
+		);
+	}
+	if (!avatars.length) {
+		return null;
+	}
+	return (
+		<Field label="Agent 头像">
+			<div className="grid grid-cols-8 gap-2">
+				{avatars.map((avatar) => {
+					const selected = avatar.id === selectedId;
+					return (
+						<div
+							key={avatar.id}
+							className={cn(
+								"group/avatar relative aspect-square rounded-full ring-2 ring-offset-2 ring-offset-[var(--slate-2)] transition-[transform]",
+								selected ? "ring-[var(--lime-8)]" : "ring-transparent",
+							)}
+						>
+							<AceternityTooltip content={avatar.label} className="block h-full w-full">
+								<button
+									type="button"
+									className="block h-full w-full overflow-hidden rounded-full transition-[opacity,transform] active:scale-[0.96]"
+									onClick={() => onSelect(avatar.id)}
+									aria-label={avatar.label}
+								>
+									<img src={avatar.dataUrl} alt={avatar.label} className="h-full w-full object-cover" draggable={false} />
+								</button>
+							</AceternityTooltip>
+						</div>
+					);
+				})}
+			</div>
+		</Field>
 	);
 }

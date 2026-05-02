@@ -1,12 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AgentDetails, AgentDraft, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { cn } from "../../lib/utils";
 import { AppIcon } from "@/components/shared/app-icon";
-import { AgentContentPanels } from "./AgentContentPanels";
+import { AgentContentPanels, type ResourceChartHistory } from "./AgentContentPanels";
 import { AgentHeader } from "./AgentHeader";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { emptyUsage, type AgentTab, tabs } from "./agent-display";
+
+const MAX_RESOURCE_HISTORY_POINTS = 120;
+
+function createEmptyResourceHistory(): ResourceChartHistory {
+	return { memory: [], cpu: [] };
+}
+
+function appendResourcePoint(points: number[], value: number): number[] {
+	return [...points, value].slice(-MAX_RESOURCE_HISTORY_POINTS);
+}
 
 export function AgentDetailView({
 	agent,
@@ -19,21 +29,24 @@ export function AgentDetailView({
 }): JSX.Element {
 	const queryClient = useQueryClient();
 	const [activeTab, setActiveTab] = useState<AgentTab>("overview");
-	const nameInputRef = useRef<HTMLInputElement | null>(null);
-	const [isEditingName, setIsEditingName] = useState(false);
+	const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | undefined>();
 	const [draft, setDraft] = useState<AgentDraft>({
 		name: agent.name,
 		provider: agent.model?.provider ?? "kimi-coding",
 		model: agent.model?.model ?? "k2p6",
 		thinkingLevel: agent.model?.thinkingLevel as DesktopThinkingLevel ?? "off",
-		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? false,
+		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
+		apiKey: agent.model?.apiKey ?? "",
 	});
 	const [channelDraft, setChannelDraft] = useState<AgentDraft>({
 		appId: agent.appId ?? "",
 		appSecret: agent.appSecret ?? "",
 		brand: agent.brand ?? "feishu",
+		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 	});
+	const [modelSaveMessage, setModelSaveMessage] = useState<string | undefined>();
 	const [channelSaveMessage, setChannelSaveMessage] = useState<string | undefined>();
+	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
 	const usageQuery = useQuery({
 		queryKey: ["agent-usage", agent.id],
 		queryFn: () => window.pie.getAgentUsage(agent.id),
@@ -52,7 +65,12 @@ export function AgentDetailView({
 		queryKey: ["agent-skill-sources", agent.id],
 		queryFn: () => window.pie.getAgentSkillSources(agent.id),
 	});
+	const systemPromptQuery = useQuery({
+		queryKey: ["agent-system-prompt", agent.id],
+		queryFn: () => window.pie.getAgentSystemPrompt(agent.id),
+	});
 	const usage = usageQuery.data ?? emptyUsage();
+	const resources = resourceQuery.data;
 	const todayMessages = usage.today.incomingMessages + usage.today.outgoingMessages;
 	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
 	const providerOptions = useMemo(() => {
@@ -78,23 +96,42 @@ export function AgentDetailView({
 			provider: agent.model?.provider ?? "kimi-coding",
 			model: agent.model?.model ?? "k2p6",
 			thinkingLevel: agent.model?.thinkingLevel as DesktopThinkingLevel ?? "off",
-			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? false,
+			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
+			apiKey: agent.model?.apiKey ?? "",
 		});
 		setChannelDraft({
 			appId: agent.appId ?? "",
 			appSecret: agent.appSecret ?? "",
 			brand: agent.brand ?? "feishu",
+			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 		});
+		setModelSaveMessage(undefined);
 		setChannelSaveMessage(undefined);
-		setIsEditingName(false);
 	}, [agent]);
 
 	useEffect(() => {
-		if (isEditingName) {
-			nameInputRef.current?.focus();
-			nameInputRef.current?.select();
+		setAvatarPreviewUrl(undefined);
+	}, [agent.id, agent.avatarUrl]);
+
+	useEffect(() => {
+		setResourceHistory(createEmptyResourceHistory());
+	}, [agent.id]);
+
+	useEffect(() => {
+		if (!resources?.updatedAt) {
+			return;
 		}
-	}, [isEditingName]);
+		setResourceHistory((current) => {
+			if (current.updatedAt === resources.updatedAt) {
+				return current;
+			}
+			return {
+				updatedAt: resources.updatedAt,
+				memory: appendResourcePoint(current.memory, (resources.memoryBytes ?? 0) / 1024 / 1024),
+				cpu: appendResourcePoint(current.cpu, resources.cpuPercent ?? 0),
+			};
+		});
+	}, [resources?.updatedAt, resources?.memoryBytes, resources?.cpuPercent]);
 
 	const update = useMutation({
 		mutationFn: (newDraft: AgentDraft) => window.pie.updateAgent(agent.id, newDraft),
@@ -104,12 +141,48 @@ export function AgentDetailView({
 		},
 		onError: (err: Error) => onError(err.message),
 	});
-	const saveChannel = useMutation({
-		mutationFn: (newDraft: AgentDraft) => window.pie.updateAgent(agent.id, newDraft),
+	const uploadAvatar = useMutation({
+		mutationFn: (upload: { fileName: string; dataUrl: string }) => window.pie.uploadAgentAvatar(agent.id, upload),
+		onMutate: (upload) => {
+			setAvatarPreviewUrl(upload.dataUrl);
+		},
+		onSuccess: async (updated) => {
+			queryClient.setQueryData(["agent", agent.id], updated);
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			await queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			setAvatarPreviewUrl(undefined);
+		},
+		onError: (err: Error) => {
+			setAvatarPreviewUrl(undefined);
+			onError(err.message);
+		},
+	});
+	const saveAgentDraftAndRestart = async (newDraft: AgentDraft) => {
+		let updated = await window.pie.updateAgent(agent.id, newDraft);
+		if (agent.status === "running") {
+			await window.pie.pauseAgent(agent.id);
+			updated = await window.pie.startAgent(agent.id);
+		}
+		return updated;
+	};
+	const saveModel = useMutation({
+		mutationFn: (newDraft: AgentDraft) => saveAgentDraftAndRestart(newDraft),
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
-			setChannelSaveMessage("验证通过，渠道配置已保存。");
+			setModelSaveMessage(agent.status === "running" ? "验证通过，模型配置已保存并重启 Bot。" : "验证通过，模型配置已保存。");
+		},
+		onError: (err: Error) => {
+			setModelSaveMessage(undefined);
+			onError(err.message);
+		},
+	});
+	const saveChannel = useMutation({
+		mutationFn: (newDraft: AgentDraft) => saveAgentDraftAndRestart(newDraft),
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setChannelSaveMessage(agent.status === "running" ? "验证通过，渠道配置已保存并重启 Bot。" : "验证通过，渠道配置已保存。");
 		},
 		onError: (err: Error) => {
 			setChannelSaveMessage(undefined);
@@ -156,37 +229,46 @@ export function AgentDetailView({
 		},
 		onError: (err: Error) => onError(err.message),
 	});
+	const openSystemPrompt = useMutation({
+		mutationFn: () => window.pie.openAgentSystemPrompt(agent.id),
+		onSuccess: (source) => {
+			queryClient.setQueryData(["agent-system-prompt", agent.id], source);
+		},
+		onError: (err: Error) => onError(err.message),
+	});
 
 	const updateField = (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => {
 		const newDraft = { ...draft, [field]: value };
 		setDraft(newDraft);
-		update.mutate(newDraft);
+		setModelSaveMessage(undefined);
 	};
 
-	const commitNameEdit = () => {
-		const nextName = (draft.name ?? "").trim();
+	const saveName = (name: string) => {
+		const nextName = name.trim();
 		if (!nextName) {
 			setDraft((current) => ({ ...current, name: agent.name }));
-			setIsEditingName(false);
 			return;
 		}
 		if (nextName === agent.name) {
 			setDraft((current) => ({ ...current, name: nextName }));
-			setIsEditingName(false);
 			return;
 		}
-		const newDraft = { ...draft, name: nextName };
-		setDraft(newDraft);
-		setIsEditingName(false);
-		update.mutate(newDraft);
+		setDraft((current) => ({ ...current, name: nextName }));
+		update.mutate({ name: nextName });
 	};
 
 	const updateModelSelection = (nextDraft: AgentDraft) => {
 		setDraft(nextDraft);
-		update.mutate(nextDraft);
+		setModelSaveMessage(undefined);
 	};
 
-	const updateChannelField = (field: keyof AgentDraft, value: string) => {
+	const updateProviderSelection = (nextProvider: string) => {
+		const nextModel = allModelOptions.find((item) => item.provider === nextProvider)?.id ?? draft.model ?? "";
+		const nextApiKey = nextProvider === agent.model?.provider ? agent.model?.apiKey ?? "" : "";
+		updateModelSelection({ ...draft, provider: nextProvider, model: nextModel, apiKey: nextApiKey });
+	};
+
+	const updateChannelField = (field: keyof AgentDraft, value: string | boolean) => {
 		setChannelSaveMessage(undefined);
 		setChannelDraft((current) => ({ ...current, [field]: value }));
 	};
@@ -194,18 +276,12 @@ export function AgentDetailView({
 	return (
 			<Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AgentTab)} className="flex h-full flex-col bg-white">
 				<AgentHeader
-					agent={agent}
-					draftName={draft.name ?? ""}
-					isEditingName={isEditingName}
+					agent={avatarPreviewUrl ? { ...agent, avatarUrl: avatarPreviewUrl } : agent}
 					isSaving={update.isPending}
-					nameInputRef={nameInputRef}
-					onDraftNameChange={(name) => setDraft((current) => ({ ...current, name }))}
-					onCommitName={commitNameEdit}
-					onEditName={() => setIsEditingName(true)}
-					onCancelNameEdit={() => {
-						setDraft((current) => ({ ...current, name: agent.name }));
-						setIsEditingName(false);
-					}}
+					onSaveName={saveName}
+					isUploadingAvatar={uploadAvatar.isPending}
+					onUploadAvatar={(upload) => uploadAvatar.mutate(upload)}
+					isStarting={start.isPending}
 					onStart={() => start.mutate()}
 					onPause={() => pause.mutate()}
 					onReveal={() => revealFinder.mutate()}
@@ -229,22 +305,35 @@ export function AgentDetailView({
 						activeTab={activeTab}
 						agent={agent}
 						usage={usage}
-						resources={resourceQuery.data}
+						resources={resources}
+						resourceHistory={resourceHistory}
 						todayMessages={todayMessages}
 						totalMessages={totalMessages}
 						draft={draft}
 						channelDraft={channelDraft}
+						modelSaveMessage={modelSaveMessage}
 						channelSaveMessage={channelSaveMessage}
 						providerOptions={providerOptions}
 						modelOptions={modelOptions}
 						allModelOptions={allModelOptions}
 						isModelCatalogLoading={modelCatalogQuery.isLoading}
+						systemPrompt={systemPromptQuery.data}
+						isLoadingSystemPrompt={systemPromptQuery.isLoading}
+						isOpeningSystemPrompt={openSystemPrompt.isPending}
 						skillSources={skillSourcesQuery.data ?? []}
 						isLoadingSkillSources={skillSourcesQuery.isLoading}
 						openingSkillSourceId={openSkillSource.isPending ? openSkillSource.variables : undefined}
+						isSavingModel={saveModel.isPending}
 						isSavingChannel={saveChannel.isPending}
 						onUpdateField={updateField}
-						onUpdateModelSelection={updateModelSelection}
+						onUpdateProviderSelection={updateProviderSelection}
+						onSaveModel={() => saveModel.mutate({
+							provider: draft.provider,
+							model: draft.model,
+							thinkingLevel: draft.thinkingLevel,
+							apiKey: draft.apiKey,
+						})}
+						onOpenSystemPrompt={() => openSystemPrompt.mutate()}
 						onOpenSkillSource={(sourceId) => openSkillSource.mutate(sourceId)}
 						onUpdateChannelField={updateChannelField}
 						onSaveChannel={() => saveChannel.mutate(channelDraft)}
