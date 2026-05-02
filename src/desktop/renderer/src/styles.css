@@ -24,15 +24,15 @@
   --color-border: var(--slate-6);
   --color-border-subtle: var(--slate-5);
   --color-input: var(--slate-6);
-  --color-ring: var(--lime-8);
+  --color-ring: var(--slate-8);
   --color-shadcn-ring: var(--slate-a6);
   --color-card: white;
   --color-card-hover: var(--white-a8);
   
   /* Brand Colors */
-  --color-primary: var(--lime-9);
-  --color-primary-foreground: var(--lime-12);
-  --color-primary-hover: var(--lime-10);
+  --color-primary: var(--slate-12);
+  --color-primary-foreground: white;
+  --color-primary-hover: var(--slate-11);
   
   --color-accent: var(--slate-2);
   --color-accent-foreground: var(--slate-12);
@@ -76,7 +76,7 @@
 	--app-shell-radius: 60px;
 	--app-shell-gap: 6px;
 	--agent-detail-radius: calc(var(--app-shell-radius) - var(--app-shell-gap));
-	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	color: var(--color-foreground);
 	background: transparent;
 	font-synthesis: none;
@@ -95,20 +95,22 @@ body,
 	height: 100%;
 	margin: 0;
 	overflow: hidden;
+	background: transparent;
 }
 
 body {
 	border-radius: var(--app-shell-radius);
 	corner-shape: squircle;
-	background: transparent;
 	/* 彻底规避 fixed 元素溢出：让 body 成为所有 fixed 元素的包含块，从而严格执行 overflow: hidden 裁剪 */
 	contain: paint;
+	/* 修复边缘锯齿：强制开启硬件加速和抗锯齿 */
+	transform: translateZ(0);
+	-webkit-font-smoothing: antialiased;
 }
 
 #root {
 	border-radius: var(--app-shell-radius);
 	corner-shape: squircle;
-	background: transparent;
 	overflow: hidden;
 }
 
@@ -153,8 +155,9 @@ input[data-slot="input"],
 	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
 }
 
-button {
-	cursor: default;
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+	cursor: pointer;
 }
 
 .drag-region {
