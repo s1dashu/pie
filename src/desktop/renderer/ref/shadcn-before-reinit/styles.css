@@ -1,0 +1,194 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@radix-ui/colors/slate.css";
+@import "@radix-ui/colors/slate-alpha.css";
+@import "@radix-ui/colors/lime.css";
+@import "@radix-ui/colors/lime-alpha.css";
+@import "@radix-ui/colors/red.css";
+@import "@radix-ui/colors/red-alpha.css";
+@import "@radix-ui/colors/white-alpha.css";
+@import "@radix-ui/colors/black-alpha.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--slate-3);
+  --color-foreground: var(--slate-12);
+  
+  /* Shadcn Semantic Colors (Mapped to Radix) */
+  --color-popover: var(--slate-1);
+  --color-popover-foreground: var(--slate-12);
+  --color-muted: var(--slate-3);
+  --color-muted-foreground: var(--slate-11);
+  --color-border: var(--slate-6);
+  --color-border-subtle: var(--slate-5);
+  --color-input: var(--slate-6);
+  --color-ring: var(--slate-8);
+  --color-shadcn-ring: var(--slate-a6);
+  --color-card: white;
+  --color-card-hover: var(--white-a8);
+  
+  /* Brand Colors */
+  --color-primary: var(--slate-12);
+  --color-primary-foreground: white;
+  --color-primary-hover: var(--slate-11);
+  
+  --color-accent: var(--slate-2);
+  --color-accent-foreground: var(--slate-12);
+  
+  --color-danger: var(--red-9);
+  --color-danger-foreground: var(--red-1);
+  --color-danger-hover: var(--red-10);
+  --color-destructive: var(--red-9);
+  --color-destructive-foreground: var(--red-1);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-xs--letter-spacing: 0;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-sm--letter-spacing: 0;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-base--letter-spacing: 0;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-lg--letter-spacing: 0;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-xl--letter-spacing: 0;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.875rem;
+  --text-2xl--letter-spacing: 0;
+}
+
+:root {
+	--radius: 0.625rem;
+	--app-shell-radius: 60px;
+	--app-shell-gap: 6px;
+	--agent-detail-radius: calc(var(--app-shell-radius) - var(--app-shell-gap));
+	font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	color: var(--color-foreground);
+	background: transparent;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+	background: transparent;
+}
+
+body {
+	border-radius: var(--app-shell-radius);
+	corner-shape: squircle;
+	/* 彻底规避 fixed 元素溢出：让 body 成为所有 fixed 元素的包含块，从而严格执行 overflow: hidden 裁剪 */
+	contain: paint;
+	/* 修复边缘锯齿：强制开启硬件加速和抗锯齿 */
+	transform: translateZ(0);
+	-webkit-font-smoothing: antialiased;
+}
+
+#root {
+	border-radius: var(--app-shell-radius);
+	corner-shape: squircle;
+	overflow: hidden;
+}
+
+.app-continuous-corner {
+	border-radius: var(--app-shell-radius);
+	corner-shape: squircle;
+}
+
+.agent-detail-corner {
+	border-radius: var(--agent-detail-radius);
+	corner-shape: squircle;
+}
+
+.pie-smooth-corner {
+	corner-shape: squircle;
+}
+
+.agent-avatar-frame {
+	corner-shape: circle;
+}
+
+.agent-tabs-label {
+	font-size: var(--font-size-1);
+	line-height: var(--line-height-1);
+}
+
+button,
+input,
+select {
+	font: inherit;
+}
+
+input,
+textarea,
+select,
+[role="checkbox"] {
+	box-shadow: none;
+}
+
+input[data-slot="input"],
+[data-slot="select-trigger"] {
+	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}
+
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+	cursor: pointer;
+}
+
+.drag-region {
+	-webkit-app-region: drag;
+}
+
+.no-drag {
+	-webkit-app-region: no-drag;
+}
+
+/* Subtle Scrollbar */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: rgba(0, 0, 0, 0);
+	border-radius: 10px;
+	transition: background 0.2s ease-in-out;
+}
+
+*:hover > ::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+	background: var(--black-a3);
+}
+
+::-webkit-scrollbar-thumb:active {
+	background: var(--black-a4);
+}
