@@ -34,6 +34,8 @@ import {
 	clearRuntimeProcessRecord,
 	isPidRunning,
 	readRuntimeProcessRecord,
+	readRuntimeStateRecord,
+	writeRuntimeStateRecord,
 } from "../../core/runtime-process.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import type {
@@ -78,7 +80,7 @@ const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 let isQuitting = false;
 let didStopAgentsForQuit = false;
-let isRestoringEnabledAgents = true;
+const restoringAgentIds = new Set<string>();
 
 function logUnhandledMainProcessError(kind: string, error: unknown): void {
 	console.error(`[desktop] ${kind}:`, error);
@@ -640,7 +642,7 @@ function statusForProfile(id: string, enabled: boolean): AgentSummary["status"] 
 		if (agent && hasLiveRuntimeProcess(agent)) {
 			return "running";
 		}
-		if (isRestoringEnabledAgents) {
+		if (restoringAgentIds.has(id)) {
 			return "starting";
 		}
 	}
@@ -660,15 +662,38 @@ function hasLiveRuntimeProcess(home: string): boolean {
 	}
 	if (resolve(record.agentHome) !== resolve(home) || !isPidRunning(record.pid)) {
 		clearRuntimeProcessRecord(home);
+		const persisted = readRuntimeStateRecord(home);
+		if (persisted?.lifecycle.state === "running" || persisted?.lifecycle.state === "starting") {
+			writeRuntimeStateRecord(home, {
+				homeDir: persisted.homeDir,
+				workDir: persisted.workDir,
+				lifecycle: {
+					state: "stopped",
+					updatedAt: new Date().toISOString(),
+					reason: "stale-process",
+				},
+			});
+		}
 		return false;
 	}
 	return true;
 }
 
-function runtimeLifecycleForProfile(id: string, enabled: boolean): RuntimeEnvironmentSummary["lifecycle"] {
+function runtimeLifecycleForProfile(id: string, home: string, enabled: boolean): RuntimeEnvironmentSummary["lifecycle"] {
 	const active = agentProcesses.getLifecycleSnapshot(id);
 	if (active) {
 		return active;
+	}
+	const persisted = readRuntimeStateRecord(home);
+	if (persisted) {
+		if ((persisted.lifecycle.state === "running" || persisted.lifecycle.state === "starting") && !hasLiveRuntimeProcess(home)) {
+			return {
+				state: "stopped",
+				updatedAt: new Date().toISOString(),
+				reason: "stale-process",
+			};
+		}
+		return persisted.lifecycle;
 	}
 	return {
 		state: enabled ? "stopped" : "stopped",
@@ -710,7 +735,7 @@ async function listAgents(): Promise<AgentSummary[]> {
 		const config = readProfileConfig(home);
 		const profile = config?.profile;
 		const runtimeEnvironment = createRuntimeEnvironment({ homeDir: home, profile });
-		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, entry.enabled);
+		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, home, entry.enabled);
 		const model = getProfileModel(profile);
 		const channel = getPrimaryFeishuChannel(profile);
 		const channelKinds = profile?.channels
@@ -772,21 +797,35 @@ async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<Desktop
 }
 
 async function restoreEnabledAgents(): Promise<void> {
-	try {
-		if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
-			return;
-		}
-		const agents = await listAgents();
-		await Promise.all(
-			agents
-				.filter((agent) => agent.enabled && !hasLiveRuntimeProcess(agent.home))
-				.map((agent) => withAgentOperation(agent.id, () => startAgent(agent.id)).catch((error) => {
-					console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
-				})),
-		);
-	} finally {
-		isRestoringEnabledAgents = false;
+	if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
+		return;
 	}
+	const agents = await listAgents();
+	const candidates = agents.filter((agent) => agent.enabled && !hasLiveRuntimeProcess(agent.home));
+	for (const agent of candidates) {
+		restoringAgentIds.add(agent.id);
+	}
+	await Promise.allSettled(
+		candidates.map((agent) =>
+			withAgentOperation(agent.id, () => startAgent(agent.id))
+				.catch((error) => {
+					const message = error instanceof Error ? error.message : String(error);
+					writeRuntimeStateRecord(agent.home, {
+						homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+						workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+						lifecycle: {
+							state: "failed",
+							updatedAt: new Date().toISOString(),
+							reason: `restore-failed: ${message}`,
+						},
+					});
+					console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
+				})
+				.finally(() => {
+					restoringAgentIds.delete(agent.id);
+				}),
+		),
+	);
 }
 
 async function getAgent(id: string): Promise<AgentDetails> {
@@ -1175,6 +1214,16 @@ async function startAgent(id: string): Promise<AgentDetails> {
 	}
 	const existing = await getAgent(id);
 	if (hasLiveRuntimeProcess(existing.home)) {
+		writeRuntimeStateRecord(existing.home, {
+			homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
+			workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
+			lifecycle: {
+				state: "running",
+				updatedAt: new Date().toISOString(),
+				reason: "existing-process",
+			},
+			...(readRuntimeProcessRecord(existing.home) ? { process: readRuntimeProcessRecord(existing.home)! } : {}),
+		});
 		updateProfileRegistryEntry(id, { enabled: true, active: true });
 		return getAgent(id);
 	}
@@ -1193,6 +1242,16 @@ async function stopRunningAgent(id: string): Promise<void> {
 	if (!agentProcesses.isRunning(id)) {
 		const record = readRuntimeProcessRecord(agent.home);
 		if (record && resolve(record.agentHome) === resolve(agent.home) && isPidRunning(record.pid)) {
+			writeRuntimeStateRecord(agent.home, {
+				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+				lifecycle: {
+					state: "stopping",
+					updatedAt: new Date().toISOString(),
+					reason: "paused",
+				},
+				process: record,
+			});
 			try {
 				process.kill(record.pid, "SIGTERM");
 			} catch {
@@ -1208,6 +1267,15 @@ async function stopRunningAgent(id: string): Promise<void> {
 			}
 		}
 		clearRuntimeProcessRecord(agent.home);
+		writeRuntimeStateRecord(agent.home, {
+			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+			lifecycle: {
+				state: "stopped",
+				updatedAt: new Date().toISOString(),
+				reason: "paused",
+			},
+		});
 		updateProfileRegistryEntry(id, { enabled: false });
 		return;
 	}

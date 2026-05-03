@@ -4,7 +4,12 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import type { AgentLogEntry } from "../shared/types.js";
-import { clearRuntimeProcessRecord, writeRuntimeProcessRecord } from "../../core/runtime-process.js";
+import {
+	clearRuntimeProcessRecord,
+	writeRuntimeProcessRecord,
+	writeRuntimeStateRecord,
+	type RuntimeProcessRecord,
+} from "../../core/runtime-process.js";
 import {
 	ensureRuntimeEnvironment,
 	RuntimeEnvironmentLifecycle,
@@ -79,6 +84,8 @@ export class AgentProcessManager {
 	private readonly activeAgentReplyLogs = new Map<string, AgentLogEntry>();
 	private readonly agentStartedAt = new Map<string, number>();
 	private readonly agentLifecycles = new Map<string, RuntimeEnvironmentLifecycle>();
+	private readonly agentEnvironments = new Map<string, AgentRuntimeEnvironment>();
+	private readonly agentProcessRecords = new Map<string, RuntimeProcessRecord>();
 	private readonly readyAgents = new Set<string>();
 	private readonly agentReadyWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 	private nextLogId = 1;
@@ -126,6 +133,7 @@ export class AgentProcessManager {
 			...(await this.options.getRuntimeEnvironment(agentId)),
 			lifecycle: lifecycle.snapshot,
 		};
+		this.agentEnvironments.set(agentId, environment);
 		ensureRuntimeEnvironment(environment);
 		const [gatewayPort, webhookPort] = await getDistinctAvailableLocalPorts(2);
 		this.appendAgentLog(agentId, "system", `starting bot: ${command.execPath} ${command.argv.join(" ")}`);
@@ -144,14 +152,17 @@ export class AgentProcessManager {
 			},
 		});
 		if (child.pid) {
-			writeRuntimeProcessRecord(home, {
+			const processRecord = {
 				pid: child.pid,
 				agentHome: home,
 				startedAt: new Date().toISOString(),
 				command: [command.execPath, ...command.argv],
 				gatewayPort,
 				webhookPort,
-			});
+			};
+			this.agentProcessRecords.set(agentId, processRecord);
+			writeRuntimeProcessRecord(home, processRecord);
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
 		}
 		child.stdout?.on("data", (chunk) => {
 			const text = String(chunk);
@@ -171,8 +182,11 @@ export class AgentProcessManager {
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
 			this.agentLifecycles.delete(agentId);
+			this.agentEnvironments.delete(agentId);
+			this.agentProcessRecords.delete(agentId);
 			this.readyAgents.delete(agentId);
 			clearRuntimeProcessRecord(home);
+			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
 			this.rejectAgentReady(agentId, new Error("Bot process exited before it was ready."));
 			this.recordRuntimeEvent(agentId, "stop", "exit");
 			this.appendAgentLog(agentId, "system", "bot process exited");
@@ -183,8 +197,11 @@ export class AgentProcessManager {
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
 			this.agentLifecycles.delete(agentId);
+			this.agentEnvironments.delete(agentId);
+			this.agentProcessRecords.delete(agentId);
 			this.readyAgents.delete(agentId);
 			clearRuntimeProcessRecord(home);
+			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
 			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(String(error)));
 			this.recordRuntimeEvent(agentId, "stop", "error");
 			this.appendAgentLog(agentId, "stderr", `bot process error: ${error instanceof Error ? error.message : String(error)}`);
@@ -193,13 +210,17 @@ export class AgentProcessManager {
 		try {
 			await readyPromise;
 			lifecycle.mark("running");
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
 			this.recordRuntimeEvent(agentId, "start");
 		} catch (error) {
 			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
+			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
 			if (this.runningAgents.get(agentId) === child) {
 				this.runningAgents.delete(agentId);
 				this.agentStartedAt.delete(agentId);
 				this.agentLifecycles.delete(agentId);
+				this.agentEnvironments.delete(agentId);
+				this.agentProcessRecords.delete(agentId);
 				this.readyAgents.delete(agentId);
 				clearRuntimeProcessRecord(home);
 				signalAgentProcess(child, "SIGTERM");
@@ -220,6 +241,9 @@ export class AgentProcessManager {
 		const home = await this.options.getAgentHome(agentId);
 		const lifecycle = this.agentLifecycles.get(agentId);
 		lifecycle?.mark("stopping", reason);
+		if (lifecycle) {
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
+		}
 		this.rejectAgentReady(agentId, new Error(`Bot start was interrupted: ${reason}.`));
 		this.appendAgentLog(agentId, "system", "stopping bot");
 		await new Promise<void>((resolveStop) => {
@@ -238,7 +262,12 @@ export class AgentProcessManager {
 			signalAgentProcess(child, "SIGTERM");
 		});
 		lifecycle?.mark("stopped", reason);
+		if (lifecycle) {
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
+		}
 		this.agentLifecycles.delete(agentId);
+		this.agentEnvironments.delete(agentId);
+		this.agentProcessRecords.delete(agentId);
 		clearRuntimeProcessRecord(home);
 		this.recordRuntimeEvent(agentId, "stop", reason);
 		this.appendAgentLog(agentId, "system", "bot stopped");
@@ -336,6 +365,32 @@ export class AgentProcessManager {
 		Promise.resolve(this.options.recordRuntimeEvent(agentId, event, reason)).catch((error) => {
 			console.error(`[agent:${agentId}] failed to persist runtime event:`, error);
 		});
+	}
+
+	private persistRuntimeState(agentId: string, lifecycle: RuntimeEnvironmentLifecycleSnapshot): void {
+		const environment = this.agentEnvironments.get(agentId);
+		if (!environment) {
+			return;
+		}
+		this.persistRuntimeStateForEnvironment(environment.homeDir, environment, lifecycle, this.agentProcessRecords.get(agentId));
+	}
+
+	private persistRuntimeStateForEnvironment(
+		homeDir: string,
+		environment: AgentRuntimeEnvironment,
+		lifecycle: RuntimeEnvironmentLifecycleSnapshot,
+		processRecord?: RuntimeProcessRecord,
+	): void {
+		try {
+			writeRuntimeStateRecord(homeDir, {
+				homeDir: environment.homeDir,
+				workDir: environment.workDir,
+				lifecycle,
+				...(processRecord && lifecycle.state !== "stopped" && lifecycle.state !== "failed" ? { process: processRecord } : {}),
+			});
+		} catch (error) {
+			console.error(`[agent] failed to persist runtime state:`, error);
+		}
 	}
 
 	private recordLogEntry(entry: AgentLogEntry): void {

@@ -5,6 +5,7 @@ import { resolveBackendFramework, type BackendFrameworkDefinition } from "../cor
 import { ensureAgentHomeLayout } from "../core/agent-home-layout.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../core/agent-home.js";
 import { getStoredProfile, loadConfigStore, type ChannelKind } from "../core/config-store.js";
+import { writeRuntimeStateRecord } from "../core/runtime-process.js";
 import { createRuntimeEnvironment, ensureRuntimeEnvironment, RuntimeEnvironmentLifecycle, type AgentRuntimeEnvironment } from "./environment.js";
 import { loadConfig } from "../channels/feishu/config.js";
 import { createFeishuBotRuntime } from "../channels/feishu/main.js";
@@ -98,6 +99,20 @@ export async function runPie(): Promise<number> {
 	const { homeDir, environment, lifecycle, framework, channelRuntimes } = plan;
 	process.chdir(environment.workDir);
 	const primaryRuntime = channelRuntimes[0]!;
+	const persistLifecycle = (): void => {
+		writeRuntimeStateRecord(homeDir, {
+			homeDir: environment.homeDir,
+			workDir: environment.workDir,
+			lifecycle: lifecycle.snapshot,
+			process: {
+				pid: process.pid,
+				agentHome: homeDir,
+				startedAt: lifecycle.snapshot.updatedAt,
+				command: process.argv,
+				gatewayPort,
+			},
+		});
+	};
 
 	const gatewayPort = readPort(
 		process.env.PIE_GATEWAY_PORT,
@@ -140,20 +155,28 @@ export async function runPie(): Promise<number> {
 	process.once("SIGINT", onSigint);
 	process.once("SIGTERM", onSigterm);
 	lifecycle.mark("starting");
+	persistLifecycle();
 	await turnGateway?.start();
 	taskEngine?.start();
 
 	let failure: unknown;
 	try {
 		lifecycle.mark("running");
+		persistLifecycle();
 		return await Promise.race(channelRuntimes.map((runtime) => runtime.start()));
 	} catch (error) {
 		failure = error;
 		lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
+		writeRuntimeStateRecord(homeDir, {
+			homeDir: environment.homeDir,
+			workDir: environment.workDir,
+			lifecycle: lifecycle.snapshot,
+		});
 		throw error;
 	} finally {
 		if (!failure) {
 			lifecycle.mark("stopping");
+			persistLifecycle();
 		}
 		process.off("SIGINT", onSigint);
 		process.off("SIGTERM", onSigterm);
@@ -162,6 +185,11 @@ export async function runPie(): Promise<number> {
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
 		if (!failure) {
 			lifecycle.mark("stopped");
+			writeRuntimeStateRecord(homeDir, {
+				homeDir: environment.homeDir,
+				workDir: environment.workDir,
+				lifecycle: lifecycle.snapshot,
+			});
 		}
 	}
 }
