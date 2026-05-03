@@ -1,6 +1,6 @@
-# Task Engine observability
+# Ousia Task Engine observability
 
-Task Engine writes runtime state under `<agent-home>/runtime/`.
+Ousia Task Engine writes runtime state under `<agent-home>/runtime/`.
 Each task also has local engine-owned state in its own directory.
 
 ## Files
@@ -25,10 +25,10 @@ Each task also has local engine-owned state in its own directory.
 
 Per task:
 
-1. `tasks/<task-id>/state.json` or `projects/<project-id>/tasks/<task-id>/state.json`  
+1. `tasks/<task-id>/state.json`  
    Latest state for one task.
 
-2. `tasks/<task-id>/runs.jsonl` or `projects/<project-id>/tasks/<task-id>/runs.jsonl`  
+2. `tasks/<task-id>/runs.jsonl`  
    Append-only run history for one task.
 
 ## Inspection Order

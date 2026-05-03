@@ -63,7 +63,7 @@ export function ensureTaskEngineDirs(ctx: TaskEngineContext): void {
 export function appendEngineEvent(ctx: TaskEngineContext, event: Record<string, unknown>): void {
 	const payload = {
 		timestamp: new Date().toISOString(),
-		source: "pie-task-engine",
+		source: "ousia-task-engine",
 		host: hostname(),
 		channel: ctx.channel,
 		parentPid: ctx.parentPid,

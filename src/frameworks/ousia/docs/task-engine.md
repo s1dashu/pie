@@ -1,8 +1,8 @@
-# Task Engine
+# Ousia Task Engine
 
-Task Engine is Pie's unified surface for scheduled work, webhook intake, and future agent turns.
+Ousia Task Engine is Ousia's unified surface for scheduled work, webhook intake, and future agent turns.
 
-New tasks should use `tasks/<task-id>/task.json` or `projects/<project-id>/tasks/<task-id>/task.json`.
+New tasks should use `tasks/<task-id>/task.json`. Link a task to a project with `task.json` `projectId`.
 The engine keeps runtime files next to each spec:
 
 ```text
@@ -30,12 +30,13 @@ Example `task.json`:
 
 ## Locations
 
-Use these paths for new task specs:
+Use this path for new task specs:
 
-1. Global task: `tasks/<task-id>/task.json`
-2. Project task: `projects/<project-id>/tasks/<task-id>/task.json`
+1. Task: `tasks/<task-id>/task.json`
 
-Pie has not shipped yet, so Task Engine does not preserve the old workflow/wakeup file layout. Use `task.json` only.
+Do not create new task specs under `projects/<project-id>/tasks/`. Keep `projects/` for workspace files; associate tasks to projects with `projectId`.
+
+Ousia does not preserve the old workflow/wakeup file layout. Use `task.json` only.
 
 ## Runtime State
 
@@ -47,7 +48,7 @@ Each task directory contains:
 
 The engine also writes a summary view to `<agent-home>/runtime/task-engine-state.json` and an event stream to `<agent-home>/runtime/task-engine-events.jsonl`.
 
-The engine uses a local single-instance lock under `<agent-home>/runtime/task-engine.lock` so two Pie runtimes sharing the same home do not schedule the same task concurrently.
+The engine uses a local single-instance lock under `<agent-home>/runtime/task-engine.lock` so two Ousia runtimes sharing the same home do not schedule the same task concurrently.
 
 ## Agent Tasks
 
@@ -92,7 +93,7 @@ Supported sink types are `append_jsonl` and `write_json`.
 
 ## Runtime Files
 
-Task Engine writes runtime state under `<agent-home>/runtime/`, including:
+Ousia Task Engine writes runtime state under `<agent-home>/runtime/`, including:
 
 1. `task-engine-events.jsonl`
 2. `task-engine-state.json`

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { mkdirSync } from "node:fs";
 import process from "node:process";
 import { resolveBackendFramework, type BackendFrameworkDefinition } from "../core/backend-framework.js";
 import { ensureAgentHomeLayout } from "../core/agent-home-layout.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../core/agent-home.js";
 import { getStoredProfile, loadConfigStore, type ChannelKind } from "../core/config-store.js";
+import { createRuntimeEnvironment, ensureRuntimeEnvironment, RuntimeEnvironmentLifecycle, type AgentRuntimeEnvironment } from "./environment.js";
 import { loadConfig } from "../channels/feishu/config.js";
 import { createFeishuBotRuntime } from "../channels/feishu/main.js";
 import { loadConfig as loadWechatConfig } from "../channels/wechat/config.js";
@@ -16,8 +16,6 @@ import { loadConfig as loadDiscordConfig } from "../channels/discord/config.js";
 import { createDiscordBotRuntime } from "../channels/discord/main.js";
 import { loadConfig as loadTelegramConfig } from "../channels/telegram/config.js";
 import { createTelegramBotRuntime } from "../channels/telegram/main.js";
-import { createRuntimeTurnGatewayServer } from "./runtime-turn-gateway.js";
-import { createTaskEngineProcessManager } from "./task-engine-process.js";
 import type { AgentTurnPort, ManagedRuntime } from "./types.js";
 
 function readPort(value: string | undefined, defaultValue: number): number {
@@ -42,6 +40,8 @@ type ChannelRuntime = ManagedRuntime & AgentTurnPort & { setShutdownExitCode?: (
 
 interface RuntimePlan {
 	homeDir: string;
+	environment: AgentRuntimeEnvironment;
+	lifecycle: RuntimeEnvironmentLifecycle;
 	framework: BackendFrameworkDefinition;
 	channelRuntimes: ChannelRuntime[];
 }
@@ -75,10 +75,13 @@ function createChannelRuntimes(channelKinds: ChannelKind[]): ChannelRuntime[] {
 function createRuntimePlan(): RuntimePlan {
 	loadAgentEnvIntoProcess({ agentHome: parseAgentHomeFromArgv(process.argv.slice(2)) });
 	const homeDir = resolveAgentHomeDir();
-	mkdirSync(homeDir, { recursive: true });
-	ensureAgentHomeLayout(homeDir);
 	const profile = getStoredProfile(loadConfigStore());
+	const lifecycle = new RuntimeEnvironmentLifecycle();
+	const environment = createRuntimeEnvironment({ homeDir, profile, lifecycle });
+	ensureRuntimeEnvironment(environment);
+	ensureAgentHomeLayout(homeDir);
 	const framework = resolveBackendFramework(profile?.backend.kind);
+	framework.ensureAgentHomeLayout?.(homeDir);
 	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
 	const channelKinds: ChannelKind[] = enabledChannels.length
 		? enabledChannels.map((channel) => channel.kind)
@@ -87,12 +90,13 @@ function createRuntimePlan(): RuntimePlan {
 	if (!channelRuntimes.length) {
 		throw new Error("No enabled channel runtime is available for this profile.");
 	}
-	return { homeDir, framework, channelRuntimes };
+	return { homeDir, environment, lifecycle, framework, channelRuntimes };
 }
 
 export async function runPie(): Promise<number> {
 	const plan = createRuntimePlan();
-	const { homeDir, framework, channelRuntimes } = plan;
+	const { homeDir, environment, lifecycle, framework, channelRuntimes } = plan;
+	process.chdir(environment.workDir);
 	const primaryRuntime = channelRuntimes[0]!;
 
 	const gatewayPort = readPort(
@@ -102,17 +106,19 @@ export async function runPie(): Promise<number> {
 	const gatewaySecret =
 		process.env.PIE_GATEWAY_SECRET?.trim() ||
 		undefined;
-	const taskEngine = framework.startTaskEngine
-		? createTaskEngineProcessManager({
+	const taskEngine = framework.createTaskEngineProcessManager
+		? framework.createTaskEngineProcessManager({
 				homeDir,
+				environment,
 				channel: primaryRuntime.identity.channel,
 				gatewayPort,
 				gatewaySecret,
 			})
 		: undefined;
-	const turnGateway = framework.startTurnGateway
-		? createRuntimeTurnGatewayServer({
+	const turnGateway = framework.createTurnGatewayServer
+		? framework.createTurnGatewayServer({
 				homeDir,
+				environment,
 				port: gatewayPort,
 				secret: gatewaySecret,
 				onTurn: (request) => primaryRuntime.deliverTurn(request),
@@ -133,17 +139,30 @@ export async function runPie(): Promise<number> {
 	const onSigterm = (): void => stopRuntime(143);
 	process.once("SIGINT", onSigint);
 	process.once("SIGTERM", onSigterm);
+	lifecycle.mark("starting");
 	await turnGateway?.start();
 	taskEngine?.start();
 
+	let failure: unknown;
 	try {
+		lifecycle.mark("running");
 		return await Promise.race(channelRuntimes.map((runtime) => runtime.start()));
+	} catch (error) {
+		failure = error;
+		lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
+		throw error;
 	} finally {
+		if (!failure) {
+			lifecycle.mark("stopping");
+		}
 		process.off("SIGINT", onSigint);
 		process.off("SIGTERM", onSigterm);
 		taskEngine?.stop();
 		await turnGateway?.stop();
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
+		if (!failure) {
+			lifecycle.mark("stopped");
+		}
 	}
 }
 

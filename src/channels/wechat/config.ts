@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
@@ -25,9 +24,6 @@ const READONLY_TOOL_NAMES: BuiltinToolName[] = ["read", "grep", "find", "ls"];
 const ALL_BUILTIN_TOOL_NAMES: BuiltinToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const VALID_TOOL_NAMES = new Set<BuiltinToolName>(ALL_BUILTIN_TOOL_NAMES);
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const DEFAULT_SYSTEM_PROMPT_FILE = join(REPO_ROOT, "src", "prompts", "system-prompt.md");
-
 export interface WechatChannelConfig {
 	accountId: string;
 	token?: string;
@@ -118,11 +114,13 @@ function resolveModel(env: RuntimeEnv): { model?: Model<any>; label: string } {
 }
 
 function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content: string } {
-	const filePath = resolve(env.WECHAT_BOT_SYSTEM_PROMPT_FILE ?? DEFAULT_SYSTEM_PROMPT_FILE);
+	const framework = resolveBackendFramework(getStoredProfile(loadConfigStore())?.backend.kind);
+	const filePath = resolve(env.WECHAT_BOT_SYSTEM_PROMPT_FILE ?? framework.systemPrompt?.defaultPath ?? "");
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
-	return { path: filePath, content: readFileSync(filePath, "utf8").trim() };
+	const homeDir = resolveAgentHomeDir();
+	return { path: filePath, content: readFileSync(filePath, "utf8").replaceAll("{{AGENT_HOME}}", homeDir).trim() };
 }
 
 function resolveBackendKind(store: AgentConfigStore): AgentBackendKind {
@@ -191,7 +189,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 	const { model, label: modelLabel } = resolveModel(env);
 	const { tools, label: toolLabel } = resolveTools(env.WECHAT_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
-	const assistantSystemPrompt = framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const debug = parseBooleanFlag(env.WECHAT_BOT_DEBUG, false);
 
 	return {

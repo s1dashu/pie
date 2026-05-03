@@ -10,8 +10,7 @@ import {
 	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { RuntimeTurnRequest } from "../../runtime/runtime-turn-gateway.js";
-import type { AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
 import { extractAssistantText, extractLastAssistantError, SessionPool } from "../feishu/session.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import { extractTextPart, type IncomingChannelMessage, type TextChannelAdapter } from "./channel-model.js";
@@ -174,7 +173,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		await this.adapter.sendText(message.target, text);
 	}
 
-	async deliverTurn(request: RuntimeTurnRequest): Promise<{ sessionKey: string; assistantText: string }> {
+	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
 		return this.enqueueScheduledAgentTurn(request);
 	}
 
@@ -254,7 +253,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		await this.getConversationController(message.conversationKey).submit(message, promptText);
 	}
 
-	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: RuntimeTurnRequest): IncomingChannelMessage {
+	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentTurnInput): IncomingChannelMessage {
 		return {
 			id: `task:${request.sessionKey}:${Date.now()}`,
 			channel: this.config.channelKind,
@@ -267,7 +266,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{ sessionKey: string; assistantText: string }> {
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
 		if (request.kind === "agent_task") {
 			const ownerSession = getOwnerSessionBinding(loadConfigStore());
 			if (!ownerSession) {
@@ -282,14 +281,14 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		return { sessionKey: request.sessionKey, assistantText: extractAssistantText(session) };
 	}
 
-	private resolveScheduledTurnQueueKey(request: RuntimeTurnRequest): string {
+	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
 		if (request.kind !== "agent_task") {
 			return request.sessionKey;
 		}
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{ sessionKey: string; assistantText: string }> {
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
 		let result: { sessionKey: string; assistantText: string } | undefined;
 		const queueKey = this.resolveScheduledTurnQueueKey(request);
 		const previous = this.scheduledTurnQueues.get(queueKey) ?? Promise.resolve();

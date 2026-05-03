@@ -2,13 +2,15 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import type { AgentTurnInput, AgentTurnOutput } from "./types.js";
+import type { AgentRuntimeEnvironment } from "../../../runtime/environment.js";
+import type { AgentTurnInput, AgentTurnOutput } from "../../../runtime/types.js";
 
 export type RuntimeTurnRequest = AgentTurnInput;
 export type RuntimeTurnResult = AgentTurnOutput;
 
 export interface RuntimeTurnGatewayOptions {
 	homeDir: string;
+	environment?: AgentRuntimeEnvironment;
 	port: number;
 	secret?: string;
 	onTurn: (request: RuntimeTurnRequest) => Promise<RuntimeTurnResult>;
@@ -70,7 +72,7 @@ export function createRuntimeTurnGatewayServer(options: RuntimeTurnGatewayOption
 			logPath,
 			`${JSON.stringify({
 				timestamp: new Date().toISOString(),
-				source: "pie-runtime-turn-gateway",
+				source: "ousia-runtime-turn-gateway",
 				host: hostname(),
 				...event,
 			})}\n`,

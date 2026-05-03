@@ -39,7 +39,7 @@ function capToolImLine(line: string): string {
 }
 
 export function isSyntheticTaskEvent(event: LarkMessageEvent): boolean {
-	return event.sender.sender_type === "system" && event.message.user_agent === "pie-task-engine";
+	return event.sender.sender_type === "system" && event.message.user_agent === "ousia-task-engine";
 }
 
 function toolCallImEmoji(toolLabel: string): string {

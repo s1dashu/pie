@@ -6,6 +6,7 @@ export interface AgentRuntimeIdentity {
 	backend: AgentBackendKind;
 	channel: PieChannelKind;
 	homeDir: string;
+	workDir?: string;
 	profileId?: string;
 }
 

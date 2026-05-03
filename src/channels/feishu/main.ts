@@ -12,8 +12,7 @@ import {
 	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { RuntimeTurnRequest } from "../../runtime/runtime-turn-gateway.js";
-import type { AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
 import {
 	extractPromptText,
 	getConversationKey,
@@ -106,7 +105,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		this.abortController.abort();
 	}
 
-	async deliverTurn(request: RuntimeTurnRequest): Promise<{ sessionKey: string; assistantText: string }> {
+	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
 		return this.enqueueScheduledAgentTurn(request);
 	}
 
@@ -135,7 +134,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		console.log(lines.join("\n"));
 	}
 
-	private createSyntheticTaskEvent(ownerSession: OwnerSessionBinding, request: RuntimeTurnRequest): LarkMessageEvent {
+	private createSyntheticTaskEvent(ownerSession: OwnerSessionBinding, request: AgentTurnInput): LarkMessageEvent {
 		const now = Date.now();
 		return {
 			sender: {
@@ -153,7 +152,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 				content: JSON.stringify({
 					text: formatTaskPrompt(request.prompt),
 				}),
-				user_agent: "pie-task-engine",
+				user_agent: "ousia-task-engine",
 			},
 		};
 	}
@@ -189,7 +188,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		saveConfigStore(setOwnerSessionBinding(store, ownerSession));
 	}
 
-	private async handleScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{
 		sessionKey: string;
 		assistantText: string;
 	}> {
@@ -215,14 +214,14 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private resolveScheduledTurnQueueKey(request: RuntimeTurnRequest): string {
+	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
 		if (request.kind !== "agent_task") {
 			return request.sessionKey;
 		}
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{
 		sessionKey: string;
 		assistantText: string;
 	}> {

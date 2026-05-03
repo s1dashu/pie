@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sep } from "node:path";
+import type { AgentRuntimeEnvironment } from "../../../runtime/environment.js";
 
 export interface TaskEngineProcessManagerOptions {
 	homeDir: string;
+	environment?: AgentRuntimeEnvironment;
 	channel: string;
 	gatewayPort: number;
 	gatewaySecret?: string;
@@ -48,7 +50,7 @@ export function createTaskEngineProcessManager(
 	function spawnEntry(entryName: "runtime" | "engine"): ChildProcess {
 		const entry = resolveTaskEngineEntry(entryName);
 		const child = spawn(entry.command, entry.args, {
-			cwd: options.homeDir,
+			cwd: options.environment?.workDir ?? options.homeDir,
 			env: {
 				...process.env,
 				PIE_AGENT_HOME: options.homeDir,

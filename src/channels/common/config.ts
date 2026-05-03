@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
@@ -25,9 +24,6 @@ const READONLY_TOOL_NAMES: BuiltinToolName[] = ["read", "grep", "find", "ls"];
 const ALL_BUILTIN_TOOL_NAMES: BuiltinToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const VALID_TOOL_NAMES = new Set<BuiltinToolName>(ALL_BUILTIN_TOOL_NAMES);
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const DEFAULT_SYSTEM_PROMPT_FILE = join(REPO_ROOT, "src", "prompts", "system-prompt.md");
-
 export interface CommonChannelRuntimeConfig {
 	homeDir: string;
 	backendKind: AgentBackendKind;
@@ -135,12 +131,13 @@ function resolveModel(env: RuntimeEnv, providerKey: string, modelKey: string): {
 	return { model, label: `${provider}/${modelId}` };
 }
 
-function resolveAssistantSystemPrompt(env: RuntimeEnv, promptKey: string): { path: string; content: string } {
-	const filePath = resolve(env[promptKey] ?? DEFAULT_SYSTEM_PROMPT_FILE);
+function resolveAssistantSystemPrompt(env: RuntimeEnv, promptKey: string, defaultPath: string): { path: string; content: string } {
+	const filePath = resolve(env[promptKey] ?? defaultPath);
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
-	return { path: filePath, content: readFileSync(filePath, "utf8").trim() };
+	const homeDir = resolveAgentHomeDir();
+	return { path: filePath, content: readFileSync(filePath, "utf8").replaceAll("{{AGENT_HOME}}", homeDir).trim() };
 }
 
 function mergeStoredModelIntoEnv(env: RuntimeEnv, prefix: string, store: AgentConfigStore): void {
@@ -185,7 +182,9 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	const framework = resolveBackendFramework(profile?.backend.kind);
 	const backendKind = framework.kind;
 	const assistantSystemPrompt =
-		framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`) : undefined;
+		framework.systemPrompt
+			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, framework.systemPrompt.defaultPath)
+			: undefined;
 	return {
 		homeDir: resolveAgentHomeDir(),
 		backendKind,

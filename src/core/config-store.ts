@@ -95,6 +95,9 @@ export type ChannelProfile =
 export interface AgentProfile {
 	schemaVersion: 1;
 	backend: AgentBackendProfile;
+	runtime?: {
+		workDir?: string;
+	};
 	channels: ChannelProfile[];
 }
 
@@ -266,8 +269,17 @@ function normalizeAgentBackend(value: unknown): AgentBackendProfile {
 	return { kind: "pi" };
 }
 
+function normalizeAgentRuntime(value: unknown): AgentProfile["runtime"] {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const workDir = typeof value.workDir === "string" && value.workDir.trim() ? value.workDir.trim() : undefined;
+	return workDir ? { workDir } : undefined;
+}
+
 export function createAgentProfile(opts: {
 	backend?: AgentBackendProfile;
+	runtime?: AgentProfile["runtime"];
 	model?: ModelProfile;
 	channels?: ChannelProfile[];
 	feishu?: FeishuChannelProfile;
@@ -279,6 +291,7 @@ export function createAgentProfile(opts: {
 			kind: "pi",
 			...(opts.model ? { model: opts.model } : {}),
 		},
+		...(opts.runtime ? { runtime: opts.runtime } : {}),
 		channels: channels.map((channel) =>
 			channel.kind === "feishu"
 				? {
@@ -322,6 +335,7 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 		.filter((channel): channel is ChannelProfile => Boolean(channel));
 	return createAgentProfile({
 		backend: normalizeAgentBackend(value.backend),
+		runtime: normalizeAgentRuntime(value.runtime),
 		channels,
 	});
 }

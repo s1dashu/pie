@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
@@ -27,9 +26,6 @@ const READONLY_TOOL_NAMES: BuiltinToolName[] = ["read", "grep", "find", "ls"];
 const ALL_BUILTIN_TOOL_NAMES: BuiltinToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const VALID_TOOL_NAMES = new Set<BuiltinToolName>(ALL_BUILTIN_TOOL_NAMES);
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const DEFAULT_SYSTEM_PROMPT_FILE = join(REPO_ROOT, "src", "prompts", "system-prompt.md");
-
 export interface FeishuBotConfig {
 	homeDir: string;
 	backendKind: AgentBackendKind;
@@ -134,13 +130,15 @@ function resolveRunMode(env: RuntimeEnv): "start" | "dev" {
 }
 
 function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content: string } {
-	const filePath = resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE ?? DEFAULT_SYSTEM_PROMPT_FILE);
+	const framework = resolveBackendFramework(getStoredProfile(loadConfigStore())?.backend.kind);
+	const filePath = resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE ?? framework.systemPrompt?.defaultPath ?? "");
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
+	const homeDir = resolveAgentHomeDir();
 	return {
 		path: filePath,
-		content: readFileSync(filePath, "utf8").trim(),
+		content: readFileSync(filePath, "utf8").replaceAll("{{AGENT_HOME}}", homeDir).trim(),
 	};
 }
 
@@ -214,7 +212,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	const { model, label: modelLabel } = resolveModel(env);
 	const { tools, label: toolLabel } = resolveTools(env.FEISHU_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
-	const assistantSystemPrompt = framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const runMode = resolveRunMode(env);
 	const debug = parseBooleanFlag(env.FEISHU_BOT_DEBUG, false);
 

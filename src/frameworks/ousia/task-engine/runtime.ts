@@ -23,7 +23,7 @@ writeFileSync(latestSnapshotPath, "", "utf8");
 function appendEvent(event: Record<string, unknown>): void {
 	const payload = {
 		timestamp: new Date().toISOString(),
-		source: "pie-task-engine",
+	source: "ousia-task-engine",
 		channel,
 		parentPid,
 		enginePid: process.pid,
