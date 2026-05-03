@@ -12,8 +12,8 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 
 ## 当前真实状态
 
-- 根目录 `pie` 是产品 runtime：desktop、CLI/onboard、channel adapters、Task Engine、system prompt、agent home。
-- 当前主要开发对象是桌面端；CLI/onboard、channel adapters、Task Engine 等能力服务于桌面端的 Agent 客户端体验。
+- 根目录 `pie` 是客户端产品 runtime：desktop、CLI/onboard、channel adapters、profile/config/agent home 管理。
+- 当前主要开发对象是桌面端；CLI/onboard、channel adapters 等能力服务于桌面端的 Agent 客户端体验。
 - `pi-feishu/` 是独立子包，定位为纯 Feishu/Lark channel package；不要把根目录产品能力写进子包文档。
 - 当前完成度较高的 channel 仍是 `feishu`；`wechat` 已有扫码登录、轮询和收发消息实现，但仍按早期集成处理；`slack/discord/telegram` 已有 adapter 和手动凭证入口，但首发前不要描述为稳定支持。
 - 当前真正运行的 backend/framework 是 Pi / `pi-coding-agent`，默认创建新 Agent 时选择 Pi。Ousia 是独立 framework：复用 `pi-coding-agent` session，但拥有自己的 Ousia system prompt、tools 配置、Task Engine 和 `/agent/turn` gateway。Openclaw、Hermes 只是架构预留。
@@ -25,22 +25,25 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 - 一个 agent instance 可以有多个 channels。未来同一个 bot 同时接 Feishu/Wechat/Slack 时，应该是同一个 profile 下挂多个 channel adapter，而不是多个独立 bot。
 - `config.json` 使用新结构：`profile.backend + profile.channels[]`。
 - 敏感信息只进 `<agent-home>/.env`，不要写入 `config.json`。
-- instance-level 能力放在 `src/runtime/`，例如 `/agent/turn` gateway、Task Engine 管理。
+- Pie instance 编排入口放在 `src/runtime/`；agent/framework 层能力不要直接放在这里。
 - channel 目录只负责 channel adapter：收消息、发消息、channel 事件解析与投递，不负责启动 Task Engine 或通用 gateway。
-- backend/framework 抽象先保持轻量。当前通过 `src/core/backend-framework.ts` 先解析 framework capability，再决定初始化动作：Pi 只启动所选 channel runtime；Ousia 才额外启动 Task Engine、turn gateway 和 Ousia system prompt 注入。等 Openclaw/Hermes 至少一个真接入时，再提炼统一 Agent API。
+- backend/framework 抽象先保持轻量。当前通过 `src/core/backend-framework.ts` 先解析 framework capability，再决定初始化动作：Pi 只启动所选 channel runtime；Ousia 的 system prompt、Task Engine、turn gateway、project/task 关系都内聚在 `src/frameworks/ousia/`。等 Openclaw/Hermes 至少一个真接入时，再提炼统一 Agent API。
+- Ousia Task Engine 的新任务统一写入 `tasks/<task-id>/task.json`；不要再创建 `projects/<project-id>/tasks/<task-id>/task.json`。Project 与 task 的关系通过 `task.json.projectId` 关联，`projects/` 保持为用户/project workspace 文件区。
+- Pie runtime 有一层轻量 Runtime Environment 抽象，定义 agent 的 `homeDir`、`workDir` 和生命周期状态。当前只用它指定工作目录和管理生命周期，不做文件、网络、命令权限限制。默认 `workDir` 是 profile home；配置里优先使用 `profile.runtime.workDir`，旧的 `profile.backend.model.workDir` 仅作为兼容 fallback。
 
 ## 关键入口
 
 - `src/cli/index.ts`：根 CLI 入口；`npm run start` / `pie` 启动 runtime；`pie onboard` 或 `pie --onboard` 进入配置。
-- `src/runtime/main.ts`：产品 runtime，初始化 agent home、启动 instance gateway、Task Engine 和当前可用 channel。
+- `src/runtime/main.ts`：Pie 客户端 runtime 编排入口，初始化 profile home，并按 framework capability 启动当前可用 channel 和 framework runtime。
 - `src/channels/feishu/main.ts`：Feishu channel adapter。
 - `src/channels/wechat/main.ts`：WeChat channel adapter；当前仍属于早期集成。
 - `src/channels/common/`：Slack/Discord/Telegram 等 text channel adapter 共享 runtime。
 - `src/channels/feishu/session.ts`：Pi session pool、system prompt 注入、工具配置。
-- `src/core/backend-framework.ts`：framework capability 定义，决定 Pi/Ousia 初始化时需要启动哪些 framework runtime 能力。
+- `src/core/backend-framework.ts`：framework capability 解析，决定 Pi/Ousia 初始化时需要启动哪些 framework runtime 能力。
+- `src/frameworks/ousia/`：Ousia framework 项目边界；包含 Ousia system prompt、Task Engine、turn gateway、project/task/docs layout。`tasks/` 是唯一 Task Engine 数据域，`projects/` 不承载 task runtime 文件。
+- `src/runtime/environment.ts`：Runtime Environment 抽象，负责解析/创建工作目录并表达生命周期状态；当前不是安全沙盒。
 - `src/core/config-store.ts`：agent profile/config schema。
 - `src/core/agent-home.ts`：`PIE_AGENT_HOME`、`.env`、agent home 路径。
-- `src/task-engine/`：Task Engine；入口是 `engine.ts` 和 `runtime.ts`。
 - `src/desktop/`：Electron desktop。
 
 ## Desktop UI 架构规划
@@ -75,7 +78,8 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 - profile config：`<profile-home>/config.json`
 - secrets：`<profile-home>/.env`
 - profile-scoped skills：`<profile-home>/skills/`
-- runtime state：`sessions/`、`tasks/`、`projects/`、`runtime/`、`docs/`
+- Pie/client runtime state：`sessions/`、`runtime/`
+- Ousia framework state：`tasks/`、`projects/`、`docs/`，以及 Ousia Task Engine 写入的 `runtime/task-engine-*`。新 task 只写 `tasks/`，用 `projectId` 指向 project。
 
 ## 开发命令
 
