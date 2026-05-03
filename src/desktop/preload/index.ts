@@ -23,6 +23,8 @@ const api: PieDesktopApi = {
 	getAgentUsage: (id: string) => ipcRenderer.invoke("agents:usage", id),
 	getAgentResources: (id: string) => ipcRenderer.invoke("agents:resources", id),
 	getAgentModelCatalog: (id: string) => ipcRenderer.invoke("agents:model-catalog", id),
+	findReusableProviderCredential: (provider: string, excludeAgentId?: string) =>
+		ipcRenderer.invoke("agents:provider-credential-reuse", provider, excludeAgentId),
 	getAgentSkillSources: (id: string) => ipcRenderer.invoke("agents:skill-sources", id),
 	openAgentSkillSource: (id: string, sourceId: string) => ipcRenderer.invoke("agents:skill-source-open", id, sourceId),
 	getAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt", id),

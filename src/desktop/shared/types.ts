@@ -1,6 +1,23 @@
 export type AgentStatus = "running" | "starting" | "paused" | "terminated";
+export type RuntimeEnvironmentLifecycleState =
+	| "created"
+	| "starting"
+	| "running"
+	| "stopping"
+	| "stopped"
+	| "failed";
 export type AgentOnboardEventType = "qr" | "status" | "done" | "error";
 export type AgentDeleteEventStep = "stop" | "files" | "done";
+
+export interface RuntimeEnvironmentSummary {
+	homeDir: string;
+	workDir: string;
+	lifecycle: {
+		state: RuntimeEnvironmentLifecycleState;
+		updatedAt: string;
+		reason?: string;
+	};
+}
 
 export interface AgentSummary {
 	id: string;
@@ -11,6 +28,7 @@ export interface AgentSummary {
 	enabled: boolean;
 	active: boolean;
 	home: string;
+	runtimeEnvironment?: RuntimeEnvironmentSummary;
 	createdAt?: string;
 	updatedAt?: string;
 	frameworkKind?: string;
@@ -119,6 +137,14 @@ export interface DesktopModelOption {
 export interface DesktopModelCatalog {
 	models: DesktopModelOption[];
 	providers: string[];
+}
+
+export interface ProviderCredentialReuse {
+	provider: string;
+	envKey: string;
+	value: string;
+	sourceAgentId?: string;
+	sourceAgentName?: string;
 }
 
 export interface AgentCreationSession {
@@ -294,6 +320,7 @@ export interface PieDesktopApi {
 	getAgentUsage(id: string): Promise<AgentUsageStats>;
 	getAgentResources(id: string): Promise<AgentResourceStats>;
 	getAgentModelCatalog(id: string): Promise<DesktopModelCatalog>;
+	findReusableProviderCredential(provider: string, excludeAgentId?: string): Promise<ProviderCredentialReuse | undefined>;
 	getAgentSkillSources(id: string): Promise<AgentSkillSource[]>;
 	openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]>;
 	getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;

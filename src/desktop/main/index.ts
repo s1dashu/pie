@@ -30,6 +30,11 @@ import {
 } from "../../core/config-store.js";
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
 import { appendAgentUsageEvent, pruneAgentUsageEvents, readAgentUsageEvents, summarizeAgentUsage } from "../../core/usage-stats.js";
+import {
+	clearRuntimeProcessRecord,
+	isPidRunning,
+	readRuntimeProcessRecord,
+} from "../../core/runtime-process.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import type {
 	AgentCreationDraft,
@@ -49,6 +54,8 @@ import type {
 	DesktopWechatCredentials,
 	DesktopSettings,
 	DesktopSettingsDraft,
+	ProviderCredentialReuse,
+	RuntimeEnvironmentSummary,
 } from "../shared/types.js";
 import {
 	beginAgentCreation as beginCreationSession,
@@ -59,8 +66,10 @@ import {
 	loadModelCatalog,
 	loadModelOptions,
 } from "./onboard-service.js";
+import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/framework.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
+import { createRuntimeEnvironment } from "../../runtime/environment.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
 const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
@@ -91,8 +100,8 @@ function getBotAvatarsDir(): string {
 	return join(getAppRoot(), "resources", "bot-avatars");
 }
 
-function getDefaultPiSystemPromptPath(): string {
-	return join(getAppRoot(), "src", "prompts", "system-prompt.md");
+function getDefaultOusiaSystemPromptPath(): string {
+	return OUSIA_SYSTEM_PROMPT_FILE;
 }
 
 function imageMimeFromPath(path: string): string {
@@ -492,7 +501,11 @@ function findDescendantPids(rootPid: number, rows: ProcessResourceRow[]): Set<nu
 }
 
 function isAgentProcessForHome(row: ProcessResourceRow, homeDir: string): boolean {
-	if (!/src\/runtime\/main\.ts|dist\/runtime\/main\.js|src\/task-engine\/|dist\/task-engine\//.test(row.command)) {
+	if (
+		!/src\/runtime\/main\.ts|dist\/runtime\/main\.js|src\/frameworks\/ousia\/task-engine\/|dist\/frameworks\/ousia\/task-engine\//.test(
+			row.command,
+		)
+	) {
 		return false;
 	}
 	return readExpandedProcessCommand(row.pid).includes(`PIE_AGENT_HOME=${homeDir}`);
@@ -564,7 +577,7 @@ function resolveSystemPromptPath(profile: AgentConfigStore["profile"], env: Reco
 		return {
 			label: "系统提示词",
 			description: "Ousia runtime 当前注入到 Agent session 的系统提示词。",
-			path: resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE?.trim() || getDefaultPiSystemPromptPath()),
+			path: resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE?.trim() || getDefaultOusiaSystemPromptPath()),
 		};
 	}
 	if (kind === "pi") {
@@ -596,6 +609,11 @@ const agentProcesses = new AgentProcessManager({
 	async getAgentHome(agentId) {
 		return (await getAgent(agentId)).home;
 	},
+	async getRuntimeEnvironment(agentId) {
+		const agent = await getAgent(agentId);
+		const profile = readProfileConfig(agent.home)?.profile;
+		return createRuntimeEnvironment({ homeDir: agent.home, profile });
+	},
 	async recordRuntimeEvent(agentId, event, reason) {
 		const agent = await getAgent(agentId);
 		appendAgentUsageEvent(agent.home, {
@@ -614,10 +632,49 @@ function statusForProfile(id: string, enabled: boolean): AgentSummary["status"] 
 	if (agentProcesses.isReady(id)) {
 		return "running";
 	}
-	if (agentProcesses.isRunning(id) || (enabled && isRestoringEnabledAgents)) {
+	if (agentProcesses.isRunning(id)) {
 		return "starting";
 	}
+	if (enabled) {
+		const agent = getAgentSummaryHome(id);
+		if (agent && hasLiveRuntimeProcess(agent)) {
+			return "running";
+		}
+		if (isRestoringEnabledAgents) {
+			return "starting";
+		}
+	}
 	return enabled ? "paused" : "terminated";
+}
+
+function getAgentSummaryHome(id: string): string | undefined {
+	const registry = loadProfileRegistry();
+	const entry = registry.profiles[id];
+	return entry ? profileHomeFromEntry(getDefaultPieRootDir(), entry.home) : undefined;
+}
+
+function hasLiveRuntimeProcess(home: string): boolean {
+	const record = readRuntimeProcessRecord(home);
+	if (!record) {
+		return false;
+	}
+	if (resolve(record.agentHome) !== resolve(home) || !isPidRunning(record.pid)) {
+		clearRuntimeProcessRecord(home);
+		return false;
+	}
+	return true;
+}
+
+function runtimeLifecycleForProfile(id: string, enabled: boolean): RuntimeEnvironmentSummary["lifecycle"] {
+	const active = agentProcesses.getLifecycleSnapshot(id);
+	if (active) {
+		return active;
+	}
+	return {
+		state: enabled ? "stopped" : "stopped",
+		updatedAt: new Date().toISOString(),
+		...(enabled ? { reason: "paused" } : { reason: "not-started" }),
+	};
 }
 
 async function withAgentOperation<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -651,12 +708,15 @@ async function listAgents(): Promise<AgentSummary[]> {
 	return Object.entries(registry.profiles).map(([id, entry]) => {
 		const home = profileHomeFromEntry(rootDir, entry.home);
 		const config = readProfileConfig(home);
-		const model = getProfileModel(config?.profile);
-		const channel = getPrimaryFeishuChannel(config?.profile);
-		const channelKinds = config?.profile?.channels
+		const profile = config?.profile;
+		const runtimeEnvironment = createRuntimeEnvironment({ homeDir: home, profile });
+		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, entry.enabled);
+		const model = getProfileModel(profile);
+		const channel = getPrimaryFeishuChannel(profile);
+		const channelKinds = profile?.channels
 			.filter((profileChannel) => profileChannel.enabled !== false)
 			.map((profileChannel) => profileChannel.kind);
-		const frameworkKind = config?.profile?.backend.kind ? String(config.profile.backend.kind) : undefined;
+		const frameworkKind = profile?.backend.kind ? String(profile.backend.kind) : undefined;
 		const selectedModelId = displayModelId(model?.model);
 		const modelOption = model?.provider && model?.model
 			? loadModelOptions(home).find((item) => item.provider === model.provider && item.id === selectedModelId)
@@ -671,6 +731,7 @@ async function listAgents(): Promise<AgentSummary[]> {
 			enabled: entry.enabled,
 			active: registry.activeProfile === id,
 			home,
+			runtimeEnvironment,
 			createdAt: entry.createdAt,
 			updatedAt: entry.updatedAt,
 			frameworkKind,
@@ -718,7 +779,7 @@ async function restoreEnabledAgents(): Promise<void> {
 		const agents = await listAgents();
 		await Promise.all(
 			agents
-				.filter((agent) => agent.enabled)
+				.filter((agent) => agent.enabled && !hasLiveRuntimeProcess(agent.home))
 				.map((agent) => withAgentOperation(agent.id, () => startAgent(agent.id)).catch((error) => {
 					console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
 				})),
@@ -826,6 +887,32 @@ async function getAgentResources(id: string): Promise<AgentResourceStats> {
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
 	return loadModelCatalog(agent.home);
+}
+
+async function findReusableProviderCredential(provider: string, excludeAgentId?: string): Promise<ProviderCredentialReuse | undefined> {
+	const envKey = getProviderCredentialEnv(provider);
+	if (!envKey) {
+		return undefined;
+	}
+	const registry = loadProfileRegistry();
+	const rootDir = getDefaultPieRootDir();
+	const candidates = Object.entries(registry.profiles)
+		.filter(([id]) => id !== excludeAgentId)
+		.sort(([, left], [, right]) => Date.parse(right.updatedAt ?? right.createdAt ?? "") - Date.parse(left.updatedAt ?? left.createdAt ?? ""));
+	for (const [id, entry] of candidates) {
+		const value = readProfileEnv(profileHomeFromEntry(rootDir, entry.home))[envKey]?.trim();
+		if (!value) {
+			continue;
+		}
+		return {
+			provider,
+			envKey,
+			value,
+			sourceAgentId: id,
+			sourceAgentName: entry.displayName || id,
+		};
+	}
+	return undefined;
 }
 
 async function getAgentSkillSources(id: string): Promise<AgentSkillSource[]> {
@@ -1086,6 +1173,11 @@ async function startAgent(id: string): Promise<AgentDetails> {
 		updateProfileRegistryEntry(id, { enabled: true, active: true });
 		return getAgent(id);
 	}
+	const existing = await getAgent(id);
+	if (hasLiveRuntimeProcess(existing.home)) {
+		updateProfileRegistryEntry(id, { enabled: true, active: true });
+		return getAgent(id);
+	}
 	await agentProcesses.start(id);
 	updateProfileRegistryEntry(id, { enabled: true, active: true });
 	return getAgent(id);
@@ -1097,7 +1189,25 @@ async function pauseAgent(id: string): Promise<AgentDetails> {
 }
 
 async function stopRunningAgent(id: string): Promise<void> {
+	const agent = await getAgent(id);
 	if (!agentProcesses.isRunning(id)) {
+		const record = readRuntimeProcessRecord(agent.home);
+		if (record && resolve(record.agentHome) === resolve(agent.home) && isPidRunning(record.pid)) {
+			try {
+				process.kill(record.pid, "SIGTERM");
+			} catch {
+				// best effort
+			}
+			await new Promise((resolveStop) => setTimeout(resolveStop, 1500));
+			if (isPidRunning(record.pid)) {
+				try {
+					process.kill(record.pid, "SIGKILL");
+				} catch {
+					// best effort
+				}
+			}
+		}
+		clearRuntimeProcessRecord(agent.home);
 		updateProfileRegistryEntry(id, { enabled: false });
 		return;
 	}
@@ -1355,7 +1465,7 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("agents:pause", async (_event, id: string) => {
 		try {
-			return await withAgentOperation(id, () => pauseAgent(id));
+			return await pauseAgent(id);
 		} catch (error) {
 			console.error("[ipc] agents:pause failed:", error);
 			throw error;
@@ -1363,7 +1473,7 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("agents:delete", async (_event, id: string) => {
 		try {
-			await withAgentOperation(id, () => deleteAgent(id));
+			await deleteAgent(id);
 		} catch (error) {
 			console.error("[ipc] agents:delete failed:", error);
 			throw error;
@@ -1406,6 +1516,14 @@ app.whenReady().then(() => {
 			return await getAgentModelCatalog(id);
 		} catch (error) {
 			console.error("[ipc] agents:model-catalog failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:provider-credential-reuse", async (_event, provider: string, excludeAgentId?: string) => {
+		try {
+			return await findReusableProviderCredential(provider, excludeAgentId);
+		} catch (error) {
+			console.error("[ipc] agents:provider-credential-reuse failed:", error);
 			throw error;
 		}
 	});

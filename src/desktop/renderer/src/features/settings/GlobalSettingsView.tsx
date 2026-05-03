@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type * as React from "react";
-import type { DesktopCloseWindowBehavior, DesktopLanguage, DesktopLogRetention, DesktopSettingsDraft } from "../../../shared/types";
+import type { DesktopCloseWindowBehavior, DesktopLanguage, DesktopLogRetention, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
@@ -34,10 +34,23 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 	});
 	const update = useMutation({
 		mutationFn: (draft: DesktopSettingsDraft) => window.pie.updateSettings(draft),
+		onMutate: async (draft) => {
+			await queryClient.cancelQueries({ queryKey: ["settings"] });
+			const previous = queryClient.getQueryData<DesktopSettings>(["settings"]);
+			queryClient.setQueryData<DesktopSettings>(["settings"], (current) =>
+				current ? { ...current, ...draft } : current,
+			);
+			return { previous };
+		},
 		onSuccess: (next) => {
 			queryClient.setQueryData(["settings"], next);
 		},
-		onError: (error) => onError((error as Error).message),
+		onError: (error, _draft, context) => {
+			if (context?.previous) {
+				queryClient.setQueryData(["settings"], context.previous);
+			}
+			onError((error as Error).message);
+		},
 	});
 
 	const data = settings.data;
@@ -85,7 +98,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 							</Field>
 						</SettingsSection>
 
-						<SettingsSection title="生命周期">
+						<SettingsSection title="生命周期" contentClassName="space-y-5">
 							<Field label="关闭窗口时">
 								<Select value={data.closeWindowBehavior} onValueChange={(value) => updateField("closeWindowBehavior", value as DesktopCloseWindowBehavior)}>
 									<SelectTrigger>
@@ -162,11 +175,19 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 	);
 }
 
-function SettingsSection({ title, children }: { title: string; children: React.ReactNode }): JSX.Element {
+function SettingsSection({
+	title,
+	children,
+	contentClassName = "space-y-3",
+}: {
+	title: string;
+	children: React.ReactNode;
+	contentClassName?: string;
+}): JSX.Element {
 	return (
 		<section className="space-y-3">
 			<h2 className="px-1 text-sm font-semibold leading-snug text-foreground/80">{title}</h2>
-			<div className="pie-smooth-corner space-y-3 rounded-[24px] bg-[var(--slate-2)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+			<div className={`pie-smooth-corner rounded-[24px] bg-[var(--slate-2)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] ${contentClassName}`}>
 				{children}
 			</div>
 		</section>
@@ -185,12 +206,16 @@ function SettingToggle({
 	onCheckedChange: (checked: boolean) => void;
 }): JSX.Element {
 	return (
-		<label className="pie-smooth-corner flex min-h-14 cursor-pointer items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2.5">
-			<span className="min-w-0">
+		<label className="flex cursor-pointer items-start gap-3 py-2.5">
+			<Checkbox
+				checked={checked}
+				onCheckedChange={onCheckedChange}
+				className="mt-0.5"
+			/>
+			<span className="min-w-0 flex-1">
 				<span className="block text-sm font-medium leading-snug text-foreground text-balance">{title}</span>
 				<span className="mt-0.5 block text-sm font-normal leading-snug text-muted-foreground text-pretty">{description}</span>
 			</span>
-			<Checkbox checked={checked} onCheckedChange={onCheckedChange} />
 		</label>
 	);
 }

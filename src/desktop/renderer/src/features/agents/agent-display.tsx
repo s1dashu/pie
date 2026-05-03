@@ -6,7 +6,7 @@ import {
 	Widget5BoldDuotone,
 	type SolarIconProps,
 } from "solar-icon-set";
-import type { AgentSummary, AgentUsageStats, DesktopThinkingLevel } from "../../../shared/types";
+import type { AgentSummary, AgentUsageStats, DesktopThinkingLevel, RuntimeEnvironmentLifecycleState } from "../../../shared/types";
 
 export type AgentTab = "overview" | "model" | "skills" | "usage" | "channels";
 
@@ -56,6 +56,38 @@ export function statusLabel(status: AgentSummary["status"]): string {
 		return "已暂停";
 	}
 	return "未启动";
+}
+
+export function runtimeLifecycleLabel(state: RuntimeEnvironmentLifecycleState | undefined): string {
+	if (state === "created") {
+		return "已创建";
+	}
+	if (state === "starting") {
+		return "启动中";
+	}
+	if (state === "running") {
+		return "运行中";
+	}
+	if (state === "stopping") {
+		return "停止中";
+	}
+	if (state === "failed") {
+		return "运行失败";
+	}
+	return "已停止";
+}
+
+export function runtimeLifecycleTone(state: RuntimeEnvironmentLifecycleState | undefined): string {
+	if (state === "running") {
+		return "bg-[var(--lime-9)]";
+	}
+	if (state === "starting" || state === "stopping") {
+		return "bg-[var(--slate-11)]";
+	}
+	if (state === "failed") {
+		return "bg-[var(--red-9)]";
+	}
+	return "bg-border";
 }
 
 export function formatCount(value: number): string {

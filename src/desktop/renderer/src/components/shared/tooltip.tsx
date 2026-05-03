@@ -34,9 +34,9 @@ export function AceternityTooltip({
 	const [position, setPosition] = useState<TooltipPosition | undefined>();
 	const x = useMotionValue(0);
 	const animationFrameRef = useRef<number | null>(null);
-	const springConfig = { stiffness: 100, damping: 15 };
-	const rotate = useSpring(useTransform(x, [-100, 100], [-45, 45]), springConfig);
-	const translateX = useSpring(useTransform(x, [-100, 100], [-50, 50]), springConfig);
+	const springConfig = { stiffness: 180, damping: 22 };
+	const rotate = useSpring(useTransform(x, [-120, 120], [-4, 4]), springConfig);
+	const translateX = useSpring(useTransform(x, [-120, 120], [-10, 10]), springConfig);
 	const initialY = position?.side === "bottom" ? -20 : 20;
 
 	const updatePosition = (target: HTMLElement, clientX?: number) => {

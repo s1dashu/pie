@@ -105,7 +105,7 @@ export function AgentContentPanels({
 						<UsageMetric
 							label="消息数"
 							value={formatCount(totalMessages)}
-							hint={`收 ${formatCount(usage.total.incomingMessages)} · 发 ${formatCount(usage.total.outgoingMessages)}`}
+							hint={`${formatCount(usage.total.incomingMessages)} / ${formatCount(usage.total.outgoingMessages)}`}
 						/>
 						<UsageMetric
 							label="工具调用次数"
@@ -115,7 +115,7 @@ export function AgentContentPanels({
 						<UsageMetric
 							label="Token 消耗"
 							value={formatTokenCount(usage.total.tokens)}
-							hint={`${formatTokenCount(usage.total.inputTokens)} 入 · ${formatTokenCount(usage.total.outputTokens)} 出`}
+							hint={`${formatTokenCount(usage.total.inputTokens)} / ${formatTokenCount(usage.total.outputTokens)}`}
 						/>
 						<UsageMetric
 							label="运行时长"
@@ -326,16 +326,18 @@ export function AgentContentPanels({
 						</div>
 					) : null}
 					{channelKinds.length ? (
-						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] p-5">
-							<label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2">
-								<span>
-									<span className="block text-sm font-medium text-foreground text-balance">在 IM 中显示工具调用</span>
-									<span className="block text-xs text-muted-foreground text-pretty">开启后，Agent 调用工具时会把工具名和执行状态同步发到已启用渠道。</span>
-								</span>
+						<div className="pie-smooth-corner space-y-3 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="IM 消息样式" description="控制消息在 IM 中的呈现样式" />
+							<label className="flex cursor-pointer items-start gap-3 py-2.5">
 								<Checkbox
 									checked={channelDraft.outputToolCallsToIm ?? true}
 									onCheckedChange={(checked) => onUpdateChannelField("outputToolCallsToIm", checked)}
+									className="mt-0.5"
 								/>
+								<span className="min-w-0 flex-1">
+									<span className="block text-sm font-medium leading-snug text-foreground text-balance">在 IM 中显示工具调用</span>
+									<span className="mt-0.5 block text-sm font-normal leading-snug text-muted-foreground text-pretty">开启后，Agent 调用工具时会把工具名和执行状态同步发到已启用渠道。</span>
+								</span>
 							</label>
 						</div>
 					) : null}
@@ -345,7 +347,7 @@ export function AgentContentPanels({
 						</div>
 					) : null}
 					<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-6 text-center text-sm text-muted-foreground">
-						配置更多渠道
+						多渠道支持尚在开发中
 					</div>
 					<div className="flex items-center justify-between gap-3 pt-1">
 						<div className="text-xs text-muted-foreground text-pretty">
@@ -474,7 +476,7 @@ function SectionTitle({
 		<div className={cn("min-w-0", className)}>
 			<div className="truncate text-xs font-medium uppercase text-muted-foreground">{title}</div>
 			{description ? (
-				<div className="mt-1 truncate text-xs leading-none text-muted-foreground">{description}</div>
+				<div className="mt-1 min-w-0 text-pretty text-xs leading-snug text-muted-foreground">{description}</div>
 			) : null}
 		</div>
 	);
@@ -562,17 +564,20 @@ function ResourceChartCard({
 	);
 }
 
+const PROFILE_STORAGE_BAR_CAP_BYTES = 500 * 1024 * 1024;
+
 function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): JSX.Element {
 	const storageBytes = resources?.storageBytes ?? 0;
 	const diskAvailableBytes = resources?.diskAvailableBytes;
 	const diskTotalBytes = resources?.diskTotalBytes;
-	const usedPercent = diskTotalBytes && diskTotalBytes > 0 ? (storageBytes / diskTotalBytes) * 100 : 0;
+	const rawBarPercent = (storageBytes / PROFILE_STORAGE_BAR_CAP_BYTES) * 100;
+	const barWidthPercent = storageBytes <= 0 ? 0 : Math.min(100, Math.max(2, rawBarPercent));
 
 	return (
 		<div className="pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4">
 			<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 				<div className="min-w-0">
-					<SectionTitle title="存储空间" description="Profile home 与磁盘余量" />
+					<SectionTitle title="存储空间" description="Agent 占用的存储空间" />
 				</div>
 				<div className="shrink-0 text-2xl font-bold tracking-tight text-foreground tabular-nums">
 					{formatBytes(storageBytes)}
@@ -582,7 +587,7 @@ function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): J
 				<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
 					<div
 						className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
-						style={{ width: `${Math.min(100, Math.max(2, usedPercent))}%` }}
+						style={{ width: `${barWidthPercent}%` }}
 					/>
 				</div>
 				<div className="grid gap-2 text-xs">

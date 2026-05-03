@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import type { AgentDetails, AgentDraft, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+	AgentDetails,
+	AgentDraft,
+	AgentStatus,
+	AgentSummary,
+	DesktopModelOption,
+	DesktopThinkingLevel,
+	RuntimeEnvironmentLifecycleState,
+} from "../../../shared/types";
 import { cn } from "../../lib/utils";
 import { AppIcon } from "@/components/shared/app-icon";
 import { AgentContentPanels, type ResourceChartHistory } from "./AgentContentPanels";
@@ -9,7 +17,56 @@ import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { emptyUsage, type AgentTab, tabs } from "./agent-display";
 
 const MAX_RESOURCE_HISTORY_POINTS = 30;
+const MIN_PAUSE_LOADING_MS = 500;
 const resourceHistoryByAgent = new Map<string, ResourceChartHistory>();
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function withMinimumDuration<T>(operation: () => Promise<T>, minDurationMs: number): Promise<T> {
+	const startedAt = Date.now();
+	try {
+		return await operation();
+	} finally {
+		const remainingMs = minDurationMs - (Date.now() - startedAt);
+		if (remainingMs > 0) {
+			await delay(remainingMs);
+		}
+	}
+}
+
+function setAgentStatusInCache(
+	queryClient: ReturnType<typeof useQueryClient>,
+	agentId: string,
+	status: AgentStatus,
+	lifecycleState?: RuntimeEnvironmentLifecycleState,
+): void {
+	const nextLifecycleState = lifecycleState ?? (status === "running" ? "running" : status === "starting" ? "starting" : "stopped");
+	const updatedAt = new Date().toISOString();
+	queryClient.setQueryData<AgentSummary[]>(["agents"], (current) =>
+		current?.map((item) => (item.id === agentId
+			? {
+					...item,
+					status,
+					runtimeEnvironment: item.runtimeEnvironment
+						? { ...item.runtimeEnvironment, lifecycle: { state: nextLifecycleState, updatedAt } }
+						: item.runtimeEnvironment,
+				}
+			: item)),
+	);
+	queryClient.setQueryData<AgentDetails>(["agent", agentId], (current) =>
+		current
+			? {
+					...current,
+					status,
+					runtimeEnvironment: current.runtimeEnvironment
+						? { ...current.runtimeEnvironment, lifecycle: { state: nextLifecycleState, updatedAt } }
+						: current.runtimeEnvironment,
+				}
+			: current,
+	);
+}
 
 function createEmptyResourceHistory(): ResourceChartHistory {
 	return { memory: [], cpu: [] };
@@ -62,6 +119,7 @@ export function AgentDetailView({
 	const [modelSaveMessage, setModelSaveMessage] = useState<string | undefined>();
 	const [channelSaveMessage, setChannelSaveMessage] = useState<string | undefined>();
 	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
+	const credentialRequestRef = useRef(0);
 	const usageQuery = useQuery({
 		queryKey: ["agent-usage", agent.id],
 		queryFn: () => window.pie.getAgentUsage(agent.id),
@@ -189,7 +247,9 @@ export function AgentDetailView({
 	const saveAgentDraftAndRestart = async (newDraft: AgentDraft) => {
 		let updated = await window.pie.updateAgent(agent.id, newDraft);
 		if (agent.status === "running") {
+			setAgentStatusInCache(queryClient, agent.id, "starting", "stopping");
 			await window.pie.pauseAgent(agent.id);
+			setAgentStatusInCache(queryClient, agent.id, "starting", "starting");
 			updated = await window.pie.startAgent(agent.id);
 		}
 		return updated;
@@ -203,36 +263,73 @@ export function AgentDetailView({
 		},
 		onError: (err: Error) => {
 			setModelSaveMessage(undefined);
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
 			onError(err.message);
 		},
 	});
 	const saveChannel = useMutation({
 		mutationFn: (newDraft: AgentDraft) => saveAgentDraftAndRestart(newDraft),
+		onMutate: async (newDraft) => {
+			await queryClient.cancelQueries({ queryKey: ["agent", agent.id] });
+			const previous = queryClient.getQueryData<AgentDetails>(["agent", agent.id]);
+			queryClient.setQueryData<AgentDetails>(["agent", agent.id], (current) =>
+				current
+					? {
+							...current,
+							model: {
+								...(current.model ?? {}),
+								outputToolCallsToIm: newDraft.outputToolCallsToIm ?? current.model?.outputToolCallsToIm ?? true,
+							},
+						}
+					: current,
+			);
+			return { previous };
+		},
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
 			setChannelSaveMessage(agent.status === "running" ? "验证通过，渠道配置已保存并重启 Bot。" : "验证通过，渠道配置已保存。");
 		},
-		onError: (err: Error) => {
+		onError: (err: Error, _draft, context) => {
+			if (context?.previous) {
+				queryClient.setQueryData(["agent", agent.id], context.previous);
+			}
 			setChannelSaveMessage(undefined);
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
 			onError(err.message);
 		},
 	});
 	const start = useMutation({
 		mutationFn: () => window.pie.startAgent(agent.id),
+		onMutate: () => {
+			setAgentStatusInCache(queryClient, agent.id, "starting");
+		},
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
 		},
-		onError: (err: Error) => onError(err.message),
+		onError: (err: Error) => {
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			onError(err.message);
+		},
 	});
 	const pause = useMutation({
-		mutationFn: () => window.pie.pauseAgent(agent.id),
+		mutationFn: () => withMinimumDuration(() => window.pie.pauseAgent(agent.id), MIN_PAUSE_LOADING_MS),
+		onMutate: () => {
+			setAgentStatusInCache(queryClient, agent.id, "starting", "stopping");
+		},
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
 		},
-		onError: (err: Error) => onError(err.message),
+		onError: (err: Error) => {
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			onError(err.message);
+		},
 	});
 	const remove = useMutation({
 		mutationFn: async () => {
@@ -288,10 +385,27 @@ export function AgentDetailView({
 		setModelSaveMessage(undefined);
 	};
 
+	const prefillProviderApiKey = async (nextProvider: string) => {
+		const requestId = ++credentialRequestRef.current;
+		const reusable = await window.pie.findReusableProviderCredential(nextProvider, agent.id);
+		if (requestId !== credentialRequestRef.current) {
+			return;
+		}
+		setDraft((current) => {
+			if (current.provider !== nextProvider) {
+				return current;
+			}
+			return { ...current, apiKey: reusable?.value ?? "" };
+		});
+	};
+
 	const updateProviderSelection = (nextProvider: string) => {
 		const nextModel = allModelOptions.find((item) => item.provider === nextProvider)?.id ?? draft.model ?? "";
 		const nextApiKey = nextProvider === agent.model?.provider ? agent.model?.apiKey ?? "" : "";
 		updateModelSelection({ ...draft, provider: nextProvider, model: nextModel, apiKey: nextApiKey });
+		if (nextProvider !== agent.model?.provider) {
+			void prefillProviderApiKey(nextProvider);
+		}
 	};
 
 	const updateChannelField = (field: keyof AgentDraft, value: string | boolean) => {
@@ -308,6 +422,7 @@ export function AgentDetailView({
 					isUploadingAvatar={uploadAvatar.isPending}
 					onUploadAvatar={(upload) => uploadAvatar.mutate(upload)}
 					isStarting={start.isPending}
+					isPausing={pause.isPending}
 					onStart={() => start.mutate()}
 					onPause={() => pause.mutate()}
 					onReveal={() => revealFinder.mutate()}

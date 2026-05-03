@@ -4,11 +4,19 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import type { AgentLogEntry } from "../shared/types.js";
+import { clearRuntimeProcessRecord, writeRuntimeProcessRecord } from "../../core/runtime-process.js";
+import {
+	ensureRuntimeEnvironment,
+	RuntimeEnvironmentLifecycle,
+	type AgentRuntimeEnvironment,
+	type RuntimeEnvironmentLifecycleSnapshot,
+} from "../../runtime/environment.js";
 
 export interface AgentProcessManagerOptions {
 	getAppRoot(): string;
 	getNodeExecPath(): string;
 	getAgentHome(agentId: string): Promise<string>;
+	getRuntimeEnvironment(agentId: string): Promise<AgentRuntimeEnvironment>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
 	recordLogEntry?(entry: AgentLogEntry): Promise<void> | void;
 }
@@ -22,6 +30,19 @@ const AGENT_READY_LOG_MARKERS = [
 	"Pi Telegram channel ready",
 ];
 const AGENT_START_TIMEOUT_MS = 30_000;
+const AGENT_STOP_FORCE_KILL_MS = 1500;
+
+function signalAgentProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (child.pid && process.platform !== "win32") {
+		try {
+			process.kill(-child.pid, signal);
+			return;
+		} catch {
+			// Fall back to the direct child. Older children may not be group leaders.
+		}
+	}
+	child.kill(signal);
+}
 
 async function getAvailableLocalPort(): Promise<number> {
 	return new Promise((resolvePort, reject) => {
@@ -57,6 +78,7 @@ export class AgentProcessManager {
 	private readonly agentLogBuffers = new Map<string, { stdout: string; stderr: string }>();
 	private readonly activeAgentReplyLogs = new Map<string, AgentLogEntry>();
 	private readonly agentStartedAt = new Map<string, number>();
+	private readonly agentLifecycles = new Map<string, RuntimeEnvironmentLifecycle>();
 	private readonly readyAgents = new Set<string>();
 	private readonly agentReadyWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 	private nextLogId = 1;
@@ -79,6 +101,10 @@ export class AgentProcessManager {
 		return this.runningAgents.get(agentId)?.pid;
 	}
 
+	getLifecycleSnapshot(agentId: string): RuntimeEnvironmentLifecycleSnapshot | undefined {
+		return this.agentLifecycles.get(agentId)?.snapshot;
+	}
+
 	getLogs(agentId: string): AgentLogEntry[] {
 		return this.agentLogs.get(agentId) ?? [];
 	}
@@ -93,12 +119,22 @@ export class AgentProcessManager {
 		}
 		const command = this.getBotLaunchCommand();
 		const home = await this.options.getAgentHome(agentId);
+		const lifecycle = new RuntimeEnvironmentLifecycle();
+		this.agentLifecycles.set(agentId, lifecycle);
+		lifecycle.mark("starting");
+		const environment = {
+			...(await this.options.getRuntimeEnvironment(agentId)),
+			lifecycle: lifecycle.snapshot,
+		};
+		ensureRuntimeEnvironment(environment);
 		const [gatewayPort, webhookPort] = await getDistinctAvailableLocalPorts(2);
 		this.appendAgentLog(agentId, "system", `starting bot: ${command.execPath} ${command.argv.join(" ")}`);
+		this.appendAgentLog(agentId, "system", `runtime workdir: ${environment.workDir}`);
 		const readyPromise = this.createReadyPromise(agentId);
 		const child = spawn(command.execPath, command.argv, {
-			cwd: this.options.getAppRoot(),
+			cwd: environment.workDir,
 			stdio: ["ignore", "pipe", "pipe"],
+			detached: process.platform !== "win32",
 			env: {
 				...process.env,
 				PIE_AGENT_HOME: home,
@@ -107,6 +143,16 @@ export class AgentProcessManager {
 				PIE_DESKTOP_LOGS: "1",
 			},
 		});
+		if (child.pid) {
+			writeRuntimeProcessRecord(home, {
+				pid: child.pid,
+				agentHome: home,
+				startedAt: new Date().toISOString(),
+				command: [command.execPath, ...command.argv],
+				gatewayPort,
+				webhookPort,
+			});
+		}
 		child.stdout?.on("data", (chunk) => {
 			const text = String(chunk);
 			this.appendAgentLogChunk(agentId, "stdout", text);
@@ -120,19 +166,25 @@ export class AgentProcessManager {
 		this.runningAgents.set(agentId, child);
 		this.agentStartedAt.set(agentId, Date.now());
 		child.once("exit", () => {
+			lifecycle.mark("stopped", "exit");
 			this.flushAgentLogBuffers(agentId);
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
+			this.agentLifecycles.delete(agentId);
 			this.readyAgents.delete(agentId);
+			clearRuntimeProcessRecord(home);
 			this.rejectAgentReady(agentId, new Error("Bot process exited before it was ready."));
 			this.recordRuntimeEvent(agentId, "stop", "exit");
 			this.appendAgentLog(agentId, "system", "bot process exited");
 		});
 		child.once("error", (error) => {
+			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
 			this.flushAgentLogBuffers(agentId);
 			this.runningAgents.delete(agentId);
 			this.agentStartedAt.delete(agentId);
+			this.agentLifecycles.delete(agentId);
 			this.readyAgents.delete(agentId);
+			clearRuntimeProcessRecord(home);
 			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(String(error)));
 			this.recordRuntimeEvent(agentId, "stop", "error");
 			this.appendAgentLog(agentId, "stderr", `bot process error: ${error instanceof Error ? error.message : String(error)}`);
@@ -140,13 +192,17 @@ export class AgentProcessManager {
 		});
 		try {
 			await readyPromise;
+			lifecycle.mark("running");
 			this.recordRuntimeEvent(agentId, "start");
 		} catch (error) {
+			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
 			if (this.runningAgents.get(agentId) === child) {
 				this.runningAgents.delete(agentId);
 				this.agentStartedAt.delete(agentId);
+				this.agentLifecycles.delete(agentId);
 				this.readyAgents.delete(agentId);
-				child.kill("SIGTERM");
+				clearRuntimeProcessRecord(home);
+				signalAgentProcess(child, "SIGTERM");
 			}
 			throw error;
 		}
@@ -161,23 +217,29 @@ export class AgentProcessManager {
 		this.runningAgents.delete(agentId);
 		this.agentStartedAt.delete(agentId);
 		this.readyAgents.delete(agentId);
+		const home = await this.options.getAgentHome(agentId);
+		const lifecycle = this.agentLifecycles.get(agentId);
+		lifecycle?.mark("stopping", reason);
 		this.rejectAgentReady(agentId, new Error(`Bot start was interrupted: ${reason}.`));
 		this.appendAgentLog(agentId, "system", "stopping bot");
 		await new Promise<void>((resolveStop) => {
 			let exited = false;
 			const timeout = setTimeout(() => {
 				if (!exited) {
-					child.kill("SIGKILL");
+					signalAgentProcess(child, "SIGKILL");
 				}
 				resolveStop();
-			}, 5000);
+			}, AGENT_STOP_FORCE_KILL_MS);
 			child.once("exit", () => {
 				exited = true;
 				clearTimeout(timeout);
 				resolveStop();
 			});
-			child.kill("SIGTERM");
+			signalAgentProcess(child, "SIGTERM");
 		});
+		lifecycle?.mark("stopped", reason);
+		this.agentLifecycles.delete(agentId);
+		clearRuntimeProcessRecord(home);
 		this.recordRuntimeEvent(agentId, "stop", reason);
 		this.appendAgentLog(agentId, "system", "bot stopped");
 	}

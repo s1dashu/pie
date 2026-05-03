@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { RestartCircleBoldDuotone } from "solar-icon-set";
 import type {
@@ -72,6 +72,7 @@ export function CreateAgentDialog({
 	const [model, setModel] = useState("k2p6");
 	const [thinkingLevel, setThinkingLevel] = useState<DesktopThinkingLevel>("off");
 	const [apiKey, setApiKey] = useState("");
+	const credentialRequestRef = useRef(0);
 	const queryClient = useQueryClient();
 	const botAvatars = useQuery({
 		queryKey: ["bot-avatars"],
@@ -83,6 +84,19 @@ export function CreateAgentDialog({
 		if (created.appName?.trim()) {
 			setName(created.appName.trim());
 		}
+	};
+	const prefillProviderApiKey = async (nextProvider: string, excludeAgentId: string | undefined, force = false) => {
+		const requestId = ++credentialRequestRef.current;
+		const reusable = await window.pie.findReusableProviderCredential(nextProvider, excludeAgentId);
+		if (requestId !== credentialRequestRef.current) {
+			return;
+		}
+		setApiKey((current) => {
+			if (!force && current.trim()) {
+				return current;
+			}
+			return reusable?.value ?? "";
+		});
 	};
 
 	const begin = useMutation({
@@ -96,6 +110,7 @@ export function CreateAgentDialog({
 				: created.models.find((item) => item.provider === defaultProvider)?.id ?? "";
 			setProvider(defaultProvider);
 			setModel(defaultModel);
+			void prefillProviderApiKey(defaultProvider, created.profileId, true);
 			setStep("config");
 		},
 		onError: (err: Error) => onError(err.message),
@@ -214,6 +229,7 @@ export function CreateAgentDialog({
 			setTelegramBotToken("");
 			setTelegramBotUsername("");
 			setFramework("pi");
+			setApiKey("");
 		}
 	}, [open]);
 
@@ -248,6 +264,7 @@ export function CreateAgentDialog({
 	const updateProviderSelection = (nextProvider: string) => {
 		setProvider(nextProvider);
 		setModel(session?.models.find((item) => item.provider === nextProvider)?.id ?? "");
+		void prefillProviderApiKey(nextProvider, session?.profileId, true);
 	};
 	const selectChannel = (channel: DesktopChannelKind) => {
 		setChannels([channel]);
@@ -472,7 +489,7 @@ function ChannelPicker({
 	return (
 		<Field label="IM 渠道">
 			<div className="space-y-2">
-				<div className="grid grid-cols-2 gap-2">
+				<div className="grid grid-cols-5 gap-2">
 					{channelOptions.map((channel) => {
 						const isSelected = selected === channel.value;
 						return (
@@ -482,12 +499,12 @@ function ChannelPicker({
 								disabled={!channel.enabled}
 								onClick={() => channel.enabled && onSelect(channel.value as DesktopChannelKind)}
 								className={cn(
-									"flex min-h-10 items-center gap-2 rounded-2xl bg-[var(--slate-2)] px-3 py-2 text-left text-sm ring-1 transition",
-									isSelected ? "text-foreground ring-[var(--lime-8)] bg-[var(--lime-2)]" : "text-foreground ring-transparent",
+									"flex h-14 min-w-0 items-center justify-center rounded-xl bg-[var(--slate-2)] px-2 text-center text-xs font-medium leading-tight ring-1 transition-[background-color,color,box-shadow]",
+									isSelected ? "text-foreground ring-[var(--lime-8)] bg-[var(--lime-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]" : "text-foreground ring-transparent",
 									channel.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 								)}
 							>
-								<span className="min-w-0 flex-1 truncate">{channel.label}</span>
+								<span className="line-clamp-2 min-w-0">{channel.label}</span>
 								{!channel.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">开发中</span>}
 							</button>
 						);

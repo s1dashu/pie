@@ -4,19 +4,19 @@ import {
 	CheckCircleBoldDuotone,
 	FolderOpenBoldDuotone,
 	GalleryAddLineDuotone,
-	PauseCircleBoldDuotone,
-	PlayCircleBoldDuotone,
+	PauseBold,
+	PlayBold,
 	RestartCircleBoldDuotone,
 	TrashBinMinimalisticBoldDuotone,
 } from "solar-icon-set";
 import type { AgentDetails } from "../../../shared/types";
 import { AgentAvatar } from "../../components/shared/agent-avatar";
-import { AgentStartingSpinner } from "../../components/shared/agent-starting-spinner";
 import { AppIcon } from "../../components/shared/app-icon";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "../../components/ui/popover";
+import { Spinner } from "../../components/ui/spinner-1";
 
 import {
 	AlertDialog,
@@ -37,6 +37,7 @@ export function AgentHeader({
 	isUploadingAvatar,
 	onUploadAvatar,
 	isStarting,
+	isPausing,
 	onStart,
 	onPause,
 	onReveal,
@@ -49,6 +50,7 @@ export function AgentHeader({
 	isUploadingAvatar: boolean;
 	onUploadAvatar: (upload: { fileName: string; dataUrl: string }) => void;
 	isStarting: boolean;
+	isPausing: boolean;
 	onStart: () => void;
 	onPause: () => void;
 	onReveal: () => void;
@@ -117,7 +119,6 @@ export function AgentHeader({
 		}
 		setOpen(false);
 	};
-
 	const handleAvatarFile = (file: File | undefined) => {
 		if (!file) {
 			return;
@@ -224,28 +225,30 @@ export function AgentHeader({
 					</PopoverContent>
 				</Popover>
 				<div className="no-drag flex items-center gap-2">
-					{agent.status === "running" ? (
-						<AceternityTooltip content="暂停 Agent" side="bottom">
-							<Button
-								variant="unstyled"
-								size="inline"
-								className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
-								onClick={onPause}
-								aria-label="Pause Agent"
-							>
-								<AppIcon IconComponent={PauseCircleBoldDuotone} className="size-7" />
-							</Button>
-						</AceternityTooltip>
-					) : isStarting || agent.status === "starting" ? (
-						<AceternityTooltip content="启动中" side="bottom">
+					{isStarting || isPausing || agent.status === "starting" ? (
+						<AceternityTooltip content={isPausing ? "暂停中" : "启动中"} side="bottom">
 							<Button
 								variant="unstyled"
 								size="inline"
 								className="inline-flex h-8 w-8 cursor-default items-center justify-center"
 								disabled
-								aria-label="Agent starting"
+								aria-label={isPausing ? "Agent pausing" : "Agent starting"}
 							>
-								<AgentStartingSpinner />
+								<Spinner size={18} color="var(--slate-11)" />
+							</Button>
+						</AceternityTooltip>
+					) : agent.status === "running" ? (
+						<AceternityTooltip content="暂停 Agent" side="bottom">
+							<Button
+								variant="unstyled"
+								size="inline"
+								className="inline-flex h-8 w-8 items-center justify-center"
+								onClick={onPause}
+								aria-label="Pause Agent"
+							>
+								<span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--slate-12)] text-white transition-colors group-hover/button:bg-[var(--slate-11)]">
+									<AppIcon IconComponent={PauseBold} className="size-4" />
+								</span>
 							</Button>
 						</AceternityTooltip>
 					) : (
@@ -253,11 +256,13 @@ export function AgentHeader({
 							<Button
 								variant="unstyled"
 								size="inline"
-								className="inline-flex h-8 w-8 items-center justify-center text-[var(--lime-11)] transition hover:text-[var(--lime-12)]"
+								className="inline-flex h-8 w-8 items-center justify-center"
 								onClick={onStart}
 								aria-label="Start Agent"
 							>
-								<AppIcon IconComponent={PlayCircleBoldDuotone} className="size-7" />
+								<span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--slate-12)] text-white transition-colors group-hover/button:bg-[var(--slate-11)]">
+									<AppIcon IconComponent={PlayBold} className="size-4" />
+								</span>
 							</Button>
 						</AceternityTooltip>
 					)}
