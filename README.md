@@ -10,6 +10,8 @@ The current runtime is built on `@mariozechner/pi-coding-agent`, with a desktop-
 
 Pie has not shipped a first public release yet. The main development target is the desktop app; the CLI onboarding flow, channel adapters, runtime process, and framework integration support that desktop experience.
 
+See [First Release Notes](docs/first-release.md) for the current release scope, experimental features, known limitations, debugging paths, and reset steps.
+
 The current framework behavior is:
 
 1. **Pi** is the default framework. Selecting Pi starts a clean Pi Coding Agent-backed agent with the selected channel runtime. It does not initialize Ousia system prompt, Ousia Task Engine, or Ousia turn gateway.
