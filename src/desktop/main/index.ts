@@ -381,7 +381,7 @@ function readProfileEnv(homeDir: string): Record<string, string> {
 function getAgentTypeSkillDir(profile: AgentConfigStore["profile"]): { label: string; path: string } {
 	const kind = String(profile?.backend.kind ?? "pi");
 	if (kind === "codex") {
-		return { label: "Codex 共享 Skills", path: join(homedir(), ".codex", "skills") };
+		return { label: "Codex Skills", path: join(homedir(), ".codex", "skills") };
 	}
 	if (kind === "claude" || kind === "claude-code") {
 		return { label: "Claude 共享 Skills", path: join(homedir(), ".claude", "skills") };
@@ -1012,7 +1012,7 @@ async function getAgentSkillSources(id: string): Promise<AgentSkillSource[]> {
 		describeSkillSource({
 			id: "profile",
 			kind: "profile",
-			label: "Agent 独有 Skills",
+			label: `${agent.name.trim() || "Agent"} Skills`,
 			description: "只属于这个 Agent profile 的 Skills。",
 			path: join(agent.home, "skills"),
 		}),

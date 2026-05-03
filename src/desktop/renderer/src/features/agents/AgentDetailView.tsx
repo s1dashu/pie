@@ -126,6 +126,7 @@ export function AgentDetailView({
 	const [wechatAuthDialogOpen, setWechatAuthDialogOpen] = useState(false);
 	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
 	const credentialRequestRef = useRef(0);
+	const supportsSystemPrompt = agent.frameworkKind === "ousia";
 	const usageQuery = useQuery({
 		queryKey: ["agent-usage", agent.id],
 		queryFn: () => window.pie.getAgentUsage(agent.id),
@@ -147,6 +148,7 @@ export function AgentDetailView({
 	const systemPromptQuery = useQuery({
 		queryKey: ["agent-system-prompt", agent.id],
 		queryFn: () => window.pie.getAgentSystemPrompt(agent.id),
+		enabled: supportsSystemPrompt,
 	});
 	const usage = usageQuery.data ?? emptyUsage();
 	const resources = resourceQuery.data;

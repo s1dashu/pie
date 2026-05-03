@@ -106,6 +106,8 @@ export function AgentContentPanels({
 		...(hasDiscordChannel ? ["discord"] : []),
 		...(hasTelegramChannel ? ["telegram"] : []),
 	];
+	const usesCodexCli = draft.provider === "codex-cli" || agent.frameworkKind === "codex";
+	const showsSystemPrompt = agent.frameworkKind === "ousia";
 
 	return (
 		<div className={activeTab === "overview" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-3" : ""}>
@@ -144,15 +146,17 @@ export function AgentContentPanels({
 				<div className="mx-auto max-w-5xl space-y-4">
 					<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
 						<SectionTitle title="模型配置" />
-						<div className="grid grid-cols-2 gap-4">
-							<Field label="Provider">
-								<ProviderSelect
-									value={draft.provider ?? ""}
-									providers={providerOptions}
-									placeholder={isModelCatalogLoading ? "Loading providers..." : "Select provider"}
-									onValueChange={onUpdateProviderSelection}
-								/>
-							</Field>
+						<div className={cn("grid gap-4", usesCodexCli ? "grid-cols-1" : "grid-cols-2")}>
+							{!usesCodexCli ? (
+								<Field label="Provider">
+									<ProviderSelect
+										value={draft.provider ?? ""}
+										providers={providerOptions}
+										placeholder={isModelCatalogLoading ? "Loading providers..." : "Select provider"}
+										onValueChange={onUpdateProviderSelection}
+									/>
+								</Field>
+							) : null}
 							<Field label="Model">
 								<Select
 									value={draft.model ?? ""}
@@ -185,20 +189,24 @@ export function AgentContentPanels({
 								</SelectContent>
 							</Select>
 						</Field>
-						<Field label="API Key">
-							<SecretInput
-								value={draft.apiKey ?? ""}
-								onChange={(event) => onUpdateField("apiKey", event.target.value)}
-								placeholder="留空保存会清除当前 provider 的 API Key"
-							/>
-						</Field>
+						{!usesCodexCli ? (
+							<Field label="API Key">
+								<SecretInput
+									value={draft.apiKey ?? ""}
+									onChange={(event) => onUpdateField("apiKey", event.target.value)}
+									placeholder="留空保存会清除当前 provider 的 API Key"
+								/>
+							</Field>
+						) : null}
 					</div>
-					<SystemPromptCard
-						source={systemPrompt}
-						isLoading={isLoadingSystemPrompt}
-						isOpening={isOpeningSystemPrompt}
-						onOpen={onOpenSystemPrompt}
-					/>
+					{showsSystemPrompt ? (
+						<SystemPromptCard
+							source={systemPrompt}
+							isLoading={isLoadingSystemPrompt}
+							isOpening={isOpeningSystemPrompt}
+							onOpen={onOpenSystemPrompt}
+						/>
+					) : null}
 					<div className="pie-smooth-corner sticky bottom-1 z-20 flex items-center justify-between gap-3 rounded-[24px] bg-white px-4 py-3 shadow-[0_3px_10px_rgba(15,23,42,0.08)]">
 						<div className="text-xs text-muted-foreground text-pretty">
 							{modelSaveMessage ?? "保存后 Agent 将自动重启"}
@@ -213,11 +221,11 @@ export function AgentContentPanels({
 					</div>
 				</div>
 			) : activeTab === "skills" ? (
-				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] p-5">
-					<div className="flex items-center justify-between gap-4">
+				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] px-6 py-7">
+					<div className="flex items-start justify-between gap-4 px-1">
 						<SectionTitle title="Skills 管理" description="按目录来源管理 Skills" />
 					</div>
-					<div className="mt-4 grid gap-3">
+					<div className="mt-7 grid gap-4">
 						{isLoadingSkillSources ? (
 							<div className="pie-smooth-corner rounded-[36px] bg-white p-8 text-center text-sm text-muted-foreground">
 								正在读取 Skills 目录...
@@ -291,7 +299,6 @@ export function AgentContentPanels({
 										disabled={isReauthorizingWechat}
 										onClick={onReauthorizeWechat}
 									>
-										<AppIcon IconComponent={RestartCircleBoldDuotone} className={cn("size-4", isReauthorizingWechat ? "animate-spin" : "")} />
 										<span>重新授权</span>
 									</Button>
 								</AceternityTooltip>
@@ -715,31 +722,31 @@ function SkillSourceRow({
 	onOpen: () => void;
 	onOpenSkill: (skillName: string) => void;
 }): JSX.Element {
-	const preview = source.skills.slice(0, 4);
+	const preview = source.skills.slice(0, 8);
 	const desc = source.description.trim();
 	return (
-		<div className="pie-smooth-corner group/skill-source relative flex min-h-[112px] flex-col rounded-[32px] bg-white p-2.5 pr-12">
+		<div className="pie-smooth-corner group/skill-source relative flex min-h-[148px] flex-col rounded-[32px] bg-white px-5 py-4 pr-16 shadow-[0_1px_0_rgba(15,23,42,0.03)]">
 			<div className="flex min-h-0 min-w-0 flex-1 flex-col">
-				<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-					<div className="text-sm font-medium text-foreground text-balance">{source.label}</div>
+				<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2">
+					<div className="text-[15px] font-semibold leading-6 text-foreground text-balance">{source.label}</div>
 					<div className={cn(
-						"rounded-full px-2 py-0.5 text-[11px] font-medium",
+						"rounded-full px-2.5 py-1 text-xs font-semibold leading-none tabular-nums",
 						source.exists ? "bg-[var(--lime-3)] text-[var(--lime-11)]" : "bg-[var(--slate-3)] text-muted-foreground",
 					)}>
 						{source.exists ? `${source.skillCount} 个` : "未创建"}
 					</div>
 				</div>
 				{desc ? (
-					<div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground text-pretty">{desc}</div>
+					<div className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground text-pretty">{desc}</div>
 				) : null}
-				<div className={cn("shrink-0 truncate font-mono text-[11px] text-muted-foreground", desc ? "mt-2" : "mt-1")}>{source.path}</div>
-				<div className="mt-auto shrink-0 pt-1.5">
-					<div className="flex min-w-0 flex-wrap gap-1.5 overflow-visible">
+				<div className={cn("shrink-0 truncate font-mono text-xs leading-5 text-muted-foreground", desc ? "mt-3" : "mt-2")}>{source.path}</div>
+				<div className="mt-auto shrink-0 pt-6">
+					<div className="flex min-w-0 flex-wrap gap-2.5 overflow-visible">
 						{preview.map((skill) => (
 							<button
 								key={skill}
 								type="button"
-								className="min-w-0 max-w-full truncate rounded-full bg-[var(--slate-2)] px-1.5 py-px text-[10px] leading-3.5 text-muted-foreground transition-colors hover:bg-[var(--slate-3)] hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+								className="min-w-0 max-w-full truncate rounded-full bg-[var(--slate-2)] px-3 py-1.5 text-sm leading-5 text-muted-foreground transition-[background-color,color,scale] hover:bg-[var(--slate-3)] hover:text-foreground active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
 								onClick={() => onOpenSkill(skill)}
 								title={`打开 ${skill}`}
 							>
@@ -747,18 +754,23 @@ function SkillSourceRow({
 							</button>
 						))}
 						{source.skills.length > preview.length ? (
-							<span className="shrink-0 rounded-full bg-[var(--slate-2)] px-1.5 py-px text-[10px] leading-3.5 text-muted-foreground">
+							<span className="shrink-0 rounded-full bg-[var(--slate-2)] px-3 py-1.5 text-sm leading-5 text-muted-foreground tabular-nums">
 								+{source.skills.length - preview.length}
+							</span>
+						) : null}
+						{source.exists && source.skills.length === 0 ? (
+							<span className="rounded-full bg-[var(--slate-2)] px-3 py-1.5 text-sm leading-5 text-muted-foreground">
+								暂无 Skills
 							</span>
 						) : null}
 					</div>
 				</div>
 			</div>
-			<AceternityTooltip content="打开 Skills 文件夹" className="absolute right-3 top-3">
+			<AceternityTooltip content="打开 Skills 文件夹" className="absolute right-5 top-4">
 				<Button
 					variant="unstyled"
 					size="inline"
-					className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--slate-12)] focus:opacity-100 group-hover/skill-source:opacity-100"
+					className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--slate-2)] text-[var(--slate-10)] transition-[background-color,color,scale] hover:bg-[var(--slate-3)] hover:text-[var(--slate-12)] active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
 					onClick={onOpen}
 					disabled={isOpening}
 					aria-label="Open Skills Folder"

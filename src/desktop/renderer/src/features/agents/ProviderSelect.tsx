@@ -122,7 +122,7 @@ function ProviderListToggle({
 		<button
 			type="button"
 			className={cn(
-				"relative flex cursor-default items-center gap-2.5 rounded-xl py-2 text-left text-sm outline-hidden select-none",
+				"pie-smooth-corner relative flex cursor-default items-center gap-2.5 rounded-[var(--control-item-radius)] py-2 text-left text-sm outline-hidden select-none",
 				fullWidth ? "w-full pr-8 pl-3" : "w-auto",
 				"text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
 				className

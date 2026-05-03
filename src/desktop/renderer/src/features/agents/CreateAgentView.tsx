@@ -53,6 +53,43 @@ const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: st
 	{ value: "live", label: "Live" },
 ];
 
+const frameworkModelConfig = {
+	pi: {
+		usesCodexCli: false,
+		showsProvider: true,
+		showsApiKey: true,
+		showsCodexAccessMode: false,
+		showsCodexWebSearch: false,
+	},
+	ousia: {
+		usesCodexCli: false,
+		showsProvider: true,
+		showsApiKey: true,
+		showsCodexAccessMode: false,
+		showsCodexWebSearch: false,
+	},
+	codex: {
+		usesCodexCli: true,
+		showsProvider: false,
+		showsApiKey: false,
+		showsCodexAccessMode: true,
+		showsCodexWebSearch: true,
+	},
+	"claude-code": {
+		usesCodexCli: false,
+		showsProvider: true,
+		showsApiKey: true,
+		showsCodexAccessMode: false,
+		showsCodexWebSearch: false,
+	},
+} satisfies Record<DesktopAgentFramework, {
+	usesCodexCli: boolean;
+	showsProvider: boolean;
+	showsApiKey: boolean;
+	showsCodexAccessMode: boolean;
+	showsCodexWebSearch: boolean;
+}>;
+
 export function CreateAgentView({
 	onCancel,
 	onCreated,
@@ -249,8 +286,12 @@ export function CreateAgentView({
 				model,
 				thinkingLevel,
 				apiKey,
-				codexSandboxMode: "danger-full-access",
-				codexWebSearchMode,
+				...(framework === "codex"
+					? {
+							codexSandboxMode: "danger-full-access" as const,
+							codexWebSearchMode,
+						}
+					: {}),
 			});
 		},
 		onMutate: async () => {
@@ -364,7 +405,8 @@ export function CreateAgentView({
 
 	const modelsForProvider = session?.models.filter((item) => item.provider === provider) ?? [];
 	const providers = session?.providers.length ? session.providers : [provider];
-	const usesCodexCli = framework === "codex";
+	const modelConfig = frameworkModelConfig[framework];
+	const usesCodexCli = modelConfig.usesCodexCli;
 	const codexModels = session?.codexModels ?? [];
 	const selectedCodexModel = codexModels.find((item) => item.id === model);
 	const codexThinkingOptions = (selectedCodexModel?.supportedThinkingLevels.length
@@ -594,8 +636,8 @@ export function CreateAgentView({
 								) : (
 									<div className="space-y-6">
 										{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
-										<div className={cn("grid gap-4", usesCodexCli ? "grid-cols-1" : "grid-cols-2")}>
-											{!usesCodexCli && (
+										<div className={cn("grid gap-4", modelConfig.showsProvider ? "grid-cols-2" : "grid-cols-1")}>
+											{modelConfig.showsProvider && (
 												<Field label="供应商">
 													<ProviderSelect
 														value={provider}
@@ -635,9 +677,11 @@ export function CreateAgentView({
 										</div>
 										{!usesCodexCli && (
 											<>
-												<Field label="API Key">
-													<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="留空则使用已有环境变量或稍后补充" />
-												</Field>
+												{modelConfig.showsApiKey && (
+													<Field label="API Key">
+														<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="留空则使用已有环境变量或稍后补充" />
+													</Field>
+												)}
 												<Field label="Thinking Level">
 													<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
 														<SelectTrigger className={controlSurfaceClass}>
@@ -648,23 +692,6 @@ export function CreateAgentView({
 														</SelectContent>
 													</Select>
 												</Field>
-												<div className="grid grid-cols-2 gap-4">
-													<Field label="Access Mode">
-														<div className={cn("flex h-9 items-center rounded-md px-3 text-sm font-medium text-foreground", controlSurfaceClass)}>
-															Full Access
-														</div>
-													</Field>
-													<Field label="Web Search">
-														<Select value={codexWebSearchMode} onValueChange={(value) => setCodexWebSearchMode(value as DesktopCodexWebSearchMode)}>
-															<SelectTrigger className={controlSurfaceClass}>
-																<SelectValue />
-															</SelectTrigger>
-															<SelectContent>
-																{codexWebSearchOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-															</SelectContent>
-														</Select>
-													</Field>
-												</div>
 											</>
 										)}
 										{usesCodexCli && (
@@ -689,6 +716,29 @@ export function CreateAgentView({
 														</SelectContent>
 													</Select>
 												</Field>
+												{(modelConfig.showsCodexAccessMode || modelConfig.showsCodexWebSearch) && (
+													<div className="grid grid-cols-2 gap-4">
+														{modelConfig.showsCodexAccessMode && (
+															<Field label="Access Mode">
+																<div className={cn("flex h-9 items-center rounded-md px-3 text-sm font-medium text-foreground", controlSurfaceClass)}>
+																	Full Access
+																</div>
+															</Field>
+														)}
+														{modelConfig.showsCodexWebSearch && (
+															<Field label="Web Search">
+																<Select value={codexWebSearchMode} onValueChange={(value) => setCodexWebSearchMode(value as DesktopCodexWebSearchMode)}>
+																	<SelectTrigger className={controlSurfaceClass}>
+																		<SelectValue />
+																	</SelectTrigger>
+																	<SelectContent>
+																		{codexWebSearchOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+																	</SelectContent>
+																</Select>
+															</Field>
+														)}
+													</div>
+												)}
 											</>
 										)}
 									</div>
@@ -894,7 +944,7 @@ function FrameworkPicker({
 							className={cn(
 								"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
 								isSelected
-									? "border-[var(--slate-8)] bg-[var(--slate-3)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
+									? "border-[var(--slate-8)] bg-[var(--slate-2)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
 									: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
 								option.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 							)}
@@ -931,7 +981,7 @@ function ChannelPicker({
 								className={cn(
 									"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
 									isSelected
-										? "border-[var(--slate-8)] bg-[var(--slate-3)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
+										? "border-[var(--slate-8)] bg-[var(--slate-2)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
 										: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
 									channel.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 								)}

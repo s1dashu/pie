@@ -1,5 +1,5 @@
 import { CPUBoltBoldDuotone, SettingsMinimalisticBoldDuotone } from "solar-icon-set";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type { AgentSummary } from "../../shared/types";
 import { AgentAvatar } from "../components/shared/agent-avatar";
 import { AppIcon } from "../components/shared/app-icon";
@@ -28,10 +28,12 @@ export function AgentSidebar({
 }): JSX.Element {
 	const selectionTransition = {
 		type: "spring",
-		stiffness: 430,
-		damping: 23,
-		mass: 0.85,
+		stiffness: 520,
+		damping: 38,
+		mass: 0.7,
 	} as const;
+	const listItemTransition = { type: "spring", duration: 0.26, bounce: 0 } as const;
+	const listItemExitTransition = { duration: 0.14, ease: [0.4, 0, 1, 1] } as const;
 	const selectedIndex = agents?.findIndex((agent) => agent.id === selectedId) ?? -1;
 
 	return (
@@ -43,49 +45,59 @@ export function AgentSidebar({
 						<AppIcon IconComponent={CPUBoltBoldDuotone} className="h-5 w-5 animate-pulse text-muted-foreground" />
 					</div>
 				) : (
-					<div className="relative space-y-1">
+					<div className="relative flex flex-col gap-1">
 						{selectedIndex >= 0 ? (
 							<motion.span
 								className="pie-smooth-corner pointer-events-none absolute inset-x-0 top-0 z-0 h-[72px] rounded-[36px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.025)]"
 								initial={false}
 								animate={{
+									opacity: 1,
+									scale: 1,
 									y: selectedIndex * 76,
-									scaleX: [0.975, 1.026, 1],
-									scaleY: [1.014, 0.986, 1],
 								}}
-								transition={{
-									y: selectionTransition,
-									scaleX: { duration: 0.42, ease: [0.2, 0, 0, 1] },
-									scaleY: { duration: 0.42, ease: [0.2, 0, 0, 1] },
-								}}
-								style={{ transformOrigin: "center" }}
+								transition={selectionTransition}
 							/>
 						) : null}
-						{agents?.map((agent) => {
-							const isSelected = agent.id === selectedId;
-							const subtitle = formatAgentSubtitle(agent);
-							return (
-								<Button
-									key={agent.id}
-									variant="unstyled"
-									size="inline"
-									onClick={() => onSelectAgent(agent.id)}
-									className={cn(
-										"pie-smooth-corner relative z-10 flex h-[72px] w-full items-center gap-3 rounded-[36px] border-0 px-2.5 py-3 text-left transition-[background-color,color] duration-200 active:!translate-y-0",
-										isSelected ? "text-foreground" : "text-foreground/80 shadow-none hover:bg-white/60 hover:text-foreground",
-									)}
-								>
-									<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
-									<div className="min-w-0 flex-1">
-										<div className="truncate text-sm font-medium">{agent.name}</div>
-										<div className="mt-1 truncate text-xs text-muted-foreground opacity-80">
-											{subtitle}
-										</div>
-									</div>
-									<AgentStatusMark agent={agent} />
-								</Button>
-							);
-						})}
+						<AnimatePresence initial={false}>
+							{agents?.map((agent) => {
+								const isSelected = agent.id === selectedId;
+								const subtitle = formatAgentSubtitle(agent);
+								return (
+									<motion.div
+										key={agent.id}
+										layout="position"
+										initial={{ opacity: 0, y: 6, filter: "blur(4px)" }}
+										animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+										exit={{
+											opacity: 0,
+											y: -4,
+											filter: "blur(3px)",
+											transition: listItemExitTransition,
+										}}
+										transition={listItemTransition}
+									>
+										<Button
+											variant="unstyled"
+											size="inline"
+											onClick={() => onSelectAgent(agent.id)}
+											className={cn(
+												"pie-smooth-corner relative z-10 flex h-[72px] w-full items-center gap-3 rounded-[36px] border-0 px-2.5 py-3 text-left transition-[color,opacity] duration-200 active:!translate-y-0",
+												isSelected ? "text-foreground" : "text-foreground/75 shadow-none hover:text-foreground hover:opacity-95",
+											)}
+										>
+											<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
+											<div className="min-w-0 flex-1">
+												<div className="truncate text-sm font-medium">{agent.name}</div>
+												<div className="mt-1 truncate text-xs text-muted-foreground opacity-80">
+													{subtitle}
+												</div>
+											</div>
+											<AgentStatusMark agent={agent} />
+										</Button>
+									</motion.div>
+								);
+							})}
+						</AnimatePresence>
 					</div>
 				)}
 			</div>

@@ -53,11 +53,6 @@ const tabsIndicatorSpring = {
   mass: 0.8,
 } as const
 
-const tabsIndicatorShapeTransition = {
-  duration: 0.28,
-  ease: [0.2, 0, 0, 1],
-} as const
-
 function TabsList({
   className,
   variant = "default",
@@ -99,9 +94,9 @@ function TabsList({
             orientation,
           }
         : {
-            x: activeTab.offsetLeft + (activeTab.offsetWidth - 64) / 2,
+            x: activeTab.offsetLeft,
             y: activeTab.offsetTop + activeTab.offsetHeight + 6,
-            width: 64,
+            width: activeTab.offsetWidth,
             height: 4,
             orientation,
           }
@@ -161,16 +156,12 @@ function TabsList({
             y: indicatorPosition.y,
             width: indicatorPosition.width,
             height: indicatorPosition.height,
-            scaleX: indicatorPosition.orientation === "horizontal" ? [0.99, 1.018, 1] : 1,
-            scaleY: indicatorPosition.orientation === "vertical" ? [1.012, 0.992, 1] : [1.012, 0.992, 1],
           }}
           transition={{
             x: tabsIndicatorSpring,
             y: tabsIndicatorSpring,
             width: tabsIndicatorSpring,
             height: tabsIndicatorSpring,
-            scaleX: tabsIndicatorShapeTransition,
-            scaleY: tabsIndicatorShapeTransition,
           }}
           style={{ left: 0, top: 0, transformOrigin: "center" }}
         />

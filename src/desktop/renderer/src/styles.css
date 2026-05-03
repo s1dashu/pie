@@ -77,6 +77,9 @@
 
 :root {
 	--radius: 0.625rem;
+	--control-radius: 18px;
+	--control-menu-radius: calc(var(--control-radius) + 4px);
+	--control-item-radius: calc(var(--control-radius) - 4px);
 	--app-shell-radius: 60px;
 	--app-shell-gap: 6px;
 	--agent-detail-radius: calc(var(--app-shell-radius) - var(--app-shell-gap));
@@ -166,6 +169,12 @@ select,
 input[data-slot="input"],
 [data-slot="select-trigger"] {
 	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+	corner-shape: squircle;
+}
+
+[data-slot="select-content"],
+[data-slot="select-item"] {
+	corner-shape: squircle;
 }
 
 button:not(:disabled),
