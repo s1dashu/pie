@@ -31,6 +31,23 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 - Ousia Task Engine 的新任务统一写入 `tasks/<task-id>/task.json`；不要再创建 `projects/<project-id>/tasks/<task-id>/task.json`。Project 与 task 的关系通过 `task.json.projectId` 关联，`projects/` 保持为用户/project workspace 文件区。
 - Pie runtime 有一层轻量 Runtime Environment 抽象，定义 agent 的 `homeDir`、`workDir` 和生命周期状态。当前只用它指定工作目录和管理生命周期，不做文件、网络、命令权限限制。默认 `workDir` 是 profile home；配置里优先使用 `profile.runtime.workDir`，旧的 `profile.backend.model.workDir` 仅作为兼容 fallback。
 
+## Sandbox 未来规划
+
+当前先不为 Pi/Ousia 实现 Pie 自己的 sandbox。`workDir` 只是 agent 默认工作目录，不是安全边界；不要把它描述成能阻止命令访问工作区外文件。
+
+后续如果支持 sandbox，应放在 agent adapter 或具体命令/文件执行层，而不是给整个 Pie Desktop/runtime 进程套 sandbox。Pie 作为客户端需要读写 `~/.pie`、agent home、channel 凭证、skills 目录并启动不同 backend；整体 sandbox 容易破坏客户端能力，也会让 Electron 主进程、renderer 和子进程边界复杂化。
+
+Sandbox 能力应按 backend capability 表达：
+
+- Native sandbox：backend 自己提供执行层隔离，例如 Codex 的 `read-only`、`workspace-write`、`danger-full-access` 映射到 Codex app-server/CLI 的 sandbox。
+- Pie sandbox：Pie 为不具备 native sandbox 的 backend 补执行层限制，例如未来在 Pi/Ousia 的 `bash`、`write`、`edit` 或 Task Engine exec runner 外包一层 macOS Seatbelt、Linux bubblewrap/Landlock、Windows restricted token。
+- Workspace policy：只设置 `workDir`、工具开关和 system prompt 约束，不是安全 sandbox。Pi/Ousia 当前最多属于这一类。
+- No sandbox/YOLO：不做文件或命令限制，接近当前用户终端权限。
+
+产品 UI 可以统一叫 Access Mode，但文案必须区分 native sandbox、Pie sandbox 和 workspace policy。只有底层有真实 enforcement 时，才可以称为 sandbox。
+
+Codex 的 permission/plan approval 后续应接入 IM 交互。Codex app-server 抛出 plan 或权限请求时，channel adapter 应发送可回复的确认消息；用户在 IM 中回复批准、拒绝或修改意见后，再由 Codex adapter 继续当前 turn 或发起实现 follow-up。当前不要把这项能力描述为已完成。
+
 ## 关键入口
 
 - `src/cli/index.ts`：根 CLI 入口；`npm run start` / `pie` 启动 runtime；`pie onboard` 或 `pie --onboard` 进入配置。
@@ -94,7 +111,7 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 - `config-store` 和 `profile-registry` 需要更严格 schema 校验和清晰错误提示。
 - `profiles.json`、`config.json`、`.env` 后续应使用 atomic write，避免 CLI 和 desktop 并发写半文件。
 - 继续减少 runtime 对全局 `process.env` 的依赖；未来多 bot 同进程时，需要 per-profile config/env object。
-- Desktop 未来需要支持启动所有 `enabled` profiles；当前不要宣称已支持一次启动多个 bot。
+- Desktop 使用 `desiredState` 表达“用户期望该 profile 随桌面端恢复运行”。agent 运行态用 `running/starting/paused/failed`，桌面选中态用 `selectedProfile`，不要把选中态混入 runtime 语义。
 - 多 channel adapter 抽象等第二个真实 channel 接入时再定，不要只根据 Feishu 过早设计。
 - 多 backend 抽象等 Openclaw/Hermes 至少一个开始接入时再定。
 
