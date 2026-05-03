@@ -11,6 +11,8 @@ import type {
 	AgentSummary,
 	BotAvatarOption,
 	DesktopAgentFramework,
+	DesktopCodexDiagnostic,
+	DesktopCodexWebSearchMode,
 	DesktopChannelKind,
 	DesktopFeishuAppCredentials,
 	DesktopThinkingLevel,
@@ -28,7 +30,7 @@ import { thinkingLevelOptions } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
 
 const channelOptions = [
-	{ value: "feishu", label: "飞书/Lark", enabled: true },
+	{ value: "feishu", label: "飞书", enabled: true },
 	{ value: "wechat", label: "微信", enabled: true },
 	{ value: "telegram", label: "Telegram", enabled: true },
 	{ value: "discord", label: "Discord", enabled: true },
@@ -38,6 +40,18 @@ const channelOptions = [
 const manualChannelKinds: DesktopChannelKind[] = ["discord", "telegram", "slack"];
 const controlSurfaceClass = "border-transparent bg-[var(--slate-2)] hover:border-transparent focus-visible:border-transparent";
 type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model";
+
+const frameworkOptions: Array<{ value: DesktopAgentFramework; label: string; enabled: boolean }> = [
+	{ value: "pi", label: "Pi", enabled: true },
+	{ value: "codex", label: "Codex", enabled: true },
+	{ value: "ousia", label: "Ousia", enabled: true },
+];
+
+const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: string }> = [
+	{ value: "cached", label: "Cached" },
+	{ value: "disabled", label: "Disabled" },
+	{ value: "live", label: "Live" },
+];
 
 export function CreateAgentView({
 	onCancel,
@@ -71,10 +85,13 @@ export function CreateAgentView({
 	const [qrExpiresAt, setQrExpiresAt] = useState<number | undefined>();
 	const [qrExpired, setQrExpired] = useState(false);
 	const [status, setStatus] = useState("");
+	const [codexLoginStatus, setCodexLoginStatus] = useState("");
+	const [codexLoginUrl, setCodexLoginUrl] = useState("");
 	const [framework, setFramework] = useState<DesktopAgentFramework>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
 	const [thinkingLevel, setThinkingLevel] = useState<DesktopThinkingLevel>("off");
+	const [codexWebSearchMode, setCodexWebSearchMode] = useState<DesktopCodexWebSearchMode>("cached");
 	const [apiKey, setApiKey] = useState("");
 	const credentialRequestRef = useRef(0);
 	const queryClient = useQueryClient();
@@ -82,6 +99,13 @@ export function CreateAgentView({
 		queryKey: ["bot-avatars"],
 		queryFn: () => window.pie.listBotAvatars(),
 		enabled: channels.includes("wechat"),
+	});
+	const codexDiagnostic = useQuery({
+		queryKey: ["codex-diagnostic"],
+		queryFn: () => window.pie.checkCodexEnvironment(),
+		enabled: framework === "codex",
+		refetchOnWindowFocus: false,
+		retry: false,
 	});
 	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
 		setFeishu(created);
@@ -159,9 +183,14 @@ export function CreateAgentView({
 			setStep("model");
 		},
 		onError: (err: Error) => {
-			if (step === "auth" && (err.message.includes("expired_token") || err.message.includes("Polling timed out"))) {
+			if (
+				step === "auth" &&
+				(err.message.includes("expired_token") ||
+					err.message.includes("Polling timed out") ||
+					err.message.includes("二维码已失效"))
+			) {
 				setQrExpired(true);
-				setStatus("二维码已失效，请刷新二维码。");
+				setStatus("二维码已失效，请刷新二维码");
 				return;
 			}
 			onError(err.message);
@@ -220,6 +249,8 @@ export function CreateAgentView({
 				model,
 				thinkingLevel,
 				apiKey,
+				codexSandboxMode: "danger-full-access",
+				codexWebSearchMode,
 			});
 		},
 		onMutate: async () => {
@@ -261,6 +292,20 @@ export function CreateAgentView({
 			onError(err.message);
 		},
 	});
+	const openCodexLogin = useMutation({
+		mutationFn: () => {
+			if (!session) {
+				throw new Error("创建流程尚未初始化");
+			}
+			setCodexLoginStatus("正在打开 Codex 登录...");
+			return window.pie.openCodexLogin(session.sessionId);
+		},
+		onSuccess: async () => {
+			await codexDiagnostic.refetch();
+			setCodexLoginStatus("Codex 登录状态已更新");
+		},
+		onError: (err: Error) => onError(err.message),
+	});
 
 	useEffect(() => {
 		begin.mutate();
@@ -275,6 +320,18 @@ export function CreateAgentView({
 	useEffect(() => {
 		return window.pie.onAgentOnboardEvent((event) => {
 			if (event.sessionId !== session?.sessionId) {
+				return;
+			}
+			if (event.source === "codex-login") {
+				if (event.message) {
+					setCodexLoginStatus(event.message);
+				}
+				if (event.url) {
+					setCodexLoginUrl(event.url);
+				}
+				if (event.type === "done" || event.type === "error") {
+					void queryClient.invalidateQueries({ queryKey: ["codex-diagnostic"] });
+				}
 				return;
 			}
 			if (event.type === "qr") {
@@ -292,7 +349,7 @@ export function CreateAgentView({
 				setWechat(event.wechat);
 			}
 		});
-	}, [session?.sessionId]);
+	}, [queryClient, session?.sessionId]);
 
 	useEffect(() => {
 		if (!qrExpiresAt) {
@@ -307,10 +364,41 @@ export function CreateAgentView({
 
 	const modelsForProvider = session?.models.filter((item) => item.provider === provider) ?? [];
 	const providers = session?.providers.length ? session.providers : [provider];
+	const usesCodexCli = framework === "codex";
+	const codexModels = session?.codexModels ?? [];
+	const selectedCodexModel = codexModels.find((item) => item.id === model);
+	const codexThinkingOptions = (selectedCodexModel?.supportedThinkingLevels.length
+		? selectedCodexModel.supportedThinkingLevels
+		: (["low", "medium", "high", "xhigh"] as DesktopThinkingLevel[])
+	).map((value) => ({ value, label: value }));
+	const updateCodexModelSelection = (nextModel: string) => {
+		setModel(nextModel);
+		const next = codexModels.find((item) => item.id === nextModel);
+		setThinkingLevel(next?.defaultThinkingLevel ?? next?.supportedThinkingLevels[0] ?? "medium");
+	};
 	const updateProviderSelection = (nextProvider: string) => {
 		setProvider(nextProvider);
 		setModel(session?.models.find((item) => item.provider === nextProvider)?.id ?? "");
 		void prefillProviderApiKey(nextProvider, session?.profileId, true);
+	};
+	const updateFrameworkSelection = (nextFramework: DesktopAgentFramework) => {
+		setFramework(nextFramework);
+		if (nextFramework === "codex") {
+			const defaultCodexModel = session?.codexModels[0];
+			setProvider("codex-cli");
+			setModel(defaultCodexModel?.id ?? "gpt-5.5");
+			setThinkingLevel(defaultCodexModel?.defaultThinkingLevel ?? defaultCodexModel?.supportedThinkingLevels[0] ?? "medium");
+			setApiKey("");
+			return;
+		}
+		if (provider === "codex-cli") {
+			const defaultProvider = session?.providers.includes("kimi-coding") ? "kimi-coding" : session?.providers[0] ?? "kimi-coding";
+			setProvider(defaultProvider);
+			setModel(defaultProvider === "kimi-coding"
+				? "k2p6"
+				: session?.models.find((item) => item.provider === defaultProvider)?.id ?? "");
+			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
+		}
 	};
 	const selectChannel = (channel: DesktopChannelKind) => {
 		setChannels([channel]);
@@ -327,11 +415,18 @@ export function CreateAgentView({
 		requiresManualCredentials,
 	});
 	const stepDescription = {
-		config: "选择框架和 IM 渠道。",
-		identity: "设置微信里对应的本地 Agent 名称和头像。",
-		auth: "扫码授权已选择的 IM 渠道。",
-		credentials: "填写所选 IM 渠道的连接凭证。",
-		model: "配置模型供应商和 API Key。",
+		config: "选择框架和 IM 渠道",
+		identity: "设置微信里的名称和头像",
+		auth: "授权已选择的 IM 渠道",
+		credentials: "填写渠道连接凭证",
+		model: "配置模型和 API Key",
+	}[step];
+	const stepTitle = {
+		config: "选择 Agent 类型",
+		identity: "设置 Agent 信息",
+		auth: "扫码授权",
+		credentials: "连接渠道",
+		model: "选择模型",
 	}[step];
 	const handleNext = () => {
 		if (step === "config") {
@@ -413,150 +508,203 @@ export function CreateAgentView({
 							<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
 								<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
 							</div>
-						) : step === "config" ? (
+						) : (
 							<div className="space-y-6">
-							<Field label="框架">
-								<Select value={framework} onValueChange={(value) => setFramework(value as DesktopAgentFramework)}>
-									<SelectTrigger className={controlSurfaceClass}>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="pi">Pi</SelectItem>
-										<SelectItem value="ousia">Ousia</SelectItem>
-										<SelectItem value="claude-code" disabled>Claude Code</SelectItem>
-										<SelectItem value="codex" disabled>Codex</SelectItem>
-										<SelectItem value="openclaw" disabled>Openclaw</SelectItem>
-										<SelectItem value="hermes" disabled>Hermes</SelectItem>
-									</SelectContent>
-								</Select>
-							</Field>
-							<ChannelPicker selected={channels[0]} onSelect={selectChannel} />
-						</div>
-					) : step === "identity" ? (
-						<div className="space-y-6">
-							<Field label="Agent 名称">
-								<Input className={controlSurfaceClass} value={name} onChange={(event) => setName(event.target.value)} />
-							</Field>
-							<AvatarPicker
-								avatars={botAvatars.data ?? []}
-								isLoading={botAvatars.isLoading}
-								selectedId={avatarId}
-								onSelect={setAvatarId}
-							/>
-						</div>
-					) : step === "auth" ? (
-						<div className="space-y-4 text-center">
-							<div className="text-sm font-normal text-foreground">
-								{status || authPrompt}
-							</div>
-							<div className="flex justify-center pt-2">
-								<div className="relative flex h-[196px] w-[196px] items-center justify-center overflow-hidden rounded-2xl bg-white">
-									{qrEvent?.url ? (
-										<QRCodeSVG value={qrEvent.url} size={180} level="M" includeMargin={false} />
-									) : (
-										<div className="h-[180px] w-[180px] animate-pulse rounded-xl bg-muted" />
-									)}
-									{qrExpired && (
-										<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/88 text-center backdrop-blur-[1px]">
-											<div className="text-xs font-medium text-foreground">二维码已失效</div>
-											<Button
-												variant="unstyled"
-												size="inline"
-												className="mt-2 h-5 px-1 text-[11px] font-medium text-[var(--lime-11)] transition-colors hover:text-[var(--lime-12)]"
-												disabled={authenticateChannels.isPending}
-												onClick={() => {
-													setQrEvent(undefined);
-													setQrExpiresAt(undefined);
-													setQrExpired(false);
-													setStatus("");
-													authenticateChannels.mutate();
-												}}
-											>
-												刷新二维码
-											</Button>
+								<h2 className="text-center text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
+								{step === "config" ? (
+									<div className="space-y-6">
+										<FrameworkPicker selected={framework} onSelect={updateFrameworkSelection} />
+										<ChannelPicker selected={channels[0]} onSelect={selectChannel} />
+									</div>
+								) : step === "identity" ? (
+									<div className="space-y-6">
+										<Field label="Agent 名称">
+											<Input className={controlSurfaceClass} value={name} onChange={(event) => setName(event.target.value)} />
+										</Field>
+										<AvatarPicker
+											avatars={botAvatars.data ?? []}
+											isLoading={botAvatars.isLoading}
+											selectedId={avatarId}
+											onSelect={setAvatarId}
+										/>
+									</div>
+								) : step === "auth" ? (
+									<div className="space-y-4 text-center">
+										<div className="text-sm font-normal text-foreground">
+											{status || authPrompt}
 										</div>
-									)}
-								</div>
+										<div className="flex justify-center pt-2">
+											<div className="relative flex h-[196px] w-[196px] items-center justify-center overflow-hidden rounded-2xl bg-white">
+												{qrEvent?.url ? (
+													<QRCodeSVG value={qrEvent.url} size={180} level="M" includeMargin={false} />
+												) : (
+													<div className="h-[180px] w-[180px] animate-pulse bg-muted" />
+												)}
+												{qrExpired && (
+													<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/88 text-center backdrop-blur-[1px]">
+														<div className="text-xs font-medium text-foreground">二维码已失效</div>
+														<Button
+															variant="unstyled"
+															size="inline"
+															className="mt-2 h-5 px-1 text-[11px] font-medium text-[var(--lime-11)] transition-colors hover:text-[var(--lime-12)]"
+															disabled={authenticateChannels.isPending}
+															onClick={() => {
+																setQrEvent(undefined);
+																setQrExpiresAt(undefined);
+																setQrExpired(false);
+																setStatus("");
+																authenticateChannels.mutate();
+															}}
+														>
+															刷新二维码
+														</Button>
+													</div>
+												)}
+											</div>
+										</div>
+									</div>
+								) : step === "credentials" ? (
+									<div className="space-y-4">
+										<ManualChannelCredentials
+											channels={channels}
+											slackBotToken={slackBotToken}
+											slackAppToken={slackAppToken}
+											slackSigningSecret={slackSigningSecret}
+											slackTeamId={slackTeamId}
+											slackAppId={slackAppId}
+											slackBotUserId={slackBotUserId}
+											discordBotToken={discordBotToken}
+											discordApplicationId={discordApplicationId}
+											discordGuildId={discordGuildId}
+											telegramBotToken={telegramBotToken}
+											telegramBotUsername={telegramBotUsername}
+											setSlackBotToken={setSlackBotToken}
+											setSlackAppToken={setSlackAppToken}
+											setSlackSigningSecret={setSlackSigningSecret}
+											setSlackTeamId={setSlackTeamId}
+											setSlackAppId={setSlackAppId}
+											setSlackBotUserId={setSlackBotUserId}
+											setDiscordBotToken={setDiscordBotToken}
+											setDiscordApplicationId={setDiscordApplicationId}
+											setDiscordGuildId={setDiscordGuildId}
+											setTelegramBotToken={setTelegramBotToken}
+											setTelegramBotUsername={setTelegramBotUsername}
+										/>
+									</div>
+								) : (
+									<div className="space-y-6">
+										{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
+										<div className={cn("grid gap-4", usesCodexCli ? "grid-cols-1" : "grid-cols-2")}>
+											{!usesCodexCli && (
+												<Field label="供应商">
+													<ProviderSelect
+														value={provider}
+														providers={providers}
+														triggerClassName={controlSurfaceClass}
+														onValueChange={updateProviderSelection}
+													/>
+												</Field>
+											)}
+											<Field label="模型">
+												{usesCodexCli && codexModels.length ? (
+													<Select value={model} onValueChange={updateCodexModelSelection}>
+														<SelectTrigger className={controlSurfaceClass}>
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															{codexModels.map((item) => (
+																<SelectItem key={item.id} value={item.id}>
+																	{item.name || item.id}
+																</SelectItem>
+															))}
+														</SelectContent>
+													</Select>
+												) : !usesCodexCli && modelsForProvider.length ? (
+													<Select value={model} onValueChange={setModel}>
+														<SelectTrigger className={controlSurfaceClass}>
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															{modelsForProvider.map((item) => <SelectItem key={item.id} value={item.id}>{item.name || item.id}</SelectItem>)}
+														</SelectContent>
+													</Select>
+												) : (
+													<Input className={controlSurfaceClass} value={model} onChange={(event) => setModel(event.target.value)} placeholder="model id" />
+												)}
+											</Field>
+										</div>
+										{!usesCodexCli && (
+											<>
+												<Field label="API Key">
+													<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="留空则使用已有环境变量或稍后补充" />
+												</Field>
+												<Field label="Thinking Level">
+													<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
+														<SelectTrigger className={controlSurfaceClass}>
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															{thinkingLevelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+														</SelectContent>
+													</Select>
+												</Field>
+												<div className="grid grid-cols-2 gap-4">
+													<Field label="Access Mode">
+														<div className={cn("flex h-9 items-center rounded-md px-3 text-sm font-medium text-foreground", controlSurfaceClass)}>
+															Full Access
+														</div>
+													</Field>
+													<Field label="Web Search">
+														<Select value={codexWebSearchMode} onValueChange={(value) => setCodexWebSearchMode(value as DesktopCodexWebSearchMode)}>
+															<SelectTrigger className={controlSurfaceClass}>
+																<SelectValue />
+															</SelectTrigger>
+															<SelectContent>
+																{codexWebSearchOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+															</SelectContent>
+														</Select>
+													</Field>
+												</div>
+											</>
+										)}
+										{usesCodexCli && (
+											<>
+												<CodexDiagnosticPanel
+													diagnostic={codexDiagnostic.data}
+													isLoading={codexDiagnostic.isFetching}
+													error={codexDiagnostic.error instanceof Error ? codexDiagnostic.error.message : undefined}
+													loginStatus={codexLoginStatus}
+													loginUrl={codexLoginUrl}
+													isOpeningLogin={openCodexLogin.isPending}
+													onOpenLogin={() => openCodexLogin.mutate()}
+													onRefresh={() => void codexDiagnostic.refetch()}
+												/>
+												<Field label="Thinking Level">
+													<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
+														<SelectTrigger className={controlSurfaceClass}>
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															{codexThinkingOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+														</SelectContent>
+													</Select>
+												</Field>
+											</>
+										)}
+									</div>
+								)}
 							</div>
-						</div>
-					) : step === "credentials" ? (
-						<div className="space-y-4">
-							<ManualChannelCredentials
-								channels={channels}
-								slackBotToken={slackBotToken}
-								slackAppToken={slackAppToken}
-								slackSigningSecret={slackSigningSecret}
-								slackTeamId={slackTeamId}
-								slackAppId={slackAppId}
-								slackBotUserId={slackBotUserId}
-								discordBotToken={discordBotToken}
-								discordApplicationId={discordApplicationId}
-								discordGuildId={discordGuildId}
-								telegramBotToken={telegramBotToken}
-								telegramBotUsername={telegramBotUsername}
-								setSlackBotToken={setSlackBotToken}
-								setSlackAppToken={setSlackAppToken}
-								setSlackSigningSecret={setSlackSigningSecret}
-								setSlackTeamId={setSlackTeamId}
-								setSlackAppId={setSlackAppId}
-								setSlackBotUserId={setSlackBotUserId}
-								setDiscordBotToken={setDiscordBotToken}
-								setDiscordApplicationId={setDiscordApplicationId}
-								setDiscordGuildId={setDiscordGuildId}
-								setTelegramBotToken={setTelegramBotToken}
-								setTelegramBotUsername={setTelegramBotUsername}
-							/>
-						</div>
-					) : (
-						<div className="space-y-6">
-							{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
-							<div className="grid grid-cols-2 gap-4">
-								<Field label="供应商">
-									<ProviderSelect
-										value={provider}
-										providers={providers}
-										triggerClassName={controlSurfaceClass}
-										onValueChange={updateProviderSelection}
-									/>
-								</Field>
-								<Field label="模型">
-									{modelsForProvider.length ? (
-										<Select value={model} onValueChange={setModel}>
-											<SelectTrigger className={controlSurfaceClass}>
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												{modelsForProvider.map((item) => <SelectItem key={item.id} value={item.id}>{item.name || item.id}</SelectItem>)}
-											</SelectContent>
-										</Select>
-									) : (
-										<Input className={controlSurfaceClass} value={model} onChange={(event) => setModel(event.target.value)} placeholder="model id" />
-									)}
-								</Field>
-							</div>
-							<Field label="API Key">
-								<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="留空则使用已有环境变量或稍后补充" />
-							</Field>
-							<Field label="Thinking Level">
-								<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
-									<SelectTrigger className={controlSurfaceClass}>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										{thinkingLevelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-									</SelectContent>
-								</Select>
-							</Field>
-						</div>
-					)}
+						)}
 					</div>
 				</div>
 			</div>
 
-			<footer className="no-drag flex shrink-0 items-center justify-between border-t border-foreground/5 px-8 py-5">
-				<Button variant="secondary" onClick={goBack} disabled={complete.isPending}>
-					返回上一步
-				</Button>
+			<footer className={cn("no-drag flex shrink-0 items-center border-t border-foreground/5 px-8 py-5", step === "config" ? "justify-end" : "justify-between")}>
+				{step !== "config" && (
+					<Button variant="secondary" onClick={goBack} disabled={complete.isPending}>
+						上一步
+					</Button>
+				)}
 				<div className="flex items-center gap-3">
 					{step !== "auth" && (
 						<Button disabled={nextDisabled} onClick={handleNext}>
@@ -625,8 +773,8 @@ function createOptimisticStartingAgent({
 		status: "starting",
 		avatarSeed: session.sessionId,
 		...(feishu?.avatarUrl ? { avatarUrl: feishu.avatarUrl } : {}),
-		enabled: true,
-		active: true,
+		desiredState: "running",
+		selected: true,
 		home: session.home,
 		createdAt: now,
 		updatedAt: now,
@@ -651,6 +799,114 @@ function createOptimisticStartingAgent({
 			},
 		},
 	};
+}
+
+function CodexDiagnosticPanel({
+	diagnostic,
+	isLoading,
+	error,
+	loginStatus,
+	loginUrl,
+	isOpeningLogin,
+	onOpenLogin,
+	onRefresh,
+}: {
+	diagnostic: DesktopCodexDiagnostic | undefined;
+	isLoading: boolean;
+	error?: string;
+	loginStatus?: string;
+	loginUrl?: string;
+	isOpeningLogin: boolean;
+	onOpenLogin: () => void;
+	onRefresh: () => void;
+}): JSX.Element {
+	const status = error
+		? { label: "诊断失败", tone: "text-[var(--red-11)]", detail: error }
+		: !diagnostic
+		? { label: isLoading ? "正在检测 Codex CLI" : "尚未检测", tone: "text-muted-foreground", detail: "需要已安装并登录 Codex CLI" }
+		: !diagnostic.installed
+			? { label: "未检测到 Codex CLI", tone: "text-[var(--red-11)]", detail: diagnostic.error || "请先安装 Codex CLI" }
+			: diagnostic.authenticated
+				? { label: "Codex CLI 已就绪", tone: "text-[var(--lime-11)]", detail: diagnostic.version || "已检测到 Codex 登录态" }
+				: { label: "Codex CLI 未登录", tone: "text-[var(--amber-11)]", detail: diagnostic.error || "需要先登录 Codex" };
+
+	return (
+		<div className="pie-smooth-corner rounded-2xl bg-[var(--slate-2)] px-3 py-3">
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div className={cn("text-sm font-medium", status.tone)}>{status.label}</div>
+					<div className="mt-1 text-xs leading-5 text-muted-foreground">{loginStatus || status.detail}</div>
+					{loginUrl && !diagnostic?.authenticated && (
+						<a
+							className="mt-1 block truncate text-xs font-medium text-[var(--lime-11)] hover:text-[var(--lime-12)]"
+							href={loginUrl}
+							target="_blank"
+							rel="noreferrer"
+						>
+							打开登录链接
+						</a>
+					)}
+					{diagnostic?.executablePath && (
+						<div className="mt-1 truncate text-[11px] text-muted-foreground">{diagnostic.executablePath}</div>
+					)}
+				</div>
+				<div className="flex shrink-0 flex-col gap-2">
+					<Button
+						variant="secondary"
+						size="xs"
+						className="h-6 px-2.5 text-[11px] leading-4 font-medium text-[var(--slate-11)] hover:text-[var(--slate-12)]"
+						onClick={onRefresh}
+						disabled={isLoading}
+					>
+						{isLoading ? "检测中" : "重新检测"}
+					</Button>
+					{!diagnostic?.authenticated && (
+						<Button onClick={onOpenLogin} disabled={isOpeningLogin}>
+							{isOpeningLogin ? "打开中" : "前往登录"}
+						</Button>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function FrameworkPicker({
+	selected,
+	onSelect,
+}: {
+	selected: DesktopAgentFramework;
+	onSelect: (framework: DesktopAgentFramework) => void;
+}): JSX.Element {
+	return (
+		<Field label="框架">
+			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="框架">
+				{frameworkOptions.map((option) => {
+					const isSelected = selected === option.value;
+					return (
+						<button
+							key={option.value}
+							type="button"
+							role="radio"
+							aria-checked={isSelected}
+							disabled={!option.enabled}
+							onClick={() => option.enabled && onSelect(option.value as DesktopAgentFramework)}
+							className={cn(
+								"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
+								isSelected
+									? "border-[var(--slate-8)] bg-[var(--slate-3)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
+									: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
+								option.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
+							)}
+						>
+							<span className="line-clamp-2 min-w-0">{option.label}</span>
+							{!option.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">开发中</span>}
+						</button>
+					);
+				})}
+			</div>
+		</Field>
+	);
 }
 
 function ChannelPicker({
@@ -723,7 +979,7 @@ function ManualChannelCredentials(props: {
 		<div className="space-y-3">
 			{props.channels.includes("slack") ? (
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-xs font-medium text-muted-foreground">Slack</div>
+					<div className="text-sm font-semibold leading-snug text-foreground">Slack</div>
 					<Field label="Bot Token">
 						<Input className={controlSurfaceClass} type="password" value={props.slackBotToken} onChange={(event) => props.setSlackBotToken(event.target.value)} placeholder="xoxb-..." />
 					</Field>
@@ -745,7 +1001,7 @@ function ManualChannelCredentials(props: {
 			) : null}
 			{props.channels.includes("discord") ? (
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-xs font-medium text-muted-foreground">Discord</div>
+					<div className="text-sm font-semibold leading-snug text-foreground">Discord</div>
 					<Field label="Bot Token">
 						<Input className={controlSurfaceClass} type="password" value={props.discordBotToken} onChange={(event) => props.setDiscordBotToken(event.target.value)} />
 					</Field>
@@ -761,7 +1017,7 @@ function ManualChannelCredentials(props: {
 			) : null}
 			{props.channels.includes("telegram") ? (
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-xs font-medium text-muted-foreground">Telegram</div>
+					<div className="text-sm font-semibold leading-snug text-foreground">Telegram</div>
 					<Field label="Bot Token">
 						<Input className={controlSurfaceClass} type="password" value={props.telegramBotToken} onChange={(event) => props.setTelegramBotToken(event.target.value)} />
 					</Field>

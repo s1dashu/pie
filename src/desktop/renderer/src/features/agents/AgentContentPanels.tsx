@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type * as React from "react";
-import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone } from "solar-icon-set";
+import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone, RestartCircleBoldDuotone } from "solar-icon-set";
 import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -44,13 +44,18 @@ export function AgentContentPanels({
 	openingSkillSourceId,
 	isSavingModel,
 	isSavingChannel,
+	isSyncingFeishu,
+	isReauthorizingWechat,
 	onUpdateField,
 	onUpdateProviderSelection,
 	onSaveModel,
 	onOpenSystemPrompt,
 	onOpenSkillSource,
+	onOpenSkillFolder,
 	onUpdateChannelField,
 	onSaveChannel,
+	onSyncFeishu,
+	onReauthorizeWechat,
 }: {
 	activeTab: AgentTab;
 	agent: AgentDetails;
@@ -73,13 +78,18 @@ export function AgentContentPanels({
 	openingSkillSourceId?: string;
 	isSavingModel: boolean;
 	isSavingChannel: boolean;
+	isSyncingFeishu: boolean;
+	isReauthorizingWechat: boolean;
 	onUpdateField: (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => void;
 	onUpdateProviderSelection: (provider: string) => void;
 	onSaveModel: () => void;
 	onOpenSystemPrompt: () => void;
 	onOpenSkillSource: (sourceId: string) => void;
+	onOpenSkillFolder: (sourceId: string, skillName: string) => void;
 	onUpdateChannelField: (field: keyof AgentDraft, value: string | boolean) => void;
 	onSaveChannel: () => void;
+	onSyncFeishu: () => void;
+	onReauthorizeWechat: () => void;
 }): JSX.Element {
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
 	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
@@ -182,17 +192,6 @@ export function AgentContentPanels({
 								placeholder="留空保存会清除当前 provider 的 API Key"
 							/>
 						</Field>
-						<div className="flex items-center justify-between gap-3 pt-2">
-							<div className="text-xs text-muted-foreground text-pretty">
-								{modelSaveMessage ?? "修改后点击保存；保存时会验证配置，运行中的 Bot 会自动重启。"}
-							</div>
-							<Button
-								disabled={isSavingModel}
-								onClick={onSaveModel}
-							>
-								{isSavingModel ? "验证中..." : "保存"}
-							</Button>
-						</div>
 					</div>
 					<SystemPromptCard
 						source={systemPrompt}
@@ -200,11 +199,23 @@ export function AgentContentPanels({
 						isOpening={isOpeningSystemPrompt}
 						onOpen={onOpenSystemPrompt}
 					/>
+					<div className="pie-smooth-corner sticky bottom-1 z-20 flex items-center justify-between gap-3 rounded-[24px] bg-white px-4 py-3 shadow-[0_3px_10px_rgba(15,23,42,0.08)]">
+						<div className="text-xs text-muted-foreground text-pretty">
+							{modelSaveMessage ?? "保存后 Agent 将自动重启"}
+						</div>
+						<Button
+							className="shrink-0"
+							disabled={isSavingModel}
+							onClick={onSaveModel}
+						>
+							{isSavingModel ? "验证中..." : "保存"}
+						</Button>
+					</div>
 				</div>
 			) : activeTab === "skills" ? (
 				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] p-5">
 					<div className="flex items-center justify-between gap-4">
-						<SectionTitle title="Skills 管理" description="按目录来源管理；打开 folder 后直接增删或编辑 Skills。" />
+						<SectionTitle title="Skills 管理" description="按目录来源管理 Skills" />
 					</div>
 					<div className="mt-4 grid gap-3">
 						{isLoadingSkillSources ? (
@@ -218,6 +229,7 @@ export function AgentContentPanels({
 									source={source}
 									isOpening={openingSkillSourceId === source.id}
 									onOpen={() => onOpenSkillSource(source.id)}
+									onOpenSkill={(skillName) => onOpenSkillFolder(source.id, skillName)}
 								/>
 							))
 						)}
@@ -227,7 +239,22 @@ export function AgentContentPanels({
 				<div className="mx-auto max-w-5xl space-y-4">
 					{hasFeishuChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="飞书" description="保存前会验证 App ID 和 App Secret。" />
+							<div className="flex items-start justify-between gap-4">
+								<SectionTitle title="飞书" description="保存前验证 App ID 和 Secret" />
+								<AceternityTooltip content="获取飞书应用头像和名称">
+									<Button
+										type="button"
+										variant="secondary"
+										size="sm"
+										className="h-9 shrink-0 gap-1.5 rounded-4xl transition-[background-color,box-shadow,transform] active:scale-[0.96]"
+										disabled={isSyncingFeishu}
+										onClick={onSyncFeishu}
+									>
+										<AppIcon IconComponent={RestartCircleBoldDuotone} className={cn("size-4", isSyncingFeishu ? "animate-spin" : "")} />
+										<span>{isSyncingFeishu ? "获取中" : "获取"}</span>
+									</Button>
+								</AceternityTooltip>
+							</div>
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="App ID">
 									<Input value={channelDraft.appId ?? ""} onChange={(event) => onUpdateChannelField("appId", event.target.value)} />
@@ -253,7 +280,22 @@ export function AgentContentPanels({
 					) : null}
 					{hasWechatChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="微信" description="Token 只保存到该 Agent 的 .env，不写入 config.json。" />
+							<div className="flex items-start justify-between gap-4">
+								<SectionTitle title="微信" description="Token 只保存到该 Agent 的 .env" />
+								<AceternityTooltip content="重新扫码授权微信">
+									<Button
+										type="button"
+										variant="secondary"
+										size="sm"
+										className="h-9 shrink-0 gap-1.5 rounded-4xl transition-[background-color,box-shadow,transform] active:scale-[0.96]"
+										disabled={isReauthorizingWechat}
+										onClick={onReauthorizeWechat}
+									>
+										<AppIcon IconComponent={RestartCircleBoldDuotone} className={cn("size-4", isReauthorizingWechat ? "animate-spin" : "")} />
+										<span>重新授权</span>
+									</Button>
+								</AceternityTooltip>
+							</div>
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="Account ID">
 									<Input value={channelDraft.wechatAccountId ?? ""} onChange={(event) => onUpdateChannelField("wechatAccountId", event.target.value)} />
@@ -273,7 +315,7 @@ export function AgentContentPanels({
 					) : null}
 					{hasSlackChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Slack" description="Socket Mode 需要 Bot Token 和 App Token；token 只保存到该 Agent 的 .env。" />
+							<SectionTitle title="Slack" description="Socket Mode 需要 Bot Token 和 App Token" />
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="Bot Token">
 									<SecretInput value={channelDraft.slackBotToken ?? ""} onChange={(event) => onUpdateChannelField("slackBotToken", event.target.value)} />
@@ -300,7 +342,7 @@ export function AgentContentPanels({
 					) : null}
 					{hasDiscordChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Discord" description="需要 Bot Token；服务端消息还需要开启 Message Content Intent。" />
+							<SectionTitle title="Discord" description="需要 Bot Token 和 Message Content Intent" />
 							<Field label="Bot Token">
 								<SecretInput value={channelDraft.discordBotToken ?? ""} onChange={(event) => onUpdateChannelField("discordBotToken", event.target.value)} />
 							</Field>
@@ -316,7 +358,7 @@ export function AgentContentPanels({
 					) : null}
 					{hasTelegramChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Telegram" description="从 BotFather 获取 Bot Token；token 只保存到该 Agent 的 .env。" />
+							<SectionTitle title="Telegram" description="从 BotFather 获取 Bot Token" />
 							<Field label="Bot Token">
 								<SecretInput value={channelDraft.telegramBotToken ?? ""} onChange={(event) => onUpdateChannelField("telegramBotToken", event.target.value)} />
 							</Field>
@@ -327,7 +369,7 @@ export function AgentContentPanels({
 					) : null}
 					{channelKinds.length ? (
 						<div className="pie-smooth-corner space-y-3 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="IM 消息样式" description="控制消息在 IM 中的呈现样式" />
+							<SectionTitle title="IM 消息样式" description="控制 IM 消息呈现" />
 							<label className="flex cursor-pointer items-start gap-3 py-2.5">
 								<Checkbox
 									checked={channelDraft.outputToolCallsToIm ?? true}
@@ -336,24 +378,22 @@ export function AgentContentPanels({
 								/>
 								<span className="min-w-0 flex-1">
 									<span className="block text-sm font-medium leading-snug text-foreground text-balance">在 IM 中显示工具调用</span>
-									<span className="mt-0.5 block text-sm font-normal leading-snug text-muted-foreground text-pretty">开启后，Agent 调用工具时会把工具名和执行状态同步发到已启用渠道。</span>
+									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">同步工具名和执行状态</span>
 								</span>
 							</label>
 						</div>
 					) : null}
 					{!channelKinds.length ? (
 						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-8 text-center text-sm text-muted-foreground">
-							该 Agent 还没有启用的 IM 渠道。
+							该 Agent 还没有启用的 IM 渠道
 						</div>
 					) : null}
-					<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-6 text-center text-sm text-muted-foreground">
-						多渠道支持尚在开发中
-					</div>
-					<div className="flex items-center justify-between gap-3 pt-1">
+					<div className="pie-smooth-corner sticky bottom-1 z-20 flex items-center justify-between gap-3 rounded-[24px] bg-white px-4 py-3 shadow-[0_3px_10px_rgba(15,23,42,0.08)]">
 						<div className="text-xs text-muted-foreground text-pretty">
-							{channelSaveMessage ?? "修改后点击保存；保存时会验证配置，运行中的 Bot 会自动重启。"}
+							{channelSaveMessage ?? "保存后 Agent 将自动重启"}
 						</div>
 						<Button
+							className="shrink-0"
 							disabled={isSavingChannel}
 							onClick={onSaveChannel}
 						>
@@ -439,7 +479,7 @@ function SystemPromptCard({
 			<div className="pr-9">
 				<SectionTitle title="系统提示词" />
 				<div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-					{source?.path ?? "Loading..."}
+					{source?.path || source?.description || "Loading..."}
 				</div>
 			</div>
 			<AceternityTooltip content="打开系统提示词文件" className="absolute right-5 top-4">
@@ -448,7 +488,7 @@ function SystemPromptCard({
 					size="inline"
 					className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] opacity-0 transition-[color,opacity,transform] hover:text-[var(--slate-12)] focus:opacity-100 group-hover/system-prompt:opacity-100"
 					onClick={onOpen}
-					disabled={isLoading || isOpening || !source}
+					disabled={isLoading || isOpening || !source?.path}
 					aria-label="Open System Prompt"
 				>
 					<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
@@ -456,7 +496,7 @@ function SystemPromptCard({
 			</AceternityTooltip>
 			<div className="pie-smooth-corner mt-4 max-h-56 overflow-auto rounded-[28px] bg-white px-4 py-3">
 				<pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground">
-					{isLoading ? "正在读取系统提示词..." : source?.exists ? source.content : "未找到系统提示词文件。"}
+					{isLoading ? "正在读取系统提示词..." : source?.exists ? source.content : "未找到系统提示词文件"}
 				</pre>
 			</div>
 		</div>
@@ -474,9 +514,9 @@ function SectionTitle({
 }): JSX.Element {
 	return (
 		<div className={cn("min-w-0", className)}>
-			<div className="truncate text-xs font-medium uppercase text-muted-foreground">{title}</div>
+			<div className="truncate text-base font-semibold leading-snug text-foreground text-balance">{title}</div>
 			{description ? (
-				<div className="mt-1 min-w-0 text-pretty text-xs leading-snug text-muted-foreground">{description}</div>
+				<div className="mt-0.5 min-w-0 text-pretty text-sm leading-snug text-muted-foreground">{description}</div>
 			) : null}
 		</div>
 	);
@@ -668,10 +708,12 @@ function SkillSourceRow({
 	source,
 	isOpening,
 	onOpen,
+	onOpenSkill,
 }: {
 	source: AgentSkillSource;
 	isOpening: boolean;
 	onOpen: () => void;
+	onOpenSkill: (skillName: string) => void;
 }): JSX.Element {
 	const preview = source.skills.slice(0, 4);
 	const desc = source.description.trim();
@@ -692,14 +734,20 @@ function SkillSourceRow({
 				) : null}
 				<div className={cn("shrink-0 truncate font-mono text-[11px] text-muted-foreground", desc ? "mt-2" : "mt-1")}>{source.path}</div>
 				<div className="mt-auto shrink-0 pt-1.5">
-					<div className="flex h-5 min-w-0 gap-1.5 overflow-hidden">
+					<div className="flex min-w-0 flex-wrap gap-1.5 overflow-visible">
 						{preview.map((skill) => (
-							<span key={skill} className="shrink-0 rounded-full bg-[var(--slate-2)] px-2 py-0.5 text-[11px] leading-4 text-muted-foreground">
+							<button
+								key={skill}
+								type="button"
+								className="min-w-0 max-w-full truncate rounded-full bg-[var(--slate-2)] px-1.5 py-px text-[10px] leading-3.5 text-muted-foreground transition-colors hover:bg-[var(--slate-3)] hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+								onClick={() => onOpenSkill(skill)}
+								title={`打开 ${skill}`}
+							>
 								{skill}
-							</span>
+							</button>
 						))}
 						{source.skills.length > preview.length ? (
-							<span className="shrink-0 rounded-full bg-[var(--slate-2)] px-2 py-0.5 text-[11px] leading-4 text-muted-foreground">
+							<span className="shrink-0 rounded-full bg-[var(--slate-2)] px-1.5 py-px text-[10px] leading-3.5 text-muted-foreground">
 								+{source.skills.length - preview.length}
 							</span>
 						) : null}

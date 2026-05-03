@@ -40,6 +40,9 @@ export function AgentHeader({
 	isPausing,
 	onStart,
 	onPause,
+	showWechatReauthorize,
+	isReauthorizingWechat,
+	onOpenWechatReauthorize,
 	onReveal,
 	onDelete,
 	deleteError,
@@ -53,6 +56,9 @@ export function AgentHeader({
 	isPausing: boolean;
 	onStart: () => void;
 	onPause: () => void;
+	showWechatReauthorize: boolean;
+	isReauthorizingWechat: boolean;
+	onOpenWechatReauthorize: () => void;
 	onReveal: () => void;
 	onDelete: () => void;
 	deleteError?: string;
@@ -145,34 +151,35 @@ export function AgentHeader({
 				}}
 			/>
 			<div className="flex items-center justify-between gap-4">
-				<Popover open={open} onOpenChange={setOpen}>
-					<PopoverTrigger
-						render={
-							<Button
-								ref={triggerRef}
-								variant="unstyled"
-								size="inline"
-								className="pie-smooth-corner no-drag flex h-12 min-w-0 max-w-[420px] items-center gap-3 rounded-[24px] px-1.5 pr-3 text-left transition-[background-color,transform] hover:bg-[var(--slate-2)] aria-expanded:bg-[var(--slate-2)]"
-								aria-label="编辑 Agent 信息"
-							/>
-						}
-					>
-						<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
-						<span className="min-w-0 truncate text-xl font-bold text-foreground">{agent.name}</span>
-						{isSaving ? (
-							<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-						) : (
-							<AppIcon
-								IconComponent={AltArrowDownLineDuotone}
-								className="size-4 shrink-0 text-muted-foreground transition-transform duration-100 group-aria-expanded/button:rotate-180"
-							/>
-						)}
-					</PopoverTrigger>
+				<div className="flex min-w-0 items-center gap-2">
+					<Popover open={open} onOpenChange={setOpen}>
+						<PopoverTrigger
+							render={
+								<Button
+									ref={triggerRef}
+									variant="unstyled"
+									size="inline"
+									className="pie-smooth-corner no-drag flex h-12 min-w-0 max-w-[420px] items-center gap-3 rounded-[24px] px-1.5 pr-3 text-left transition-[background-color,transform] hover:bg-[var(--slate-2)] aria-expanded:bg-[var(--slate-2)]"
+									aria-label="编辑 Agent 信息"
+								/>
+							}
+						>
+							<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
+							<span className="min-w-0 truncate text-xl font-bold text-foreground">{agent.name}</span>
+							{isSaving ? (
+								<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+							) : (
+								<AppIcon
+									IconComponent={AltArrowDownLineDuotone}
+									className="size-4 shrink-0 text-muted-foreground transition-transform duration-100 group-aria-expanded/button:rotate-180"
+								/>
+							)}
+						</PopoverTrigger>
 					<PopoverContent ref={contentRef} className="no-drag" align="start" sideOffset={10}>
 						<div className="space-y-4">
 							<div>
 								<PopoverTitle>Agent 信息</PopoverTitle>
-								<PopoverDescription className="mt-1">编辑头像和显示名称。</PopoverDescription>
+								<PopoverDescription className="mt-1">编辑头像和显示名称</PopoverDescription>
 							</div>
 								<div className="pie-smooth-corner space-y-5 rounded-[24px] bg-[var(--slate-2)] p-4">
 									<div>
@@ -223,7 +230,22 @@ export function AgentHeader({
 							</div>
 						</div>
 					</PopoverContent>
-				</Popover>
+					</Popover>
+					{showWechatReauthorize ? (
+						<AceternityTooltip content="微信已失效，重新扫码授权" side="bottom">
+							<Button
+								type="button"
+								variant="unstyled"
+								size="inline"
+								className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)] shadow-none transition-[background-color,color,transform] hover:bg-[var(--amber-4)] hover:text-[var(--amber-12)] active:scale-[0.96]"
+								onClick={onOpenWechatReauthorize}
+								disabled={isReauthorizingWechat}
+							>
+								<span>重新授权</span>
+							</Button>
+						</AceternityTooltip>
+					) : null}
+				</div>
 				<div className="no-drag flex items-center gap-2">
 					{isStarting || isPausing || agent.status === "starting" ? (
 						<AceternityTooltip content={isPausing ? "暂停中" : "启动中"} side="bottom">
@@ -308,8 +330,8 @@ export function AgentHeader({
 								<AlertDialogTitle>删除 Agent</AlertDialogTitle>
 								<AlertDialogDescription>
 									{deleteStep === "idle"
-										? `确定要删除 ${agent.name} 吗？此操作无法撤销。`
-										: "正在删除 Agent，请等待当前步骤完成。"}
+										? `确定要删除 ${agent.name} 吗？此操作无法撤销`
+										: "正在删除 Agent，请等待当前步骤完成"}
 								</AlertDialogDescription>
 							</AlertDialogHeader>
 							{deleteError && <p className="rounded-2xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{deleteError}</p>}

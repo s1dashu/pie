@@ -68,6 +68,9 @@ export function runtimeLifecycleLabel(state: RuntimeEnvironmentLifecycleState | 
 	if (state === "running") {
 		return "运行中";
 	}
+	if (state === "degraded") {
+		return "运行中，渠道无法连通";
+	}
 	if (state === "stopping") {
 		return "停止中";
 	}
@@ -80,6 +83,9 @@ export function runtimeLifecycleLabel(state: RuntimeEnvironmentLifecycleState | 
 export function runtimeLifecycleTone(state: RuntimeEnvironmentLifecycleState | undefined): string {
 	if (state === "running") {
 		return "bg-[var(--lime-9)]";
+	}
+	if (state === "degraded") {
+		return "bg-[var(--amber-9)]";
 	}
 	if (state === "starting" || state === "stopping") {
 		return "bg-[var(--slate-11)]";

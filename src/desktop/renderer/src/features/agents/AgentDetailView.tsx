@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
 	AgentDetails,
 	AgentDraft,
+	AgentOnboardEvent,
 	AgentStatus,
 	AgentSummary,
 	DesktopModelOption,
@@ -14,6 +16,7 @@ import { AppIcon } from "@/components/shared/app-icon";
 import { AgentContentPanels, type ResourceChartHistory } from "./AgentContentPanels";
 import { AgentHeader } from "./AgentHeader";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { emptyUsage, type AgentTab, tabs } from "./agent-display";
 
 const MAX_RESOURCE_HISTORY_POINTS = 30;
@@ -118,6 +121,9 @@ export function AgentDetailView({
 	});
 	const [modelSaveMessage, setModelSaveMessage] = useState<string | undefined>();
 	const [channelSaveMessage, setChannelSaveMessage] = useState<string | undefined>();
+	const [wechatAuthStatus, setWechatAuthStatus] = useState<string | undefined>();
+	const [wechatQrEvent, setWechatQrEvent] = useState<AgentOnboardEvent | undefined>();
+	const [wechatAuthDialogOpen, setWechatAuthDialogOpen] = useState(false);
 	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
 	const credentialRequestRef = useRef(0);
 	const usageQuery = useQuery({
@@ -144,6 +150,7 @@ export function AgentDetailView({
 	});
 	const usage = usageQuery.data ?? emptyUsage();
 	const resources = resourceQuery.data;
+	const detailContentPadding = activeTab === "overview" ? "px-7 pb-4" : "px-3 pb-4";
 	const providerOptions = useMemo(() => {
 		const values = new Set(modelCatalogQuery.data?.providers ?? []);
 		if (draft.provider) {
@@ -193,6 +200,30 @@ export function AgentDetailView({
 		setModelSaveMessage(undefined);
 		setChannelSaveMessage(undefined);
 	}, [agent]);
+
+	useEffect(() => {
+		setWechatAuthStatus(undefined);
+		setWechatQrEvent(undefined);
+		setWechatAuthDialogOpen(false);
+	}, [agent.id]);
+
+	useEffect(() => {
+		return window.pie.onAgentOnboardEvent((event) => {
+			if (event.sessionId !== agent.id || event.source !== "wechat") {
+				return;
+			}
+			if (event.type === "qr") {
+				setWechatQrEvent(event);
+			}
+			if (event.message) {
+				setWechatAuthStatus(event.message);
+			}
+			if (event.type === "done" || event.type === "error") {
+				void queryClient.invalidateQueries({ queryKey: ["agents"] });
+				void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			}
+		});
+	}, [agent.id, queryClient]);
 
 	useEffect(() => {
 		setAvatarPreviewUrl(undefined);
@@ -259,7 +290,7 @@ export function AgentDetailView({
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
-			setModelSaveMessage(agent.status === "running" ? "验证通过，模型配置已保存并重启 Bot。" : "验证通过，模型配置已保存。");
+			setModelSaveMessage(agent.status === "running" ? "验证通过，模型配置已保存并重启 Bot" : "验证通过，模型配置已保存");
 		},
 		onError: (err: Error) => {
 			setModelSaveMessage(undefined);
@@ -289,7 +320,7 @@ export function AgentDetailView({
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			queryClient.setQueryData(["agent", agent.id], updated);
-			setChannelSaveMessage(agent.status === "running" ? "验证通过，渠道配置已保存并重启 Bot。" : "验证通过，渠道配置已保存。");
+			setChannelSaveMessage(agent.status === "running" ? "验证通过，渠道配置已保存并重启 Bot" : "验证通过，渠道配置已保存");
 		},
 		onError: (err: Error, _draft, context) => {
 			if (context?.previous) {
@@ -298,6 +329,43 @@ export function AgentDetailView({
 			setChannelSaveMessage(undefined);
 			void queryClient.invalidateQueries({ queryKey: ["agents"] });
 			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			onError(err.message);
+		},
+	});
+	const reauthorizeWechat = useMutation({
+		mutationFn: () => window.pie.reauthorizeWechat(agent.id),
+		onMutate: () => {
+			setWechatAuthDialogOpen(true);
+			setWechatAuthStatus("正在准备微信扫码授权...");
+			setWechatQrEvent(undefined);
+		},
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setChannelDraft((current) => ({
+				...current,
+				wechatAccountId: updated.wechat?.accountId ?? current.wechatAccountId,
+				wechatBaseUrl: updated.wechat?.baseUrl ?? current.wechatBaseUrl,
+				wechatBotToken: updated.wechat?.botToken ?? current.wechatBotToken,
+			}));
+			setWechatQrEvent(undefined);
+			setChannelSaveMessage("微信已重新授权，Bot 已恢复连接");
+		},
+		onError: (err: Error) => {
+			setWechatAuthStatus(undefined);
+			onError(err.message);
+		},
+	});
+	const syncFeishuAppProfile = useMutation({
+		mutationFn: () => window.pie.syncFeishuAppProfile(agent.id),
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setDraft((current) => ({ ...current, name: updated.name }));
+			setChannelSaveMessage("已获取飞书应用信息，并刷新本地展示");
+		},
+		onError: (err: Error) => {
+			setChannelSaveMessage(undefined);
 			onError(err.message);
 		},
 	});
@@ -348,6 +416,23 @@ export function AgentDetailView({
 	const openSkillSource = useMutation({
 		mutationFn: (sourceId: string) => window.pie.openAgentSkillSource(agent.id, sourceId),
 		onSuccess: (sources) => {
+			queryClient.setQueryData(["agent-skill-sources", agent.id], sources);
+		},
+		onError: (err: Error) => onError(err.message),
+	});
+	const openSkillFolder = useMutation({
+		mutationFn: async ({ sourceId, skillName }: { sourceId: string; skillName: string }) => {
+			if (typeof window.pie.openAgentSkillFolder !== "function") {
+				console.error("[desktop] openAgentSkillFolder is unavailable. Restart the Electron desktop process to load the updated preload API.");
+				return undefined;
+			}
+			await window.pie.openAgentSkillFolder(agent.id, sourceId, skillName);
+			return window.pie.getAgentSkillSources(agent.id);
+		},
+		onSuccess: (sources) => {
+			if (!sources) {
+				return;
+			}
 			queryClient.setQueryData(["agent-skill-sources", agent.id], sources);
 		},
 		onError: (err: Error) => onError(err.message),
@@ -412,8 +497,17 @@ export function AgentDetailView({
 		setChannelSaveMessage(undefined);
 		setChannelDraft((current) => ({ ...current, [field]: value }));
 	};
+	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
+	const isWechatDegraded = hasWechatChannel && agent.runtimeEnvironment?.lifecycle.state === "degraded";
+	const openWechatReauthorizeDialog = () => {
+		setWechatAuthDialogOpen(true);
+		if (!reauthorizeWechat.isPending && !wechatQrEvent?.url) {
+			reauthorizeWechat.mutate();
+		}
+	};
 
 	return (
+		<>
 			<Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AgentTab)} className="flex h-full flex-col bg-white">
 				<AgentHeader
 					agent={avatarPreviewUrl ? { ...agent, avatarUrl: avatarPreviewUrl } : agent}
@@ -425,6 +519,9 @@ export function AgentDetailView({
 					isPausing={pause.isPending}
 					onStart={() => start.mutate()}
 					onPause={() => pause.mutate()}
+					showWechatReauthorize={isWechatDegraded}
+					isReauthorizingWechat={reauthorizeWechat.isPending}
+					onOpenWechatReauthorize={openWechatReauthorizeDialog}
 					onReveal={() => revealFinder.mutate()}
 					onDelete={() => remove.mutate()}
 					deleteError={remove.error instanceof Error ? remove.error.message : undefined}
@@ -439,47 +536,84 @@ export function AgentDetailView({
 						))}
 					</TabsList>
 				</div>
-				<div className={cn(
-					"flex-1 bg-white px-7 pt-4",
-					activeTab === "overview" ? "min-h-0 overflow-hidden" : "overflow-y-auto",
-					activeTab === "overview" ? "pb-7" : "pb-12",
-				)}>
-					<AgentContentPanels
-						activeTab={activeTab}
-						agent={agent}
-						usage={usage}
-						resources={resources}
-						resourceHistory={resourceHistory}
-						draft={draft}
-						channelDraft={channelDraft}
-						modelSaveMessage={modelSaveMessage}
-						channelSaveMessage={channelSaveMessage}
-						providerOptions={providerOptions}
-						modelOptions={modelOptions}
-						allModelOptions={allModelOptions}
-						isModelCatalogLoading={modelCatalogQuery.isLoading}
-						systemPrompt={systemPromptQuery.data}
-						isLoadingSystemPrompt={systemPromptQuery.isLoading}
-						isOpeningSystemPrompt={openSystemPrompt.isPending}
-						skillSources={skillSourcesQuery.data ?? []}
-						isLoadingSkillSources={skillSourcesQuery.isLoading}
-						openingSkillSourceId={openSkillSource.isPending ? openSkillSource.variables : undefined}
-						isSavingModel={saveModel.isPending}
-						isSavingChannel={saveChannel.isPending}
-						onUpdateField={updateField}
-						onUpdateProviderSelection={updateProviderSelection}
-						onSaveModel={() => saveModel.mutate({
-							provider: draft.provider,
-							model: draft.model,
-							thinkingLevel: draft.thinkingLevel,
-							apiKey: draft.apiKey,
-						})}
-						onOpenSystemPrompt={() => openSystemPrompt.mutate()}
-						onOpenSkillSource={(sourceId) => openSkillSource.mutate(sourceId)}
-						onUpdateChannelField={updateChannelField}
-						onSaveChannel={() => saveChannel.mutate(channelDraft)}
-					/>
+				<div
+					className={cn(
+						"flex-1 bg-white pt-4",
+						"min-h-0 overflow-hidden",
+						detailContentPadding,
+					)}
+				>
+					<div
+						className={cn(
+							"h-full min-h-0",
+							activeTab === "overview" ? "overflow-hidden" : "overflow-y-auto px-4 [scrollbar-gutter:stable]",
+						)}
+					>
+						<AgentContentPanels
+							activeTab={activeTab}
+							agent={agent}
+							usage={usage}
+							resources={resources}
+							resourceHistory={resourceHistory}
+							draft={draft}
+							channelDraft={channelDraft}
+							modelSaveMessage={modelSaveMessage}
+							channelSaveMessage={channelSaveMessage}
+							providerOptions={providerOptions}
+							modelOptions={modelOptions}
+							allModelOptions={allModelOptions}
+							isModelCatalogLoading={modelCatalogQuery.isLoading}
+							systemPrompt={systemPromptQuery.data}
+							isLoadingSystemPrompt={systemPromptQuery.isLoading}
+							isOpeningSystemPrompt={openSystemPrompt.isPending}
+							skillSources={skillSourcesQuery.data ?? []}
+							isLoadingSkillSources={skillSourcesQuery.isLoading}
+							openingSkillSourceId={openSkillSource.isPending ? openSkillSource.variables : undefined}
+							isSavingModel={saveModel.isPending}
+							isSavingChannel={saveChannel.isPending}
+							isSyncingFeishu={syncFeishuAppProfile.isPending}
+							isReauthorizingWechat={reauthorizeWechat.isPending}
+							onUpdateField={updateField}
+							onUpdateProviderSelection={updateProviderSelection}
+							onSaveModel={() => saveModel.mutate({
+								provider: draft.provider,
+								model: draft.model,
+								thinkingLevel: draft.thinkingLevel,
+								apiKey: draft.apiKey,
+							})}
+							onOpenSystemPrompt={() => openSystemPrompt.mutate()}
+							onOpenSkillSource={(sourceId) => openSkillSource.mutate(sourceId)}
+							onOpenSkillFolder={(sourceId, skillName) => openSkillFolder.mutate({ sourceId, skillName })}
+							onUpdateChannelField={updateChannelField}
+							onSaveChannel={() => saveChannel.mutate(channelDraft)}
+							onSyncFeishu={() => syncFeishuAppProfile.mutate()}
+							onReauthorizeWechat={openWechatReauthorizeDialog}
+						/>
+					</div>
 				</div>
 			</Tabs>
+			<Dialog open={wechatAuthDialogOpen} onOpenChange={setWechatAuthDialogOpen}>
+				<DialogContent className="pie-smooth-corner max-w-[360px] gap-5 p-7 text-center sm:max-w-[360px]">
+					<DialogHeader className="items-center gap-2">
+						<DialogTitle className="text-xl font-semibold leading-7 text-balance">重新授权微信</DialogTitle>
+						<DialogDescription className="max-w-[260px] text-center leading-relaxed text-pretty">
+							用微信扫描二维码，重新连接这个 Agent
+						</DialogDescription>
+					</DialogHeader>
+					<div className="flex min-h-[220px] items-center justify-center">
+						{wechatQrEvent?.url ? (
+							<QRCodeSVG value={wechatQrEvent.url} size={220} level="M" includeMargin={false} />
+						) : (
+							<div className="flex h-[220px] w-[220px] items-center justify-center text-sm text-muted-foreground">
+								{wechatAuthStatus ?? "正在准备二维码..."}
+							</div>
+						)}
+					</div>
+					<div className="min-h-5 text-sm leading-relaxed text-muted-foreground">
+						{wechatAuthStatus ?? "请在微信里完成确认"}
+					</div>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
