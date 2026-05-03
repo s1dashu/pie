@@ -29,8 +29,8 @@ export function AgentSidebar({
 	const selectionTransition = {
 		type: "spring",
 		stiffness: 430,
-		damping: 18,
-		mass: 0.9,
+		damping: 23,
+		mass: 0.85,
 	} as const;
 	const selectedIndex = agents?.findIndex((agent) => agent.id === selectedId) ?? -1;
 
@@ -50,13 +50,13 @@ export function AgentSidebar({
 								initial={false}
 								animate={{
 									y: selectedIndex * 76,
-									scaleX: [0.96, 1.045, 1],
-									scaleY: [1.025, 0.975, 1],
+									scaleX: [0.975, 1.026, 1],
+									scaleY: [1.014, 0.986, 1],
 								}}
 								transition={{
 									y: selectionTransition,
-									scaleX: { duration: 0.5, ease: [0.2, 0, 0, 1] },
-									scaleY: { duration: 0.5, ease: [0.2, 0, 0, 1] },
+									scaleX: { duration: 0.42, ease: [0.2, 0, 0, 1] },
+									scaleY: { duration: 0.42, ease: [0.2, 0, 0, 1] },
 								}}
 								style={{ transformOrigin: "center" }}
 							/>
@@ -119,24 +119,21 @@ export function AgentSidebar({
 }
 
 function formatFrameworkName(kind: string | undefined): string {
-	const labels: Record<string, string> = {
-		pi: "Pi",
-		ousia: "Ousia",
-		hermes: "Hermes",
-		openclaw: "Openclaw",
-		"claude-code": "Claude Code",
-		claude: "Claude Code",
-		codex: "Codex",
-	};
-	const label = kind ? labels[kind] : undefined;
-	if (label) {
-		return label;
-	}
 	if (!kind?.trim()) {
 		return "Agent";
 	}
-	return kind
-		.split(/[-_\s]+/)
+	return formatMetadataLabel(kind);
+}
+
+function formatChannelNames(kinds: string[] | undefined): string {
+	const values = kinds?.map(formatMetadataLabel).filter(Boolean) ?? [];
+	return values.length ? values.join("+") : "No Channel";
+}
+
+function formatMetadataLabel(value: string | undefined): string {
+	const normalized = value?.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ") ?? "";
+	return normalized
+		.split(" ")
 		.filter(Boolean)
 		.map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
 		.join(" ");
@@ -144,10 +141,8 @@ function formatFrameworkName(kind: string | undefined): string {
 
 function formatAgentSubtitle(agent: AgentSummary): string {
 	const framework = formatFrameworkName(agent.frameworkKind);
-	if (!agent.modelLabel) {
-		return `${framework}, 未配置模型`;
-	}
-	return `${framework}, ${agent.modelLabel}`;
+	const channels = formatChannelNames(agent.channelKinds);
+	return `${framework} on ${channels}`;
 }
 
 function formatRuntimeTooltip(agent: AgentSummary): string {

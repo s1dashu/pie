@@ -60,7 +60,7 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			}];
 
 	return (
-		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-[10px] leading-[14px] text-[var(--slate-12)] [scrollbar-gutter:stable]">
+		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-[12px] leading-[16px] text-[var(--slate-12)] [scrollbar-gutter:stable]">
 			{lines.map((line) => (
 				<div key={line.id} className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
 					<span className={cn(

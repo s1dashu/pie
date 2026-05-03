@@ -117,7 +117,7 @@ export function AceternityTooltip({
 						>
 							<span className="absolute inset-x-10 -bottom-px z-30 h-px w-[20%] bg-gradient-to-r from-transparent via-[var(--lime-9)] to-transparent" />
 							<span className="absolute -bottom-px left-10 z-30 h-px w-[40%] bg-gradient-to-r from-transparent via-[var(--lime-7)] to-transparent" />
-							<span className="relative z-30 whitespace-pre text-center text-base font-bold leading-tight text-white tabular-nums">
+							<span className="relative z-30 whitespace-pre text-center text-xs font-semibold leading-tight text-white tabular-nums">
 								{content}
 							</span>
 						</motion.span>

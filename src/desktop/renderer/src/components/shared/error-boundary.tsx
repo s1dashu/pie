@@ -26,7 +26,7 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Erro
 				<div className="no-drag max-w-md rounded-4xl bg-white p-6 text-center shadow-[0_8px_32px_rgba(0,0,0,0.08)] ring-1 ring-foreground/5">
 					<h1 className="text-base font-medium">界面出现错误</h1>
 					<p className="mt-2 text-sm text-muted-foreground">
-						{this.state.error.message || "请刷新窗口后重试。"}
+						{this.state.error.message || "请刷新窗口后重试"}
 					</p>
 					<Button className="mt-5 h-9 rounded-4xl px-5" onClick={() => this.setState({ error: undefined })}>
 						返回应用

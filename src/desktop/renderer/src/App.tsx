@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Toaster, toast } from "./components/ui/sonner";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
 import { AgentSidebar } from "./layout/AgentSidebar";
+import { applyAppearanceTheme } from "./lib/appearance-theme";
 
 type AppSelection = { type: "agent"; id: string } | { type: "settings" } | { type: "create" };
 
@@ -20,11 +21,19 @@ export function App(): JSX.Element {
 		queryFn: () => window.pie.listAgents(),
 		refetchInterval: 3000,
 	});
+	const settings = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => window.pie.getSettings(),
+	});
 	const selected = useQuery({
 		queryKey: ["agent", selectedId],
 		queryFn: () => window.pie.getAgent(selectedId!),
 		enabled: Boolean(selectedId),
 	});
+
+	useEffect(() => {
+		applyAppearanceTheme(settings.data?.appearanceGrayHue);
+	}, [settings.data?.appearanceGrayHue]);
 
 	useEffect(() => {
 		if (agents.error) {
@@ -78,7 +87,7 @@ export function App(): JSX.Element {
 	}, [agents.data, queryClient, selected.data, selectedId]);
 
 	return (
-		<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-3)] p-[var(--app-shell-gap)] text-foreground">
+		<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
 			<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
 			<AgentSidebar
 				agents={agents.data}
