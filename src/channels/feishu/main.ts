@@ -52,7 +52,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	constructor(private readonly config: FeishuBotConfig) {
 		this.identity = {
-			backend: "pi" as const,
+			backend: config.backendKind,
 			channel: "feishu" as const,
 			homeDir: config.homeDir,
 		};
@@ -112,10 +112,13 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
-		const promptPreview = truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120);
+		const promptPreview = this.config.assistantSystemPrompt
+			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
+			: "Pi Coding Agent default";
 		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
 			chalk.bold("Pi Feishu bot ready"),
+			chalk.gray(`framework  ${this.config.backendKind === "ousia" ? "Ousia" : "Pi Coding Agent"}`),
 			chalk.gray(`mode       ${this.config.runMode}`),
 			chalk.gray(`home       ${this.config.homeDir}`),
 			chalk.gray(`layout     ${layoutRoots}`),
@@ -123,7 +126,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath}`),
+			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? "pi-coding-agent default"}`),
 			chalk.gray(`preview    ${promptPreview}`),
 			chalk.gray(`debug      ${this.config.debug ? "on" : "off"}`),
 			chalk.gray(`verbose    ${this.config.verboseLogs ? "on" : "off"}`),

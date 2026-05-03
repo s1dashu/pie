@@ -34,7 +34,7 @@ function getLatestSessionFile(sessionDir: string): string | undefined {
 export interface SessionPoolOptions {
 	homeDir: string;
 	model?: Model<any>;
-	assistantSystemPrompt: string;
+	assistantSystemPrompt?: string;
 	thinkingLevel: ThinkingLevel;
 	tools: string[];
 	debug: boolean;
@@ -44,9 +44,12 @@ export interface SessionPoolOptions {
 
 function overrideBaseSystemPrompt(
 	basePrompt: string | undefined,
-	assistantSystemPrompt: string,
+	assistantSystemPrompt: string | undefined,
 	configuredModel: Model<any> | undefined,
 ): string | undefined {
+	if (!assistantSystemPrompt) {
+		return basePrompt;
+	}
 	const head = assistantSystemPrompt.trim();
 	const backend =
 		configuredModel != null
@@ -330,8 +333,12 @@ export class SessionPool {
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: this.options.homeDir,
 			agentDir: conversationDir,
-			systemPromptOverride: (basePrompt) =>
-				overrideBaseSystemPrompt(basePrompt, this.options.assistantSystemPrompt, this.options.model),
+			...(this.options.assistantSystemPrompt
+				? {
+						systemPromptOverride: (basePrompt: string | undefined) =>
+							overrideBaseSystemPrompt(basePrompt, this.options.assistantSystemPrompt, this.options.model),
+					}
+				: {}),
 		});
 		const reloadStartedAt = Date.now();
 		await resourceLoader.reload();

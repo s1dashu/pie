@@ -1,4 +1,4 @@
-export type AgentBackendKind = "pi" | "openclaw" | "hermes";
+export type AgentBackendKind = "ousia" | "pi" | "openclaw" | "hermes";
 
 export type PieChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 
