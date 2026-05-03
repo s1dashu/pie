@@ -8,6 +8,7 @@ import type {
 	AgentCreationSession,
 	AgentDetails,
 	AgentOnboardEvent,
+	AgentSummary,
 	BotAvatarOption,
 	DesktopAgentFramework,
 	DesktopChannelKind,
@@ -27,10 +28,10 @@ import { thinkingLevelOptions } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
 
 const channelOptions = [
-	{ value: "feishu", label: "飞书 / Lark", enabled: true },
+	{ value: "feishu", label: "飞书/Lark", enabled: true },
 	{ value: "wechat", label: "微信", enabled: true },
-	{ value: "discord", label: "Discord", enabled: true },
 	{ value: "telegram", label: "Telegram", enabled: true },
+	{ value: "discord", label: "Discord", enabled: true },
 	{ value: "slack", label: "Slack", enabled: true },
 ] as const;
 
@@ -67,6 +68,8 @@ export function CreateAgentView({
 	const [telegramBotToken, setTelegramBotToken] = useState("");
 	const [telegramBotUsername, setTelegramBotUsername] = useState("");
 	const [qrEvent, setQrEvent] = useState<AgentOnboardEvent | undefined>();
+	const [qrExpiresAt, setQrExpiresAt] = useState<number | undefined>();
+	const [qrExpired, setQrExpired] = useState(false);
 	const [status, setStatus] = useState("");
 	const [framework, setFramework] = useState<DesktopAgentFramework>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
@@ -152,8 +155,17 @@ export function CreateAgentView({
 			if (created.wechat) {
 				setWechat(created.wechat);
 			}
+			setStepHistory((current) => current.at(-1) === "auth" ? current : [...current, "auth"]);
+			setStep("model");
 		},
-		onError: (err: Error) => onError(err.message),
+		onError: (err: Error) => {
+			if (step === "auth" && (err.message.includes("expired_token") || err.message.includes("Polling timed out"))) {
+				setQrExpired(true);
+				setStatus("二维码已失效，请刷新二维码。");
+				return;
+			}
+			onError(err.message);
+		},
 	});
 	const complete = useMutation({
 		mutationFn: () => {
@@ -210,11 +222,44 @@ export function CreateAgentView({
 				apiKey,
 			});
 		},
+		onMutate: async () => {
+			if (!session) {
+				return;
+			}
+			const optimisticAgent = createOptimisticStartingAgent({
+				session,
+				name,
+				framework,
+				channels,
+				feishu,
+				wechat,
+				provider,
+				model,
+				thinkingLevel,
+			});
+			await queryClient.cancelQueries({ queryKey: ["agents"] });
+			await queryClient.cancelQueries({ queryKey: ["agent", session.sessionId] });
+			queryClient.setQueryData<AgentSummary[]>(["agents"], (current) => {
+				const existing = current ?? [];
+				return existing.some((agent) => agent.id === optimisticAgent.id)
+					? existing.map((agent) => (agent.id === optimisticAgent.id ? { ...agent, ...optimisticAgent } : agent))
+					: [optimisticAgent, ...existing];
+			});
+			queryClient.setQueryData(["agent", session.sessionId], optimisticAgent);
+			onCreated(optimisticAgent);
+		},
 		onSuccess: async (agent) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], agent);
 			onCreated(agent);
 		},
-		onError: (err: Error) => onError(err.message),
+		onError: (err: Error) => {
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			if (session) {
+				void queryClient.invalidateQueries({ queryKey: ["agent", session.sessionId] });
+			}
+			onError(err.message);
+		},
 	});
 
 	useEffect(() => {
@@ -234,6 +279,8 @@ export function CreateAgentView({
 			}
 			if (event.type === "qr") {
 				setQrEvent(event);
+				setQrExpiresAt(event.expiresIn ? Date.now() + event.expiresIn * 1000 : undefined);
+				setQrExpired(false);
 			}
 			if (event.message) {
 				setStatus(event.message);
@@ -246,6 +293,17 @@ export function CreateAgentView({
 			}
 		});
 	}, [session?.sessionId]);
+
+	useEffect(() => {
+		if (!qrExpiresAt) {
+			setQrExpired(false);
+			return;
+		}
+		const updateExpired = () => setQrExpired(Date.now() >= qrExpiresAt);
+		updateExpired();
+		const timer = window.setInterval(updateExpired, 1000);
+		return () => window.clearInterval(timer);
+	}, [qrExpiresAt]);
 
 	const modelsForProvider = session?.models.filter((item) => item.provider === provider) ?? [];
 	const providers = session?.providers.length ? session.providers : [provider];
@@ -279,6 +337,8 @@ export function CreateAgentView({
 		if (step === "config") {
 			setStatus("");
 			setQrEvent(undefined);
+			setQrExpiresAt(undefined);
+			setQrExpired(false);
 			if (requiresIdentity) {
 				goToStep("identity");
 			} else if (requiresQrAuth) {
@@ -294,12 +354,10 @@ export function CreateAgentView({
 		if (step === "identity") {
 			setStatus("");
 			setQrEvent(undefined);
+			setQrExpiresAt(undefined);
+			setQrExpired(false);
 			goToStep("auth");
 			authenticateChannels.mutate();
-			return;
-		}
-		if (step === "auth") {
-			goToStep("model");
 			return;
 		}
 		if (step === "credentials") {
@@ -312,7 +370,6 @@ export function CreateAgentView({
 		|| !session
 		|| (step === "config" && !channels.length)
 		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
-		|| (step === "auth" && (authenticateChannels.isPending || (channels.includes("feishu") && !feishu) || (channels.includes("wechat") && !wechat)))
 		|| (step === "model" && complete.isPending);
 	const currentStepIndex = visibleSteps.indexOf(step);
 
@@ -351,7 +408,7 @@ export function CreateAgentView({
 
 			<div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
 				<div className="flex min-h-full items-center justify-center">
-					<div className="w-full max-w-[640px]">
+					<div className="w-full max-w-md">
 						{begin.isPending || !session ? (
 							<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
 								<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
@@ -388,18 +445,38 @@ export function CreateAgentView({
 							/>
 						</div>
 					) : step === "auth" ? (
-						<div className="space-y-5 text-center">
+						<div className="space-y-4 text-center">
 							<div className="text-sm font-normal text-foreground">
 								{status || authPrompt}
 							</div>
-							<div className="flex justify-center py-2">
-								{qrEvent?.url ? (
-									<div className="flex h-[196px] w-[196px] items-center justify-center rounded-2xl bg-white">
+							<div className="flex justify-center pt-2">
+								<div className="relative flex h-[196px] w-[196px] items-center justify-center overflow-hidden rounded-2xl bg-white">
+									{qrEvent?.url ? (
 										<QRCodeSVG value={qrEvent.url} size={180} level="M" includeMargin={false} />
-									</div>
-								) : (
-									<div className="h-[196px] w-[196px] animate-pulse rounded-2xl bg-muted" />
-								)}
+									) : (
+										<div className="h-[180px] w-[180px] animate-pulse rounded-xl bg-muted" />
+									)}
+									{qrExpired && (
+										<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/88 text-center backdrop-blur-[1px]">
+											<div className="text-xs font-medium text-foreground">二维码已失效</div>
+											<Button
+												variant="unstyled"
+												size="inline"
+												className="mt-2 h-5 px-1 text-[11px] font-medium text-[var(--lime-11)] transition-colors hover:text-[var(--lime-12)]"
+												disabled={authenticateChannels.isPending}
+												onClick={() => {
+													setQrEvent(undefined);
+													setQrExpiresAt(undefined);
+													setQrExpired(false);
+													setStatus("");
+													authenticateChannels.mutate();
+												}}
+											>
+												刷新二维码
+											</Button>
+										</div>
+									)}
+								</div>
 							</div>
 						</div>
 					) : step === "credentials" ? (
@@ -481,23 +558,20 @@ export function CreateAgentView({
 					返回上一步
 				</Button>
 				<div className="flex items-center gap-3">
-					{step === "auth" && (
-						<Button variant="secondary" disabled={authenticateChannels.isPending} onClick={() => authenticateChannels.mutate()}>
-							重新扫码
+					{step !== "auth" && (
+						<Button disabled={nextDisabled} onClick={handleNext}>
+							{complete.isPending ? (
+								<>
+									<Spinner size={18} color="currentColor" />
+									正在创建
+								</>
+							) : step === "model" ? (
+								"完成创建"
+							) : (
+								"下一步"
+							)}
 						</Button>
 					)}
-					<Button disabled={nextDisabled} onClick={handleNext}>
-						{complete.isPending ? (
-							<>
-								<Spinner size={18} color="currentColor" />
-								正在创建
-							</>
-						) : step === "model" ? (
-							"完成创建"
-						) : (
-							"下一步"
-						)}
-					</Button>
 				</div>
 			</footer>
 		</div>
@@ -522,6 +596,63 @@ function createAgentStepFlow({
 	];
 }
 
+function createOptimisticStartingAgent({
+	session,
+	name,
+	framework,
+	channels,
+	feishu,
+	wechat,
+	provider,
+	model,
+	thinkingLevel,
+}: {
+	session: AgentCreationSession;
+	name: string;
+	framework: DesktopAgentFramework;
+	channels: DesktopChannelKind[];
+	feishu: DesktopFeishuAppCredentials | undefined;
+	wechat: DesktopWechatCredentials | undefined;
+	provider: string;
+	model: string;
+	thinkingLevel: DesktopThinkingLevel;
+}): AgentDetails {
+	const now = new Date().toISOString();
+	const displayName = feishu?.appName?.trim() || name.trim() || session.name;
+	return {
+		id: session.sessionId,
+		name: displayName,
+		status: "starting",
+		avatarSeed: session.sessionId,
+		...(feishu?.avatarUrl ? { avatarUrl: feishu.avatarUrl } : {}),
+		enabled: true,
+		active: true,
+		home: session.home,
+		createdAt: now,
+		updatedAt: now,
+		frameworkKind: framework,
+		channelKinds: channels,
+		modelLabel: model,
+		...(feishu ? { appId: feishu.appId, brand: feishu.brand, appSecret: feishu.appSecret } : {}),
+		...(wechat ? { wechat } : {}),
+		model: {
+			provider,
+			model,
+			thinkingLevel,
+			outputToolCallsToIm: true,
+		},
+		runtimeEnvironment: {
+			homeDir: session.home,
+			workDir: session.home,
+			lifecycle: {
+				state: "starting",
+				updatedAt: now,
+				reason: "creating",
+			},
+		},
+	};
+}
+
 function ChannelPicker({
 	selected,
 	onSelect,
@@ -532,7 +663,7 @@ function ChannelPicker({
 	return (
 		<Field label="IM 渠道">
 			<div className="space-y-2">
-				<div className="grid grid-cols-5 gap-2">
+				<div className="grid grid-cols-3 gap-2">
 					{channelOptions.map((channel) => {
 						const isSelected = selected === channel.value;
 						return (
@@ -542,8 +673,10 @@ function ChannelPicker({
 								disabled={!channel.enabled}
 								onClick={() => channel.enabled && onSelect(channel.value as DesktopChannelKind)}
 								className={cn(
-									"flex h-14 min-w-0 items-center justify-center rounded-xl bg-[var(--slate-2)] px-2 text-center text-xs font-medium leading-tight ring-1 transition-[background-color,color,box-shadow]",
-									isSelected ? "text-foreground ring-[var(--lime-8)] bg-[var(--lime-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]" : "text-foreground ring-transparent",
+									"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
+									isSelected
+										? "border-[var(--slate-8)] bg-[var(--slate-3)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
+										: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
 									channel.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 								)}
 							>
@@ -554,7 +687,7 @@ function ChannelPicker({
 					})}
 				</div>
 				<div className="px-1 text-[10px] leading-4 text-muted-foreground">
-					后续可以给 Agent 配置多渠道，创建时只需要选择一个渠道
+					单 Agent 暂时只支持配置一个渠道，多渠道支持中
 				</div>
 			</div>
 		</Field>
@@ -642,19 +775,36 @@ function ManualChannelCredentials(props: {
 }
 
 function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | undefined }): JSX.Element {
-	const hasAvatar = Boolean(feishu?.avatarUrl?.trim());
+	const avatarUrl = feishu?.avatarUrl?.trim() ?? "";
+	const hasAvatar = Boolean(avatarUrl);
+	const [avatarState, setAvatarState] = useState<"idle" | "loading" | "loaded" | "error">(hasAvatar ? "loading" : "idle");
+
+	useEffect(() => {
+		setAvatarState(hasAvatar ? "loading" : "idle");
+	}, [hasAvatar, avatarUrl]);
+
 	return (
 		<div className="flex items-center gap-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
 			<div
 				className={cn(
-					"grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full ring-1 ring-foreground/10",
-					hasAvatar
+					"relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full ring-1 ring-foreground/10",
+					hasAvatar && avatarState !== "error"
 						? "bg-white"
 						: "bg-[linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%),linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%)] bg-[length:12px_12px] bg-[position:0_0,6px_6px]",
 				)}
 			>
-				{hasAvatar ? (
-					<img src={feishu?.avatarUrl} alt="" className="h-full w-full object-cover" draggable={false} />
+				{hasAvatar && avatarState !== "error" ? (
+					<>
+						{avatarState === "loading" && <span className="absolute inset-0 animate-pulse rounded-full bg-[var(--slate-4)]" />}
+						<img
+							src={avatarUrl}
+							alt=""
+							className={cn("h-full w-full object-cover transition-opacity duration-200", avatarState === "loaded" ? "opacity-100" : "opacity-0")}
+							draggable={false}
+							onLoad={() => setAvatarState("loaded")}
+							onError={() => setAvatarState("error")}
+						/>
+					</>
 				) : (
 					<span className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/60" />
 				)}

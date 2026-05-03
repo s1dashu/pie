@@ -764,7 +764,12 @@ async function listAgents(): Promise<AgentSummary[]> {
 			channelKinds,
 			appId: channel?.appId,
 		};
-	});
+	}).sort((left, right) => agentSortTimestamp(right) - agentSortTimestamp(left));
+}
+
+function agentSortTimestamp(agent: Pick<AgentSummary, "createdAt" | "updatedAt">): number {
+	const timestamp = Date.parse(agent.createdAt ?? agent.updatedAt ?? "");
+	return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function listAgentHomes(): string[] {
