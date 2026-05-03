@@ -11,8 +11,7 @@ import {
 	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { RuntimeTurnRequest } from "../../runtime/runtime-turn-gateway.js";
-import type { AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
 import { formatToolImErrorLine, formatToolImLine } from "../common/tool-call-im.js";
 import { extractAssistantText, extractLastAssistantError, SessionPool } from "../feishu/session.js";
 import { loadConfig, type WechatBotConfig } from "./config.js";
@@ -33,6 +32,8 @@ import { ContextTokenStore, loadSyncBuf, saveSyncBuf } from "./state.js";
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_MS = 2000;
 const BACKOFF_DELAY_MS = 30_000;
+const WECHAT_SEND_INTERVAL_MS = 800;
+const WECHAT_SEND_RET_MINUS_TWO_RETRY_DELAYS_MS = [1_000, 2_000, 5_000];
 const SESSION_EXPIRED_ERRCODE = -14;
 const SESSION_EXPIRED_RETRY_DELAYS_MS = [
 	60 * 1000,
@@ -69,6 +70,17 @@ function formatTaskPrompt(prompt: string): string {
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function formatWechatSendError(error: WechatApiError, text: string): string {
+	return [
+		`ret=${error.ret}`,
+		`errcode=${error.errcode}`,
+		`errmsg=${error.errmsg ?? ""}`,
+		`chars=${text.length}`,
+		`bytes=${Buffer.byteLength(text, "utf8")}`,
+		`body=${error.responseBody ?? ""}`,
+	].join(" ");
 }
 
 function formatDelay(ms: number): string {
@@ -132,35 +144,103 @@ class WechatConversationController {
 
 	private async executeRequest(request: QueuedWechatTurn): Promise<void> {
 		let unsubscribe: (() => void) | undefined;
+		let pendingToolLines: string[] = [];
+		let toolSendQueue = Promise.resolve();
+		let assistantSendQueue = Promise.resolve();
+		let activeAssistantText = "";
+		let sentAssistantText = false;
+		const flushToolLines = (): Promise<void> => {
+			if (!pendingToolLines.length) {
+				return toolSendQueue;
+			}
+			const text = pendingToolLines.join("\n\n");
+			pendingToolLines = [];
+			toolSendQueue = toolSendQueue
+				.then(() => this.runtime.sendPlainReply(request.message, text))
+				.catch((error) => console.warn(chalk.gray(`Wechat tool update skipped: ${formatError(error)}`)));
+			return toolSendQueue;
+		};
+		const appendToolLine = (line: string): void => {
+			pendingToolLines.push(line);
+			if (pendingToolLines.length >= 10) {
+				void flushToolLines();
+			}
+		};
+		const queueAssistantText = (text: string): Promise<void> => {
+			const trimmed = text.trim();
+			if (!trimmed) {
+				return assistantSendQueue;
+			}
+			sentAssistantText = true;
+			assistantSendQueue = assistantSendQueue
+				.then(async () => {
+					await flushToolLines();
+					await this.runtime.sendPlainReply(request.message, trimmed);
+				})
+				.catch((error) => console.warn(chalk.gray(`Wechat assistant update skipped: ${formatError(error)}`)));
+			return assistantSendQueue;
+		};
+		const flushActiveAssistantText = (): Promise<void> => {
+			const text = activeAssistantText;
+			activeAssistantText = "";
+			return queueAssistantText(text);
+		};
 		try {
 			const session = await this.runtime.getSession(this.conversationKey);
-			if (this.runtime.shouldOutputToolCallsToIm()) {
-				unsubscribe = session.subscribe((event) => {
+			unsubscribe = session.subscribe((event) => {
+				if (event.type === "message_update") {
+					const assistantEvent = event.assistantMessageEvent as { type?: string; delta?: string; content?: string } | undefined;
+					if (assistantEvent?.type === "text_start") {
+						activeAssistantText = "";
+					}
+					if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
+						activeAssistantText += assistantEvent.delta;
+					}
+					if (assistantEvent?.type === "text_end") {
+						if (assistantEvent.content?.trim()) {
+							activeAssistantText = assistantEvent.content;
+						}
+						void flushActiveAssistantText();
+					}
+				}
+				if (event.type === "message_end") {
+					void flushActiveAssistantText();
+				}
+				if (this.runtime.shouldOutputToolCallsToIm()) {
 					if (event.type === "tool_execution_start") {
-						void this.runtime.sendPlainReply(request.message, formatToolImLine(event.toolName, event.args)).catch(() => undefined);
+						void flushActiveAssistantText();
+						appendToolLine(formatToolImLine(event.toolName, event.args));
 					}
 					if (event.type === "tool_execution_end" && event.isError) {
-						void this.runtime
-							.sendPlainReply(request.message, formatToolImErrorLine(event.toolName, event.result))
-							.catch(() => undefined);
+						appendToolLine(formatToolImErrorLine(event.toolName, event.result));
 					}
-				});
-			}
+				}
+			});
 			await session.prompt(request.promptText);
 			const providerError = extractLastAssistantError(session);
 			if (providerError) {
 				throw new Error(providerError);
 			}
 			const assistantText = extractAssistantText(session);
-			await this.runtime.sendPlainReply(request.message, assistantText || "(empty response)");
+			await flushActiveAssistantText();
+			await assistantSendQueue;
+			await flushToolLines();
+			if (!sentAssistantText) {
+				await this.runtime.sendPlainReply(request.message, assistantText || "(empty response)");
+			}
 			request.resolve({ assistantText, interrupted: false });
 		} catch (error) {
 			const message = formatError(error);
 			console.error(chalk.red(`Wechat turn failed: ${message}`));
+			await flushActiveAssistantText();
+			await assistantSendQueue.catch(() => undefined);
+			await flushToolLines();
 			await this.runtime.sendPlainReply(request.message, `消息处理失败：${message}`).catch(() => undefined);
 			request.reject(error);
 		} finally {
 			unsubscribe?.();
+			await assistantSendQueue.catch(() => undefined);
+			await toolSendQueue.catch(() => undefined);
 		}
 	}
 }
@@ -173,6 +253,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
 	private readonly sessionPool: SessionPool;
 	private readonly contextTokens: ContextTokenStore;
+	private sendQueue = Promise.resolve();
 	private shutdownExitCode = 0;
 
 	constructor(private config: WechatBotConfig) {
@@ -223,46 +304,58 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			throw new Error("Cannot reply to Wechat message without from_user_id.");
 		}
 		const contextToken = message.context_token ?? this.contextTokens.get(to);
-		for (const chunk of splitWechatText(text)) {
-			await this.sendReplyChunk({ to, text: chunk, contextToken, maxBytes: 1500 });
-		}
+		const task = this.sendQueue
+			.catch(() => undefined)
+			.then(async () => {
+				for (const chunk of splitWechatText(text)) {
+					await this.sendReplyChunk({ to, text: chunk, contextToken });
+					await sleep(WECHAT_SEND_INTERVAL_MS, this.abortController.signal);
+				}
+			});
+		this.sendQueue = task.then(() => undefined, () => undefined);
+		await task;
 	}
 
 	private async sendReplyChunk(params: {
 		to: string;
 		text: string;
 		contextToken?: string;
-		maxBytes: number;
 	}): Promise<void> {
-		try {
-			await sendMessage({
-				baseUrl: this.config.wechat.baseUrl,
-				token: this.config.wechat.token,
-				routeTag: this.config.wechat.routeTag,
-				body: buildTextMessageReq({
-					to: params.to,
-					text: params.text,
-					contextToken: params.contextToken,
-				}),
-			});
-		} catch (error) {
-			if (error instanceof WechatApiError && error.ret === -2 && params.maxBytes > 400) {
-				const nextMaxBytes = Math.max(400, Math.floor(params.maxBytes / 2));
-				console.warn(chalk.yellow(`Wechat sendMessage ret=-2; retrying with ${nextMaxBytes}-byte chunks.`));
-				for (const chunk of splitWechatText(params.text, nextMaxBytes)) {
-					await this.sendReplyChunk({
-						...params,
-						text: chunk,
-						maxBytes: nextMaxBytes,
-					});
-				}
+		for (let attempt = 0; ; attempt += 1) {
+			try {
+				await sendMessage({
+					baseUrl: this.config.wechat.baseUrl,
+					token: this.config.wechat.token,
+					routeTag: this.config.wechat.routeTag,
+					body: buildTextMessageReq({
+						to: params.to,
+						text: params.text,
+						contextToken: params.contextToken,
+					}),
+				});
 				return;
+			} catch (error) {
+				if (error instanceof WechatApiError && error.ret === -2) {
+					const retryDelay = WECHAT_SEND_RET_MINUS_TWO_RETRY_DELAYS_MS[attempt];
+					if (retryDelay !== undefined) {
+						console.warn(
+							chalk.yellow(
+								`Wechat sendMessage failed; retrying after ${Math.round(retryDelay / 1000)}s. ${formatWechatSendError(error, params.text)}`,
+							),
+						);
+						await sleep(retryDelay, this.abortController.signal);
+						continue;
+					}
+				}
+				if (error instanceof WechatApiError) {
+					console.error(chalk.red(`Wechat sendMessage failed permanently. ${formatWechatSendError(error, params.text)}`));
+				}
+				throw error;
 			}
-			throw error;
 		}
 	}
 
-	async deliverTurn(request: RuntimeTurnRequest): Promise<{ sessionKey: string; assistantText: string }> {
+	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
 		return this.enqueueScheduledAgentTurn(request);
 	}
 
@@ -444,7 +537,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 	}
 
-	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: RuntimeTurnRequest): WechatMessage {
+	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentTurnInput): WechatMessage {
 		return {
 			message_id: Date.now(),
 			from_user_id: ownerSession.chatId,
@@ -456,7 +549,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{
 		sessionKey: string;
 		assistantText: string;
 	}> {
@@ -483,14 +576,14 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private resolveScheduledTurnQueueKey(request: RuntimeTurnRequest): string {
+	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
 		if (request.kind !== "agent_task") {
 			return request.sessionKey;
 		}
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: RuntimeTurnRequest): Promise<{
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{
 		sessionKey: string;
 		assistantText: string;
 	}> {

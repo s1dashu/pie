@@ -20,6 +20,7 @@ export class WechatApiError extends Error {
 		readonly ret?: number,
 		readonly errcode?: number,
 		readonly errmsg?: string,
+		readonly responseBody?: string,
 	) {
 		super(message);
 		this.name = "WechatApiError";
@@ -145,10 +146,11 @@ export async function sendMessage(params: WechatApiOptions & { body: SendMessage
 		(response.errcode !== undefined && response.errcode !== 0);
 	if (isApiError) {
 		throw new WechatApiError(
-			`sendMessage failed: ret=${response.ret} errcode=${response.errcode} ${response.errmsg ?? ""}`,
+			`sendMessage failed: ret=${response.ret} errcode=${response.errcode} errmsg=${response.errmsg ?? ""} body=${text}`,
 			response.ret,
 			response.errcode,
 			response.errmsg,
+			text,
 		);
 	}
 }
