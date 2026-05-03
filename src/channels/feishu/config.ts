@@ -29,8 +29,10 @@ const VALID_TOOL_NAMES = new Set<BuiltinToolName>(ALL_BUILTIN_TOOL_NAMES);
 export interface FeishuBotConfig {
 	homeDir: string;
 	backendKind: AgentBackendKind;
+	backendConfig?: Record<string, unknown>;
 	feishu: LarkConfig;
 	model?: Model<any>;
+	modelId?: string;
 	modelLabel: string;
 	assistantSystemPrompt?: string;
 	assistantSystemPromptPath?: string;
@@ -104,9 +106,15 @@ function resolveTools(value: string | undefined): { tools: string[]; label: stri
 	};
 }
 
-function resolveModel(env: RuntimeEnv): { model?: Model<any>; label: string } {
+function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?: Model<any>; modelId?: string; label: string } {
 	const provider = env.FEISHU_BOT_PROVIDER;
 	const modelId = env.FEISHU_BOT_MODEL;
+	if (backendKind === "codex") {
+		return {
+			modelId: modelId?.trim() || undefined,
+			label: modelId?.trim() || "codex default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -209,7 +217,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	}
 
 	const homeDir = resolveAgentHomeDir();
-	const { model, label: modelLabel } = resolveModel(env);
+	const { model, modelId, label: modelLabel } = resolveModel(env, backendKind);
 	const { tools, label: toolLabel } = resolveTools(env.FEISHU_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
 	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
@@ -219,6 +227,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	return {
 		homeDir,
 		backendKind,
+		backendConfig: getStoredProfile(store)?.backend.config,
 		feishu: {
 			appId,
 			appSecret,
@@ -227,6 +236,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 			verificationToken: env.FEISHU_VERIFICATION_TOKEN,
 		},
 		model,
+		modelId,
 		modelLabel,
 		assistantSystemPrompt: assistantSystemPrompt?.content,
 		assistantSystemPromptPath: assistantSystemPrompt?.path,

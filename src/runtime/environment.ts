@@ -7,6 +7,7 @@ export type RuntimeEnvironmentLifecycleState =
 	| "created"
 	| "starting"
 	| "running"
+	| "degraded"
 	| "stopping"
 	| "stopped"
 	| "failed";

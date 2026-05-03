@@ -48,9 +48,17 @@ const PI_FRAMEWORK: BackendFrameworkDefinition = {
 	label: "Pi Coding Agent",
 };
 
+const CODEX_FRAMEWORK: BackendFrameworkDefinition = {
+	kind: "codex",
+	label: "Codex",
+};
+
 export function resolveBackendFramework(kind: AgentBackendKind | undefined): BackendFrameworkDefinition {
 	if (kind === "ousia") {
 		return OUSIA_FRAMEWORK;
+	}
+	if (kind === "codex") {
+		return CODEX_FRAMEWORK;
 	}
 	return PI_FRAMEWORK;
 }

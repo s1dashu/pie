@@ -27,8 +27,10 @@ const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "
 export interface CommonChannelRuntimeConfig {
 	homeDir: string;
 	backendKind: AgentBackendKind;
+	backendConfig?: Record<string, unknown>;
 	channelKind: PieChannelKind;
 	model?: Model<any>;
+	modelId?: string;
 	modelLabel: string;
 	assistantSystemPrompt?: string;
 	assistantSystemPromptPath?: string;
@@ -115,9 +117,20 @@ export function setEnvDefault(env: RuntimeEnv, key: string, value: string | unde
 	}
 }
 
-function resolveModel(env: RuntimeEnv, providerKey: string, modelKey: string): { model?: Model<any>; label: string } {
+function resolveModel(
+	env: RuntimeEnv,
+	providerKey: string,
+	modelKey: string,
+	backendKind: AgentBackendKind,
+): { model?: Model<any>; modelId?: string; label: string } {
 	const provider = env[providerKey];
 	const modelId = env[modelKey];
+	if (backendKind === "codex") {
+		return {
+			modelId: modelId?.trim() || undefined,
+			label: modelId?.trim() || "codex default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -173,14 +186,15 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	}
 	mergeStoredModelIntoEnv(env, options.envPrefix, store);
 
-	const { model, label: modelLabel } = resolveModel(
+	const framework = resolveBackendFramework(profile?.backend.kind);
+	const backendKind = framework.kind;
+	const { model, modelId, label: modelLabel } = resolveModel(
 		env,
 		`${options.envPrefix}_BOT_PROVIDER`,
 		`${options.envPrefix}_BOT_MODEL`,
+		backendKind,
 	);
 	const { tools, label: toolLabel } = resolveTools(env[`${options.envPrefix}_BOT_TOOLS`], `${options.envPrefix}_BOT_TOOLS`);
-	const framework = resolveBackendFramework(profile?.backend.kind);
-	const backendKind = framework.kind;
 	const assistantSystemPrompt =
 		framework.systemPrompt
 			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, framework.systemPrompt.defaultPath)
@@ -188,8 +202,10 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	return {
 		homeDir: resolveAgentHomeDir(),
 		backendKind,
+		backendConfig: profile?.backend.config,
 		channelKind: options.channelKind,
 		model,
+		modelId,
 		modelLabel,
 		assistantSystemPrompt: assistantSystemPrompt?.content,
 		assistantSystemPromptPath: assistantSystemPrompt?.path,

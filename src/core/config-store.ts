@@ -20,7 +20,7 @@ export {
 } from "./agent-home.js";
 
 export type ChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
-export type AgentBackendKind = "ousia" | "pi" | "openclaw" | "hermes";
+export type AgentBackendKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 
 export interface FeishuChannelProfile {
 	kind: "feishu";
@@ -255,7 +255,12 @@ function normalizeModelProfile(value: unknown): ModelProfile | undefined {
 function normalizeAgentBackend(value: unknown): AgentBackendProfile {
 	if (isRecord(value)) {
 		const kind =
-			value.kind === "openclaw" || value.kind === "hermes" || value.kind === "pi" || value.kind === "ousia"
+			value.kind === "openclaw" ||
+			value.kind === "hermes" ||
+			value.kind === "claude-code" ||
+			value.kind === "codex" ||
+			value.kind === "pi" ||
+			value.kind === "ousia"
 				? value.kind
 				: "pi";
 		const model = normalizeModelProfile(value.model);
@@ -341,7 +346,9 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 }
 
 export function getProfileModel(profile: AgentProfile | undefined): ModelProfile | undefined {
-	return profile?.backend.kind === "ousia" || profile?.backend.kind === "pi" ? profile.backend.model : undefined;
+	return profile?.backend.kind === "ousia" || profile?.backend.kind === "pi" || profile?.backend.kind === "codex"
+		? profile.backend.model
+		: undefined;
 }
 
 export function setProfileModel(profile: AgentProfile | undefined, model: ModelProfile): AgentProfile {

@@ -1,7 +1,12 @@
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import chalk from "chalk";
 import type { FeishuBotConfig } from "./config.js";
-import { extractAssistantText, extractLastAssistantError, SessionPool } from "./session.js";
+import {
+	canSteerSession,
+	extractAssistantText,
+	extractLastAssistantError,
+	type AgentConversationSessionPool,
+	wasLastAssistantMessageAborted,
+} from "../../agents/session-runtime.js";
 import type { LarkMessageEvent } from "./platform/index.js";
 import {
 	formatLarkError,
@@ -28,18 +33,7 @@ interface ConversationRequest {
 export interface ConversationControllerOptions {
 	conversationKey: string;
 	config: FeishuBotConfig;
-	sessionPool: SessionPool;
-}
-
-function wasLastAssistantMessageAborted(session: AgentSession): boolean {
-	const messages = [...session.state.messages].reverse();
-	for (const message of messages) {
-		const typedMessage = message as { role?: string; stopReason?: string };
-		if (typedMessage.role === "assistant") {
-			return typedMessage.stopReason === "aborted";
-		}
-	}
-	return false;
+	sessionPool: AgentConversationSessionPool;
 }
 
 export class ConversationController {
@@ -49,7 +43,7 @@ export class ConversationController {
 	private abortPromise?: Promise<void>;
 	private readonly conversationKey: string;
 	private readonly config: FeishuBotConfig;
-	private readonly sessionPool: SessionPool;
+	private readonly sessionPool: AgentConversationSessionPool;
 
 	constructor(options: ConversationControllerOptions) {
 		this.conversationKey = options.conversationKey;
@@ -83,6 +77,9 @@ export class ConversationController {
 		this.pendingRequest = request;
 
 		if (this.processing) {
+			if (await this.trySteerCurrentRun(request)) {
+				return completion;
+			}
 			if (this.currentRequest) {
 				this.currentRequest.interrupted = true;
 			}
@@ -92,6 +89,24 @@ export class ConversationController {
 
 		void this.processPending();
 		return completion;
+	}
+
+	private async trySteerCurrentRun(request: ConversationRequest): Promise<boolean> {
+		try {
+			const session = await this.sessionPool.getSession(this.conversationKey);
+			if (!session.isStreaming || !canSteerSession(session)) {
+				return false;
+			}
+			this.pendingRequest = undefined;
+			await session.steer?.(request.promptText);
+			await request.reporter.finish("已补充到当前正在处理的任务。");
+			await request.reporter.dispose();
+			request.resolve({ assistantText: "", interrupted: false });
+			return true;
+		} catch (error) {
+			console.warn(chalk.gray(`Steer skipped: ${formatLarkError(error)}`));
+			return false;
+		}
 	}
 
 	private logTurnTiming(stage: string, elapsedMs: number, details?: string): void {

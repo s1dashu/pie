@@ -4,6 +4,13 @@ import { join } from "node:path";
 import chalk from "chalk";
 import { AGENT_HOME_SUBDIRS } from "../../core/agent-home-layout.js";
 import {
+	canSteerSession,
+	createAgentSessionPool,
+	extractAssistantText,
+	extractLastAssistantError,
+	type AgentConversationSessionPool,
+} from "../../agents/session-runtime.js";
+import {
 	getOwnerSessionBinding,
 	loadConfigStore,
 	saveConfigStore,
@@ -11,13 +18,32 @@ import {
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
-import { extractAssistantText, extractLastAssistantError, SessionPool } from "../feishu/session.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import { extractTextPart, type IncomingChannelMessage, type TextChannelAdapter } from "./channel-model.js";
 import { formatToolImErrorLine, formatToolImLine } from "./tool-call-im.js";
 
 function truncate(text: string, max = 600): string {
 	return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function formatBackendLabel(kind: CommonChannelRuntimeConfig["backendKind"]): string {
+	if (kind === "ousia") {
+		return "Ousia";
+	}
+	if (kind === "codex") {
+		return "Codex";
+	}
+	return "Pi Coding Agent";
+}
+
+function formatDefaultPromptLabel(kind: CommonChannelRuntimeConfig["backendKind"]): string {
+	if (kind === "codex") {
+		return "Codex default";
+	}
+	if (kind === "ousia") {
+		return "Ousia default";
+	}
+	return "Pi Coding Agent default";
 }
 
 function formatError(error: unknown): string {
@@ -59,10 +85,30 @@ class TextConversationController {
 			this.pendingRequest.resolve({ assistantText: "", interrupted: true });
 		}
 		this.pendingRequest = { message, promptText, resolve: resolvePromise, reject: rejectPromise };
+		if (this.processing && await this.trySteerCurrentRun(this.pendingRequest)) {
+			this.pendingRequest = undefined;
+			return completion;
+		}
 		if (!this.processing) {
 			void this.processPending();
 		}
 		return completion;
+	}
+
+	private async trySteerCurrentRun(request: QueuedTextTurn): Promise<boolean> {
+		try {
+			const session = await this.runtime.getSession(this.conversationKey);
+			if (!session.isStreaming || !canSteerSession(session)) {
+				return false;
+			}
+			await session.steer?.(request.promptText);
+			await this.runtime.sendPlainReply(request.message, "已补充到当前正在处理的任务。");
+			request.resolve({ assistantText: "", interrupted: false });
+			return true;
+		} catch (error) {
+			console.warn(chalk.gray(`${this.runtime.channelLabel} steer skipped: ${formatError(error)}`));
+			return false;
+		}
 	}
 
 	private async processPending(): Promise<void> {
@@ -119,7 +165,7 @@ class TextConversationController {
 export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	readonly identity;
 	readonly channelLabel: string;
-	private readonly sessionPool: SessionPool;
+	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, TextConversationController>();
 	private readonly seenMessageIds = new Set<string>();
 	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
@@ -135,9 +181,12 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 			channel: config.channelKind,
 			homeDir: config.homeDir,
 		};
-		this.sessionPool = new SessionPool({
+		this.sessionPool = createAgentSessionPool({
+			backendKind: config.backendKind,
+			backendConfig: config.backendConfig,
 			homeDir: config.homeDir,
 			model: config.model,
+			modelId: config.modelId,
 			assistantSystemPrompt: config.assistantSystemPrompt,
 			thinkingLevel: config.thinkingLevel,
 			tools: config.tools,
@@ -181,11 +230,11 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const promptPreview = this.config.assistantSystemPrompt
 			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
-			: "Pi Coding Agent default";
+			: formatDefaultPromptLabel(this.config.backendKind);
 		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
-			chalk.bold(`Pi ${this.channelLabel} channel ready`),
-			chalk.gray(`framework  ${this.config.backendKind === "ousia" ? "Ousia" : "Pi Coding Agent"}`),
+			chalk.bold(`${formatBackendLabel(this.config.backendKind)} ${this.channelLabel} channel ready`),
+			chalk.gray(`framework  ${formatBackendLabel(this.config.backendKind)}`),
 			chalk.gray(`mode       ${this.config.runMode}`),
 			chalk.gray(`home       ${this.config.homeDir}`),
 			chalk.gray(`layout     ${layoutRoots}`),
@@ -193,7 +242,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? "pi-coding-agent default"}`),
+			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? formatDefaultPromptLabel(this.config.backendKind)}`),
 			chalk.gray(`preview    ${promptPreview}`),
 			chalk.gray(`status     waiting for ${this.channelLabel} events...`),
 		];

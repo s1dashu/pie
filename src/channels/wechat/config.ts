@@ -35,8 +35,10 @@ export interface WechatChannelConfig {
 export interface WechatBotConfig {
 	homeDir: string;
 	backendKind: AgentBackendKind;
+	backendConfig?: Record<string, unknown>;
 	wechat: WechatChannelConfig;
 	model?: Model<any>;
+	modelId?: string;
 	modelLabel: string;
 	assistantSystemPrompt?: string;
 	assistantSystemPromptPath?: string;
@@ -97,9 +99,15 @@ function resolveTools(value: string | undefined): { tools: string[]; label: stri
 	return { tools: names, label: names.join(",") };
 }
 
-function resolveModel(env: RuntimeEnv): { model?: Model<any>; label: string } {
+function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?: Model<any>; modelId?: string; label: string } {
 	const provider = env.WECHAT_BOT_PROVIDER;
 	const modelId = env.WECHAT_BOT_MODEL;
+	if (backendKind === "codex") {
+		return {
+			modelId: modelId?.trim() || undefined,
+			label: modelId?.trim() || "codex default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -186,7 +194,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 
 	const accountId = env.WECHAT_ACCOUNT_ID?.trim() || "wechat";
 	const homeDir = resolveAgentHomeDir();
-	const { model, label: modelLabel } = resolveModel(env);
+	const { model, modelId, label: modelLabel } = resolveModel(env, backendKind);
 	const { tools, label: toolLabel } = resolveTools(env.WECHAT_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
 	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
@@ -195,6 +203,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 	return {
 		homeDir,
 		backendKind,
+		backendConfig: getStoredProfile(store)?.backend.config,
 		wechat: {
 			accountId,
 			token: env.WECHAT_BOT_TOKEN?.trim() || undefined,
@@ -203,6 +212,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 			routeTag: env.WECHAT_ROUTE_TAG?.trim() || undefined,
 		},
 		model,
+		modelId,
 		modelLabel,
 		assistantSystemPrompt: assistantSystemPrompt?.content,
 		assistantSystemPromptPath: assistantSystemPrompt?.path,

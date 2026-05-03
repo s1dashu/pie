@@ -6,6 +6,11 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import chalk from "chalk";
 import { AGENT_HOME_SUBDIRS } from "../../core/agent-home-layout.js";
 import {
+	createAgentSessionPool,
+	extractAssistantText,
+	type AgentConversationSessionPool,
+} from "../../agents/session-runtime.js";
+import {
 	getOwnerSessionBinding,
 	loadConfigStore,
 	saveConfigStore,
@@ -24,10 +29,33 @@ import { ConversationController } from "./conversation-controller.js";
 import { loadConfig, type FeishuBotConfig } from "./config.js";
 import { type LarkMessageEvent, LarkClient } from "./platform/index.js";
 import { sendPlainReply } from "./progress-reporter.js";
-import { extractAssistantText, SessionPool } from "./session.js";
 
 function truncate(text: string, max = 600): string {
 	return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function formatBackendLabel(kind: FeishuBotConfig["backendKind"]): string {
+	if (kind === "ousia") {
+		return "Ousia";
+	}
+	if (kind === "codex") {
+		return "Codex";
+	}
+	return "Pi Coding Agent";
+}
+
+function formatRuntimeTitle(kind: FeishuBotConfig["backendKind"]): string {
+	return `${formatBackendLabel(kind)} Feishu channel ready`;
+}
+
+function formatDefaultPromptLabel(kind: FeishuBotConfig["backendKind"]): string {
+	if (kind === "codex") {
+		return "Codex default";
+	}
+	if (kind === "ousia") {
+		return "Ousia default";
+	}
+	return "Pi Coding Agent default";
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -42,7 +70,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 	readonly identity;
 	private readonly dedup = new MessageDedup();
 	private readonly abortController = new AbortController();
-	private readonly sessionPool: SessionPool;
+	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, ConversationController>();
 	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
 	private currentBotOpenId: string | undefined;
@@ -55,9 +83,12 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 			channel: "feishu" as const,
 			homeDir: config.homeDir,
 		};
-		this.sessionPool = new SessionPool({
+		this.sessionPool = createAgentSessionPool({
+			backendKind: config.backendKind,
+			backendConfig: config.backendConfig,
 			homeDir: config.homeDir,
 			model: config.model,
+			modelId: config.modelId,
 			assistantSystemPrompt: config.assistantSystemPrompt,
 			thinkingLevel: config.thinkingLevel,
 			tools: config.tools,
@@ -113,11 +144,11 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const promptPreview = this.config.assistantSystemPrompt
 			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
-			: "Pi Coding Agent default";
+			: formatDefaultPromptLabel(this.config.backendKind);
 		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
-			chalk.bold("Pi Feishu bot ready"),
-			chalk.gray(`framework  ${this.config.backendKind === "ousia" ? "Ousia" : "Pi Coding Agent"}`),
+			chalk.bold(formatRuntimeTitle(this.config.backendKind)),
+			chalk.gray(`framework  ${formatBackendLabel(this.config.backendKind)}`),
 			chalk.gray(`mode       ${this.config.runMode}`),
 			chalk.gray(`home       ${this.config.homeDir}`),
 			chalk.gray(`layout     ${layoutRoots}`),
@@ -125,7 +156,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? "pi-coding-agent default"}`),
+			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? formatDefaultPromptLabel(this.config.backendKind)}`),
 			chalk.gray(`preview    ${promptPreview}`),
 			chalk.gray(`debug      ${this.config.debug ? "on" : "off"}`),
 			chalk.gray(`verbose    ${this.config.verboseLogs ? "on" : "off"}`),
