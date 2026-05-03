@@ -191,7 +191,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 	const { model, label: modelLabel } = resolveModel(env);
 	const { tools, label: toolLabel } = resolveTools(env.WECHAT_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
-	const assistantSystemPrompt = framework.injectPieSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const assistantSystemPrompt = framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const debug = parseBooleanFlag(env.WECHAT_BOT_DEBUG, false);
 
 	return {

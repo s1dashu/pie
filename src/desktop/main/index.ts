@@ -570,7 +570,7 @@ function resolveSystemPromptPath(profile: AgentConfigStore["profile"], env: Reco
 	if (kind === "pi") {
 		return {
 			label: "系统提示词",
-			description: "Pi Coding Agent 原版系统提示词由上游运行时提供，Pie 不注入自定义 system prompt。",
+			description: "Pi Coding Agent 原版系统提示词由上游运行时提供；只有 Ousia framework 会注入 Ousia system prompt。",
 			path: resolve(env.PI_CODING_AGENT_SYSTEM_PROMPT_FILE?.trim() || join(homedir(), ".pi", "system-prompt.md")),
 		};
 	}

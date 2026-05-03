@@ -3,7 +3,7 @@ import type { AgentBackendKind } from "./config-store.js";
 export interface BackendFrameworkDefinition {
 	kind: AgentBackendKind;
 	label: string;
-	injectPieSystemPrompt: boolean;
+	injectOusiaSystemPrompt: boolean;
 	startTaskEngine: boolean;
 	startTurnGateway: boolean;
 }
@@ -11,7 +11,7 @@ export interface BackendFrameworkDefinition {
 const PI_FRAMEWORK: BackendFrameworkDefinition = {
 	kind: "pi",
 	label: "Pi Coding Agent",
-	injectPieSystemPrompt: false,
+	injectOusiaSystemPrompt: false,
 	startTaskEngine: false,
 	startTurnGateway: false,
 };
@@ -19,7 +19,7 @@ const PI_FRAMEWORK: BackendFrameworkDefinition = {
 const OUSIA_FRAMEWORK: BackendFrameworkDefinition = {
 	kind: "ousia",
 	label: "Ousia",
-	injectPieSystemPrompt: true,
+	injectOusiaSystemPrompt: true,
 	startTaskEngine: true,
 	startTurnGateway: true,
 };

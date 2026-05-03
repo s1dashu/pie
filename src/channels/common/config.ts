@@ -185,7 +185,7 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	const framework = resolveBackendFramework(profile?.backend.kind);
 	const backendKind = framework.kind;
 	const assistantSystemPrompt =
-		framework.injectPieSystemPrompt ? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`) : undefined;
+		framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`) : undefined;
 	return {
 		homeDir: resolveAgentHomeDir(),
 		backendKind,

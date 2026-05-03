@@ -214,7 +214,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	const { model, label: modelLabel } = resolveModel(env);
 	const { tools, label: toolLabel } = resolveTools(env.FEISHU_BOT_TOOLS);
 	const framework = resolveBackendFramework(backendKind);
-	const assistantSystemPrompt = framework.injectPieSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const assistantSystemPrompt = framework.injectOusiaSystemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const runMode = resolveRunMode(env);
 	const debug = parseBooleanFlag(env.FEISHU_BOT_DEBUG, false);
 

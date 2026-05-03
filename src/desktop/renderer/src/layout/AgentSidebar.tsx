@@ -93,7 +93,7 @@ function AgentStatusMark({ status }: { status: AgentSummary["status"] }): JSX.El
 	if (status === "starting") {
 		return (
 			<span className="mr-1 grid h-5 w-5 shrink-0 place-items-center" aria-label="启动中">
-				<Spinner size={18} color="var(--lime-11)" />
+				<Spinner size={18} color="var(--slate-11)" />
 			</span>
 		);
 	}
