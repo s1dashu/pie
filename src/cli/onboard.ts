@@ -552,7 +552,7 @@ async function resolveOnboardProfileHome(
 				...profileIds.map((profileId) => ({
 					value: profileId,
 					label: msg.editExistingBot(profileId),
-					hint: registry.activeProfile === profileId ? "active" : undefined,
+					hint: registry.selectedProfile === profileId ? "selected" : undefined,
 				})),
 			],
 			initialValue: createValue,
@@ -987,8 +987,8 @@ export async function runOnboard(argv: string[]): Promise<void> {
 	if (profileId) {
 		registerProfileHome(profileId, {
 			displayName: profileId,
-			enabled: true,
-			active: true,
+			desiredState: "running",
+			selected: true,
 		});
 	}
 	Object.assign(process.env, savedEnv);

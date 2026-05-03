@@ -71,9 +71,17 @@ function normalizeDesktopSettings(raw: Partial<DesktopSettings>): DesktopSetting
 		openAtLogin: typeof raw.openAtLogin === "boolean" ? raw.openAtLogin : DEFAULT_SETTINGS.openAtLogin,
 		runtimeLogRetention: isLogRetention(raw.runtimeLogRetention) ? raw.runtimeLogRetention : DEFAULT_SETTINGS.runtimeLogRetention,
 		usageEventRetention: isLogRetention(raw.usageEventRetention) ? raw.usageEventRetention : DEFAULT_SETTINGS.usageEventRetention,
+		appearanceGrayHue: normalizeHue(raw.appearanceGrayHue),
 	};
 }
 
 function isLogRetention(value: unknown): value is DesktopLogRetention {
 	return typeof value === "string" && LOG_RETENTIONS.has(value as DesktopLogRetention);
+}
+
+function normalizeHue(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return undefined;
+	}
+	return Math.round(((value % 360) + 360) % 360);
 }

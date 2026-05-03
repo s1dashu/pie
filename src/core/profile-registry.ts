@@ -8,8 +8,10 @@ import {
 	resolveAgentHomeDir,
 } from "./agent-home.js";
 
+export type PieProfileDesiredState = "running" | "paused";
+
 export interface PieProfileRegistryEntry {
-	enabled: boolean;
+	desiredState: PieProfileDesiredState;
 	displayName: string;
 	home: string;
 	createdAt?: string;
@@ -18,7 +20,7 @@ export interface PieProfileRegistryEntry {
 
 export interface PieProfileRegistry {
 	version: 1;
-	activeProfile?: string;
+	selectedProfile?: string;
 	profiles: Record<string, PieProfileRegistryEntry>;
 }
 
@@ -58,14 +60,41 @@ function normalizeRegistry(raw: unknown): PieProfileRegistry {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
 		return DEFAULT_REGISTRY;
 	}
-	const value = raw as Partial<PieProfileRegistry>;
-	const profiles =
+	const value = raw as Partial<PieProfileRegistry> & Record<string, unknown>;
+	const rawProfiles =
 		value.profiles && typeof value.profiles === "object" && !Array.isArray(value.profiles)
 			? value.profiles
 			: {};
+	const profiles = Object.fromEntries(
+		Object.entries(rawProfiles).flatMap(([profileId, entry]) => {
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+				return [];
+			}
+			const typedEntry = entry as Partial<PieProfileRegistryEntry> & Record<string, unknown>;
+			const desiredState = typedEntry.desiredState === "running" || typedEntry.desiredState === "paused"
+				? typedEntry.desiredState
+				: typeof typedEntry.autoStart === "boolean"
+					? typedEntry.autoStart ? "running" : "paused"
+					: typeof typedEntry["enabled"] === "boolean"
+						? typedEntry["enabled"] ? "running" : "paused"
+						: "running";
+			return [[profileId, {
+				desiredState,
+				displayName: typeof typedEntry.displayName === "string" ? typedEntry.displayName : profileId,
+				home: typeof typedEntry.home === "string" ? typedEntry.home : `profiles/${profileId}`,
+				...(typeof typedEntry.createdAt === "string" ? { createdAt: typedEntry.createdAt } : {}),
+				...(typeof typedEntry.updatedAt === "string" ? { updatedAt: typedEntry.updatedAt } : {}),
+			} satisfies PieProfileRegistryEntry]];
+		}),
+	);
 	return {
 		version: 1,
-		activeProfile: typeof value.activeProfile === "string" ? value.activeProfile : undefined,
+		selectedProfile:
+			typeof value.selectedProfile === "string"
+				? value.selectedProfile
+				: typeof value["activeProfile"] === "string"
+					? value["activeProfile"]
+					: undefined,
 		profiles,
 	};
 }
@@ -131,22 +160,22 @@ export function registerProfileHome(
 	options?: {
 		rootDir?: string;
 		displayName?: string;
-		enabled?: boolean;
-		active?: boolean;
+		desiredState?: PieProfileDesiredState;
+		selected?: boolean;
 	},
 ): PieProfileRegistry {
 	const rootDir = options?.rootDir ?? getDefaultPieRootDir();
 	const registry = loadProfileRegistry(rootDir);
 	const now = new Date().toISOString();
 	registry.profiles[profileId] = {
-		enabled: options?.enabled ?? true,
+		desiredState: options?.desiredState ?? "running",
 		displayName: options?.displayName ?? profileId,
 		home: `profiles/${profileId}`,
 		createdAt: registry.profiles[profileId]?.createdAt ?? now,
 		updatedAt: now,
 	};
-	if (options?.active ?? !registry.activeProfile) {
-		registry.activeProfile = profileId;
+	if (options?.selected ?? !registry.selectedProfile) {
+		registry.selectedProfile = profileId;
 	}
 	saveProfileRegistry(registry, rootDir);
 	return registry;
@@ -157,8 +186,8 @@ export function updateProfileRegistryEntry(
 	updates: {
 		rootDir?: string;
 		displayName?: string;
-		enabled?: boolean;
-		active?: boolean;
+		desiredState?: PieProfileDesiredState;
+		selected?: boolean;
 	},
 ): PieProfileRegistry {
 	const rootDir = updates.rootDir ?? getDefaultPieRootDir();
@@ -170,11 +199,11 @@ export function updateProfileRegistryEntry(
 	registry.profiles[profileId] = {
 		...current,
 		...(updates.displayName !== undefined ? { displayName: updates.displayName } : {}),
-		...(updates.enabled !== undefined ? { enabled: updates.enabled } : {}),
+		...(updates.desiredState !== undefined ? { desiredState: updates.desiredState } : {}),
 		updatedAt: new Date().toISOString(),
 	};
-	if (updates.active) {
-		registry.activeProfile = profileId;
+	if (updates.selected) {
+		registry.selectedProfile = profileId;
 	}
 	saveProfileRegistry(registry, rootDir);
 	return registry;
@@ -183,20 +212,20 @@ export function updateProfileRegistryEntry(
 export function deleteProfileRegistryEntry(profileId: string, rootDir: string = getDefaultPieRootDir()): PieProfileRegistry {
 	const registry = loadProfileRegistry(rootDir);
 	delete registry.profiles[profileId];
-	if (registry.activeProfile === profileId) {
-		registry.activeProfile = Object.keys(registry.profiles).sort((left, right) => left.localeCompare(right))[0];
+	if (registry.selectedProfile === profileId) {
+		registry.selectedProfile = Object.keys(registry.profiles).sort((left, right) => left.localeCompare(right))[0];
 	}
 	saveProfileRegistry(registry, rootDir);
 	return registry;
 }
 
-export function resolveActiveProfileHomeDir(rootDir: string = getDefaultPieRootDir()): string | undefined {
+export function resolveSelectedProfileHomeDir(rootDir: string = getDefaultPieRootDir()): string | undefined {
 	const registry = loadProfileRegistry(rootDir);
-	const active = registry.activeProfile;
-	if (!active) {
+	const selected = registry.selectedProfile;
+	if (!selected) {
 		return undefined;
 	}
-	const entry = registry.profiles[active];
+	const entry = registry.profiles[selected];
 	if (!entry?.home) {
 		return undefined;
 	}
@@ -207,6 +236,6 @@ export function resolveDefaultRuntimeHomeDir(): string {
 	if (process.env.PIE_AGENT_HOME?.trim()) {
 		return resolveAgentHomeDir();
 	}
-	const activeHome = resolveActiveProfileHomeDir();
-	return activeHome ?? resolveAgentHomeDir();
+	const selectedHome = resolveSelectedProfileHomeDir();
+	return selectedHome ?? resolveAgentHomeDir();
 }

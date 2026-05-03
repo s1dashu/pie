@@ -2,12 +2,19 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	upsertAgentEnv,
 } from "../../core/agent-home.js";
+import {
+	checkCodexAppServerEnvironment,
+	codexCliAgentBackendAdapter,
+	loginCodexWithAppServer,
+} from "../../agents/adapters/codex-cli.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import {
 	DEFAULT_WECHAT_BASE_URL,
@@ -34,6 +41,8 @@ import type {
 	AgentCreationSession,
 	AgentOnboardEvent,
 	DesktopFeishuAppCredentials,
+	DesktopCodexDiagnostic,
+	DesktopCodexModelOption,
 	DesktopModelOption,
 	DesktopWechatCredentials,
 } from "../shared/types.js";
@@ -120,6 +129,78 @@ export function loadModelCatalog(homeDir: string): Pick<AgentCreationSession, "m
 	return { models, providers };
 }
 
+const FALLBACK_CODEX_MODELS: DesktopCodexModelOption[] = [
+	{
+		id: "gpt-5.5",
+		name: "GPT-5.5",
+		defaultThinkingLevel: "medium",
+		supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+	},
+	{
+		id: "gpt-5.3-codex",
+		name: "GPT-5.3 Codex",
+		defaultThinkingLevel: "medium",
+		supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+	},
+	{
+		id: "gpt-5.3-codex-spark",
+		name: "GPT-5.3 Codex Spark",
+		defaultThinkingLevel: "high",
+		supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+	},
+];
+
+export function loadCodexModelCatalog(): DesktopCodexModelOption[] {
+	const path = join(homedir(), ".codex", "models_cache.json");
+	if (!existsSync(path)) {
+		return FALLBACK_CODEX_MODELS;
+	}
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as { models?: unknown };
+		if (!Array.isArray(parsed.models)) {
+			return FALLBACK_CODEX_MODELS;
+		}
+		const models = parsed.models
+			.flatMap((value): DesktopCodexModelOption[] => {
+				if (!value || typeof value !== "object") {
+					return [];
+				}
+				const model = value as Record<string, unknown>;
+				const id = typeof model.slug === "string" ? model.slug.trim() : "";
+				if (!id) {
+					return [];
+				}
+				const supportedThinkingLevels = Array.isArray(model.supported_reasoning_levels)
+					? model.supported_reasoning_levels
+							.map((entry) =>
+								entry && typeof entry === "object" && typeof (entry as { effort?: unknown }).effort === "string"
+									? ((entry as { effort: string }).effort as DesktopCodexModelOption["supportedThinkingLevels"][number])
+									: undefined,
+							)
+							.filter((entry): entry is DesktopCodexModelOption["supportedThinkingLevels"][number] =>
+								entry === "low" || entry === "medium" || entry === "high" || entry === "xhigh",
+							)
+					: [];
+				return [{
+					id,
+					name: typeof model.display_name === "string" ? model.display_name : undefined,
+					defaultThinkingLevel:
+						model.default_reasoning_level === "low" ||
+						model.default_reasoning_level === "medium" ||
+						model.default_reasoning_level === "high" ||
+						model.default_reasoning_level === "xhigh"
+							? model.default_reasoning_level
+							: undefined,
+					supportedThinkingLevels: supportedThinkingLevels.length ? supportedThinkingLevels : ["low", "medium", "high", "xhigh"],
+					description: typeof model.description === "string" ? model.description : undefined,
+				}];
+			});
+		return models.length ? models : FALLBACK_CODEX_MODELS;
+	} catch {
+		return FALLBACK_CODEX_MODELS;
+	}
+}
+
 function mergeProxyIntoModelsJson(homeDir: string, providerId: string, providerConfig: unknown): void {
 	const path = join(homeDir, "models.json");
 	let root: ModelsJsonRoot = {};
@@ -158,7 +239,144 @@ export function beginAgentCreation(): AgentCreationSession {
 		home,
 		models,
 		providers,
+		codexModels: loadCodexModelCatalog(),
 	};
+}
+
+export async function checkCodexEnvironmentForDesktop(): Promise<DesktopCodexDiagnostic> {
+	try {
+		return await checkCodexAppServerEnvironment();
+	} catch (error) {
+		const homeDir = join(homedir(), ".pie", "diagnostics", "codex");
+		mkdirSync(homeDir, { recursive: true });
+		const diagnostic = await (codexCliAgentBackendAdapter.checkEnvironment?.({
+			backendKind: "codex",
+			backendConfig: {},
+			homeDir,
+			modelId: "gpt-5.5",
+			thinkingLevel: "medium",
+			tools: [],
+			debug: false,
+			verboseLogs: false,
+			resumeSessions: false,
+		}) ?? Promise.resolve({
+			installed: false,
+			authenticated: false,
+			error: "Codex adapter has no environment diagnostic.",
+			loginCommand: ["codex", "login"],
+		}));
+		return {
+			...diagnostic,
+			error: diagnostic.authenticated ? undefined : diagnostic.error || (error instanceof Error ? error.message : String(error)),
+		};
+	}
+}
+
+let codexLoginPromise: Promise<DesktopCodexDiagnostic> | undefined;
+
+function extractCodexLoginUrl(text: string): string | undefined {
+	const cleanText = text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+	return cleanText.match(/https:\/\/auth\.openai\.com\/oauth\/authorize\?[^\s"'<>]+/)?.[0];
+}
+
+export async function openCodexLoginForDesktop(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+	openUrl: (url: string) => Promise<unknown>,
+): Promise<DesktopCodexDiagnostic> {
+	if (codexLoginPromise) {
+		emit({ sessionId, type: "status", source: "codex-login", message: "Codex 登录流程已打开，请在浏览器中完成授权。" });
+		return codexLoginPromise;
+	}
+	codexLoginPromise = openCodexLoginWithAppServerForDesktop(sessionId, emit, openUrl)
+		.catch((error) => {
+			emit({
+				sessionId,
+				type: "status",
+				source: "codex-login",
+				message: `Codex app-server 登录不可用，已切换到 CLI 登录：${error instanceof Error ? error.message : String(error)}`,
+			});
+			return openCodexLoginWithCliForDesktop(sessionId, emit, openUrl);
+		})
+		.finally(() => {
+			codexLoginPromise = undefined;
+		});
+	return codexLoginPromise;
+}
+
+async function openCodexLoginWithAppServerForDesktop(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+	openUrl: (url: string) => Promise<unknown>,
+): Promise<DesktopCodexDiagnostic> {
+	emit({ sessionId, type: "status", source: "codex-login", message: "正在通过 Codex app-server 准备登录..." });
+	return loginCodexWithAppServer({
+		onAuthUrl: async (url) => {
+			emit({ sessionId, type: "status", source: "codex-login", message: "浏览器已打开，请完成 OpenAI 授权。", url });
+			await openUrl(url);
+		},
+		onCompleted: (completion) => {
+			emit({
+				sessionId,
+				type: completion.success ? "done" : "error",
+				source: "codex-login",
+				message: completion.success ? "Codex 已登录。" : completion.error || "Codex 登录未完成。",
+			});
+		},
+	});
+}
+
+function openCodexLoginWithCliForDesktop(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+	openUrl: (url: string) => Promise<unknown>,
+): Promise<DesktopCodexDiagnostic> {
+	const shell = process.env.SHELL?.trim() || "/bin/zsh";
+	return new Promise<DesktopCodexDiagnostic>((resolvePromise, reject) => {
+		let output = "";
+		let openedUrl = false;
+		emit({ sessionId, type: "status", source: "codex-login", message: "正在打开 Codex 登录..." });
+		const child = spawn(shell, ["-lc", "codex login"], {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
+		});
+		const handleOutput = (chunk: Buffer) => {
+			const text = chunk.toString("utf8");
+			output += text;
+			const url = extractCodexLoginUrl(output);
+			if (url && !openedUrl) {
+				openedUrl = true;
+				emit({ sessionId, type: "status", source: "codex-login", message: "浏览器已打开，请完成 OpenAI 授权。", url });
+				void openUrl(url).catch((error) => {
+					emit({
+						sessionId,
+						type: "error",
+						source: "codex-login",
+						message: `无法打开浏览器：${error instanceof Error ? error.message : String(error)}`,
+					});
+				});
+			}
+		};
+		child.stdout.on("data", handleOutput);
+		child.stderr.on("data", handleOutput);
+		child.on("error", (error) => {
+			reject(error);
+		});
+		child.on("close", (code) => {
+			void checkCodexEnvironmentForDesktop()
+				.then((diagnostic) => {
+					if (diagnostic.authenticated) {
+						emit({ sessionId, type: "done", source: "codex-login", message: "Codex 已登录。" });
+						resolvePromise(diagnostic);
+						return;
+					}
+					const message = output.trim() || diagnostic.error || `codex login exited with code ${String(code)}`;
+					emit({ sessionId, type: "error", source: "codex-login", message });
+					resolvePromise(diagnostic);
+				})
+				.catch(reject);
+		});
+	});
 }
 
 export async function createFeishuAppForSession(
@@ -229,7 +447,6 @@ export async function createFeishuAppForSession(
 const WECHAT_BOT_TYPE = "3";
 const WECHAT_LOGIN_TIMEOUT_MS = 480_000;
 const WECHAT_QR_STATUS_TIMEOUT_MS = 35_000;
-const MAX_WECHAT_QR_REFRESH_COUNT = 3;
 
 export async function createWechatLoginForSession(
 	sessionId: string,
@@ -237,18 +454,18 @@ export async function createWechatLoginForSession(
 ): Promise<DesktopWechatCredentials> {
 	const homeDir = getProfileHomeDir(sessionId);
 	try {
-		emit({ sessionId, type: "status", message: "正在准备微信扫码授权..." });
+		emit({ sessionId, type: "status", source: "wechat", message: "正在准备微信扫码授权..." });
 		let qr = await fetchLoginQr({
 			baseUrl: DEFAULT_WECHAT_BASE_URL,
 			botType: WECHAT_BOT_TYPE,
 		});
-		let refreshCount = 1;
 		let scanned = false;
 		const deadline = Date.now() + WECHAT_LOGIN_TIMEOUT_MS;
 		const emitQr = async (message: string) => {
 			emit({
 				sessionId,
 				type: "qr",
+				source: "wechat",
 				message,
 				url: qr.qrcode_img_content,
 				qr: await generateQrText(qr.qrcode_img_content),
@@ -266,28 +483,17 @@ export async function createWechatLoginForSession(
 			}
 			if (status.status === "scaned") {
 				if (!scanned) {
-					emit({ sessionId, type: "status", message: "已扫码，请在微信里继续确认..." });
+					emit({ sessionId, type: "status", source: "wechat", message: "已扫码，请在微信里继续确认..." });
 					scanned = true;
 				}
 				continue;
 			}
 			if (status.status === "scaned_but_redirect") {
-				emit({ sessionId, type: "status", message: "微信扫码已跳转，请继续等待确认..." });
+				emit({ sessionId, type: "status", source: "wechat", message: "微信扫码已跳转，请继续等待确认..." });
 				continue;
 			}
 			if (status.status === "expired") {
-				refreshCount += 1;
-				if (refreshCount > MAX_WECHAT_QR_REFRESH_COUNT) {
-					throw new Error("微信登录二维码多次过期，请重新开始创建。");
-				}
-				emit({ sessionId, type: "status", message: `微信二维码已过期，正在刷新 (${refreshCount}/${MAX_WECHAT_QR_REFRESH_COUNT})...` });
-				qr = await fetchLoginQr({
-					baseUrl: DEFAULT_WECHAT_BASE_URL,
-					botType: WECHAT_BOT_TYPE,
-				});
-				scanned = false;
-				await emitQr("请使用新的微信二维码扫码连接 bot");
-				continue;
+				throw new Error("微信二维码已失效，请刷新二维码。");
 			}
 			if (status.status === "confirmed") {
 				const token = status.bot_token?.trim();
@@ -306,14 +512,14 @@ export async function createWechatLoginForSession(
 					WECHAT_BASE_URL: wechat.baseUrl,
 					...(wechat.userId ? { WECHAT_USER_ID: wechat.userId } : {}),
 				}, homeDir);
-				emit({ sessionId, type: "done", message: "微信已连接", wechat });
+				emit({ sessionId, type: "done", source: "wechat", message: "微信已连接", wechat });
 				return wechat;
 			}
 		}
 		throw new Error("微信登录超时，请重新开始创建。");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		emit({ sessionId, type: "error", message });
+		emit({ sessionId, type: "error", source: "wechat", message });
 		throw error;
 	}
 }
@@ -356,8 +562,13 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const ex = getStoredProfile(store);
 	const exModel = getProfileModel(ex);
 
-	const provider = draft.provider.trim();
-	const model = draft.model.trim();
+	const codexModels = draft.framework === "codex" ? loadCodexModelCatalog() : [];
+	const provider = draft.framework === "codex" ? "codex-cli" : draft.provider.trim();
+	const requestedModel = draft.model.trim();
+	const model =
+		draft.framework === "codex"
+			? codexModels.find((item) => item.id === requestedModel)?.id ?? codexModels[0]?.id ?? "gpt-5.5"
+			: requestedModel;
 	const apiKey = draft.apiKey?.trim();
 	if (provider === "pie-openai-proxy") {
 		mergeProxyIntoModelsJson(homeDir, provider, {
@@ -375,6 +586,14 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const profile = createAgentProfile({
 		backend: {
 			kind: draft.framework,
+			...(draft.framework === "codex"
+				? {
+						config: {
+							sandboxMode: draft.codexSandboxMode ?? "danger-full-access",
+							webSearchMode: draft.codexWebSearchMode ?? "cached",
+						},
+					}
+				: {}),
 			model: {
 				provider,
 				model,
@@ -459,7 +678,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	upsertAgentEnv(savedEnv, homeDir);
 	registerProfileHome(profileId, {
 		displayName: draft.feishu?.appName?.trim() || draft.telegram?.botUsername?.trim() || draft.name?.trim() || profileId,
-		enabled: false,
-		active: true,
+		desiredState: "paused",
+		selected: true,
 	});
 }

@@ -21,6 +21,7 @@ export interface AgentProcessManagerOptions {
 	getAppRoot(): string;
 	getNodeExecPath(): string;
 	getAgentHome(agentId: string): Promise<string>;
+	getAgentName?(agentId: string): Promise<string | undefined> | string | undefined;
 	getRuntimeEnvironment(agentId: string): Promise<AgentRuntimeEnvironment>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
 	recordLogEntry?(entry: AgentLogEntry): Promise<void> | void;
@@ -28,6 +29,12 @@ export interface AgentProcessManagerOptions {
 
 const MAX_AGENT_LOGS = 1000;
 const AGENT_READY_LOG_MARKERS = [
+	"Feishu channel ready",
+	"Feishu bot ready",
+	"Wechat channel ready",
+	"Slack channel ready",
+	"Discord channel ready",
+	"Telegram channel ready",
 	"Pi Feishu bot ready",
 	"Pi Wechat channel ready",
 	"Pi Slack channel ready",
@@ -36,6 +43,9 @@ const AGENT_READY_LOG_MARKERS = [
 ];
 const AGENT_START_TIMEOUT_MS = 30_000;
 const AGENT_STOP_FORCE_KILL_MS = 1500;
+const WECHAT_SESSION_EXPIRED_MARKER = "微信会话已失效（errcode -14）";
+const WECHAT_SESSION_STILL_EXPIRED_MARKER = "微信会话仍然失效（errcode -14）";
+const WECHAT_SESSION_RECOVERED_MARKER = "微信会话已恢复";
 
 function signalAgentProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 	if (child.pid && process.platform !== "win32") {
@@ -167,7 +177,6 @@ export class AgentProcessManager {
 		child.stdout?.on("data", (chunk) => {
 			const text = String(chunk);
 			this.appendAgentLogChunk(agentId, "stdout", text);
-			console.log(`[agent:${agentId}] ${text.trimEnd()}`);
 		});
 		child.stderr?.on("data", (chunk) => {
 			const text = String(chunk);
@@ -212,6 +221,7 @@ export class AgentProcessManager {
 			lifecycle.mark("running");
 			this.persistRuntimeState(agentId, lifecycle.snapshot);
 			this.recordRuntimeEvent(agentId, "start");
+			console.log(`[agent:${agentId}] ${await this.getAgentLabel(agentId)} started`);
 		} catch (error) {
 			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
@@ -293,10 +303,16 @@ export class AgentProcessManager {
 		throw new Error("找不到 bot runtime 入口；请先运行 npm install 或 npm run build。");
 	}
 
+	private async getAgentLabel(agentId: string): Promise<string> {
+		const name = (await this.options.getAgentName?.(agentId))?.trim();
+		return name && name !== agentId ? `${name} (${agentId})` : agentId;
+	}
+
 	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string): void {
 		if (!text) {
 			return;
 		}
+		this.updateLifecycleFromLog(agentId, text);
 		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => text.includes(marker))) {
 			this.markAgentReady(agentId);
 		}
@@ -321,7 +337,7 @@ export class AgentProcessManager {
 	private appendAgentReplyDelta(agentId: string, delta: string): void {
 		const activeEntry = this.activeAgentReplyLogs.get(agentId);
 		if (activeEntry) {
-			activeEntry.text += delta;
+			activeEntry.text += `\n${delta}`;
 			this.emitAgentLog({ ...activeEntry, updated: true });
 			return;
 		}
@@ -365,6 +381,22 @@ export class AgentProcessManager {
 		Promise.resolve(this.options.recordRuntimeEvent(agentId, event, reason)).catch((error) => {
 			console.error(`[agent:${agentId}] failed to persist runtime event:`, error);
 		});
+	}
+
+	private updateLifecycleFromLog(agentId: string, text: string): void {
+		const lifecycle = this.agentLifecycles.get(agentId);
+		if (!lifecycle) {
+			return;
+		}
+		if (text.includes(WECHAT_SESSION_EXPIRED_MARKER) || text.includes(WECHAT_SESSION_STILL_EXPIRED_MARKER)) {
+			lifecycle.mark("degraded", "wechat-session-expired");
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
+			return;
+		}
+		if (text.includes(WECHAT_SESSION_RECOVERED_MARKER) && lifecycle.snapshot.state === "degraded") {
+			lifecycle.mark("running", "wechat-session-recovered");
+			this.persistRuntimeState(agentId, lifecycle.snapshot);
+		}
 	}
 
 	private persistRuntimeState(agentId: string, lifecycle: RuntimeEnvironmentLifecycleSnapshot): void {

@@ -43,6 +43,7 @@ import type {
 	AgentAvatarUpload,
 	AgentDeleteEvent,
 	AgentDetails,
+	AgentDesiredState,
 	AgentDraft,
 	AgentLogEntry,
 	AgentOnboardEvent,
@@ -51,6 +52,7 @@ import type {
 	AgentSystemPromptSource,
 	AgentSummary,
 	BotAvatarOption,
+	DesktopCodexDiagnostic,
 	DesktopModelCatalog,
 	DesktopFeishuAppCredentials,
 	DesktopWechatCredentials,
@@ -61,17 +63,21 @@ import type {
 } from "../shared/types.js";
 import {
 	beginAgentCreation as beginCreationSession,
+	checkCodexEnvironmentForDesktop,
 	completeAgentCreation as completeCreationSession,
 	createFeishuAppForSession,
 	createWechatLoginForSession,
 	getProviderCredentialEnv,
+	loadCodexModelCatalog,
 	loadModelCatalog,
 	loadModelOptions,
+	openCodexLoginForDesktop,
 } from "./onboard-service.js";
 import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/framework.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
 import { createRuntimeEnvironment } from "../../runtime/environment.js";
+import { resolveBackendFramework } from "../../core/backend-framework.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
 const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
@@ -573,27 +579,40 @@ function describeSkillSource(source: Omit<AgentSkillSource, "exists" | "skillCou
 	};
 }
 
-function resolveSystemPromptPath(profile: AgentConfigStore["profile"], env: Record<string, string>): { label: string; description: string; path: string } {
-	const kind = String(profile?.backend.kind ?? "pi");
-	if (kind === "ousia") {
+function getSystemPromptEnvKeys(profile: AgentConfigStore["profile"]): string[] {
+	const channelKeys = (profile?.channels ?? []).map((channel) => `${channel.kind.toUpperCase()}_BOT_SYSTEM_PROMPT_FILE`);
+	return [...channelKeys, "SYSTEM_PROMPT_FILE"];
+}
+
+function getConfiguredSystemPromptPath(profile: AgentConfigStore["profile"], env: Record<string, string>): string | undefined {
+	for (const key of getSystemPromptEnvKeys(profile)) {
+		const value = env[key]?.trim();
+		if (value) {
+			return resolve(value);
+		}
+	}
+	return undefined;
+}
+
+function resolveSystemPromptSource(profile: AgentConfigStore["profile"], env: Record<string, string>): AgentSystemPromptSource {
+	const framework = resolveBackendFramework(profile?.backend.kind);
+	if (!framework.systemPrompt) {
 		return {
 			label: "系统提示词",
-			description: "Ousia runtime 当前注入到 Agent session 的系统提示词。",
-			path: resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE?.trim() || getDefaultOusiaSystemPromptPath()),
+			description: `${framework.label} 的系统提示词由 backend runtime 内置或自行管理，Pie 当前没有注入可编辑的系统提示词文件。`,
+			path: "",
+			exists: true,
+			content: `${framework.label} 使用 backend runtime 提供的系统提示词；这里没有需要打开的本地提示词文件。`,
 		};
 	}
-	if (kind === "pi") {
-		return {
-			label: "系统提示词",
-			description: "Pi Coding Agent 原版系统提示词由上游运行时提供；只有 Ousia framework 会注入 Ousia system prompt。",
-			path: resolve(env.PI_CODING_AGENT_SYSTEM_PROMPT_FILE?.trim() || join(homedir(), ".pi", "system-prompt.md")),
-		};
-	}
-	return {
+
+	const configuredPath = getConfiguredSystemPromptPath(profile, env);
+	const path = configuredPath ?? framework.systemPrompt.defaultPath;
+	return describeSystemPromptSource({
 		label: "系统提示词",
-		description: `${kind} runtime 的系统提示词路径。`,
-		path: resolve(env.SYSTEM_PROMPT_FILE?.trim() || join(homedir(), `.${kind}`, "system-prompt.md")),
-	};
+		description: `${framework.systemPrompt.label} 当前注入到 Agent session。`,
+		path,
+	});
 }
 
 function describeSystemPromptSource(source: { label: string; description: string; path: string }): AgentSystemPromptSource {
@@ -610,6 +629,9 @@ const agentProcesses = new AgentProcessManager({
 	getNodeExecPath,
 	async getAgentHome(agentId) {
 		return (await getAgent(agentId)).home;
+	},
+	async getAgentName(agentId) {
+		return (await getAgent(agentId)).name;
 	},
 	async getRuntimeEnvironment(agentId) {
 		const agent = await getAgent(agentId);
@@ -630,14 +652,15 @@ const agentProcesses = new AgentProcessManager({
 	},
 });
 
-function statusForProfile(id: string, enabled: boolean): AgentSummary["status"] {
+function statusForProfile(id: string, desiredState: AgentDesiredState): AgentSummary["status"] {
+	const desiredRunning = desiredState === "running";
 	if (agentProcesses.isReady(id)) {
 		return "running";
 	}
 	if (agentProcesses.isRunning(id)) {
 		return "starting";
 	}
-	if (enabled) {
+	if (desiredRunning) {
 		const agent = getAgentSummaryHome(id);
 		if (agent && hasLiveRuntimeProcess(agent)) {
 			return "running";
@@ -646,7 +669,7 @@ function statusForProfile(id: string, enabled: boolean): AgentSummary["status"] 
 			return "starting";
 		}
 	}
-	return enabled ? "paused" : "terminated";
+	return desiredRunning ? "paused" : "terminated";
 }
 
 function getAgentSummaryHome(id: string): string | undefined {
@@ -663,7 +686,11 @@ function hasLiveRuntimeProcess(home: string): boolean {
 	if (resolve(record.agentHome) !== resolve(home) || !isPidRunning(record.pid)) {
 		clearRuntimeProcessRecord(home);
 		const persisted = readRuntimeStateRecord(home);
-		if (persisted?.lifecycle.state === "running" || persisted?.lifecycle.state === "starting") {
+		if (
+			persisted?.lifecycle.state === "running" ||
+			persisted?.lifecycle.state === "starting" ||
+			persisted?.lifecycle.state === "degraded"
+		) {
 			writeRuntimeStateRecord(home, {
 				homeDir: persisted.homeDir,
 				workDir: persisted.workDir,
@@ -679,14 +706,19 @@ function hasLiveRuntimeProcess(home: string): boolean {
 	return true;
 }
 
-function runtimeLifecycleForProfile(id: string, home: string, enabled: boolean): RuntimeEnvironmentSummary["lifecycle"] {
-	const active = agentProcesses.getLifecycleSnapshot(id);
-	if (active) {
-		return active;
+function runtimeLifecycleForProfile(id: string, home: string, desiredState: AgentDesiredState): RuntimeEnvironmentSummary["lifecycle"] {
+	const activeLifecycle = agentProcesses.getLifecycleSnapshot(id);
+	if (activeLifecycle) {
+		return activeLifecycle;
 	}
 	const persisted = readRuntimeStateRecord(home);
 	if (persisted) {
-		if ((persisted.lifecycle.state === "running" || persisted.lifecycle.state === "starting") && !hasLiveRuntimeProcess(home)) {
+		if (
+			(persisted.lifecycle.state === "running" ||
+				persisted.lifecycle.state === "starting" ||
+				persisted.lifecycle.state === "degraded") &&
+			!hasLiveRuntimeProcess(home)
+		) {
 			return {
 				state: "stopped",
 				updatedAt: new Date().toISOString(),
@@ -695,10 +727,11 @@ function runtimeLifecycleForProfile(id: string, home: string, enabled: boolean):
 		}
 		return persisted.lifecycle;
 	}
+	const desiredRunning = desiredState === "running";
 	return {
-		state: enabled ? "stopped" : "stopped",
+		state: "stopped",
 		updatedAt: new Date().toISOString(),
-		...(enabled ? { reason: "paused" } : { reason: "not-started" }),
+		reason: desiredRunning ? "not-running" : "paused",
 	};
 }
 
@@ -735,7 +768,7 @@ async function listAgents(): Promise<AgentSummary[]> {
 		const config = readProfileConfig(home);
 		const profile = config?.profile;
 		const runtimeEnvironment = createRuntimeEnvironment({ homeDir: home, profile });
-		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, home, entry.enabled);
+		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, home, entry.desiredState);
 		const model = getProfileModel(profile);
 		const channel = getPrimaryFeishuChannel(profile);
 		const channelKinds = profile?.channels
@@ -750,11 +783,11 @@ async function listAgents(): Promise<AgentSummary[]> {
 		return {
 			id,
 			name: entry.displayName || id,
-			status: statusForProfile(id, entry.enabled),
+			status: statusForProfile(id, entry.desiredState),
 			avatarSeed: id,
 			avatarUrl: readProfileAvatarUrl(home),
-			enabled: entry.enabled,
-			active: registry.activeProfile === id,
+			desiredState: entry.desiredState,
+			selected: registry.selectedProfile === id,
 			home,
 			runtimeEnvironment,
 			createdAt: entry.createdAt,
@@ -801,12 +834,12 @@ async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<Desktop
 	return settings;
 }
 
-async function restoreEnabledAgents(): Promise<void> {
+async function restoreDesiredRunningAgents(): Promise<void> {
 	if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
 		return;
 	}
 	const agents = await listAgents();
-	const candidates = agents.filter((agent) => agent.enabled && !hasLiveRuntimeProcess(agent.home));
+	const candidates = agents.filter((agent) => agent.desiredState === "running" && !hasLiveRuntimeProcess(agent.home));
 	for (const agent of candidates) {
 		restoringAgentIds.add(agent.id);
 	}
@@ -930,7 +963,19 @@ async function getAgentResources(id: string): Promise<AgentResourceStats> {
 
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
-	return loadModelCatalog(agent.home);
+	const catalog = loadModelCatalog(agent.home);
+	if (agent.model?.provider !== "codex-cli") {
+		return catalog;
+	}
+	const codexModels = loadCodexModelCatalog().map((model) => ({
+		id: model.id,
+		name: model.name,
+		provider: "codex-cli",
+	}));
+	return {
+		models: [...codexModels, ...catalog.models.filter((model) => model.provider !== "codex-cli")],
+		providers: [...new Set(["codex-cli", ...catalog.providers])].sort((left, right) => left.localeCompare(right)),
+	};
 }
 
 async function findReusableProviderCredential(provider: string, excludeAgentId?: string): Promise<ProviderCredentialReuse | undefined> {
@@ -992,7 +1037,7 @@ async function getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource
 	const agent = await getAgent(id);
 	const profile = readProfileConfig(agent.home)?.profile;
 	const env = readProfileEnv(agent.home);
-	return describeSystemPromptSource(resolveSystemPromptPath(profile, env));
+	return resolveSystemPromptSource(profile, env);
 }
 
 async function openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]> {
@@ -1008,8 +1053,25 @@ async function openAgentSkillSource(id: string, sourceId: string): Promise<Agent
 	return getAgentSkillSources(id);
 }
 
+async function openAgentSkillFolder(id: string, sourceId: string, skillName: string): Promise<void> {
+	const source = (await getAgentSkillSources(id)).find((item) => item.id === sourceId);
+	if (!source) {
+		throw new Error(`Unknown skills source: ${sourceId}`);
+	}
+	if (!source.skills.includes(skillName)) {
+		throw new Error(`Unknown skill: ${skillName}`);
+	}
+	const result = await shell.openPath(join(source.path, skillName));
+	if (result) {
+		throw new Error(result);
+	}
+}
+
 async function openAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource> {
 	const source = await getAgentSystemPrompt(id);
+	if (!source.path) {
+		return source;
+	}
 	if (source.exists) {
 		shell.showItemInFolder(source.path);
 		return getAgentSystemPrompt(id);
@@ -1037,6 +1099,34 @@ async function validateFeishuCredentials(opts: {
 	}
 }
 
+async function syncFeishuAppProfile(id: string): Promise<AgentDetails> {
+	const agent = await getAgent(id);
+	const current = readProfileConfig(agent.home);
+	const channel = getPrimaryFeishuChannel(current?.profile);
+	const appSecret = readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
+	if (!channel?.appId.trim() || !appSecret.trim()) {
+		throw new Error("飞书 App ID 和 App Secret 必填");
+	}
+	const result = await LarkClient.fromCredentials({
+		accountId: `desktop-sync-${id}-${Date.now()}`,
+		appId: channel.appId,
+		appSecret,
+		brand: channel.brand ?? "feishu",
+	}).probe();
+	if (!result.ok) {
+		throw new Error(`飞书应用信息获取失败：${result.error ?? "无法获取 bot 信息"}`);
+	}
+	if (result.botName?.trim()) {
+		updateProfileRegistryEntry(id, {
+			displayName: result.botName.trim(),
+		});
+	}
+	if (result.botAvatarUrl?.trim()) {
+		await downloadRemoteAvatarToProfile(result.botAvatarUrl, agent.home);
+	}
+	return getAgent(id);
+}
+
 function validateModelDraft(draft: AgentDraft): void {
 	const hasModelUpdate = draft.provider !== undefined || draft.model !== undefined || draft.thinkingLevel !== undefined;
 	if (!hasModelUpdate) {
@@ -1050,6 +1140,10 @@ function validateModelDraft(draft: AgentDraft): void {
 	}
 }
 
+function hasNonEmptyDraftValue(...values: Array<string | undefined>): boolean {
+	return values.some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
 async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails> {
 	const agent = await getAgent(id);
 	const current = readProfileConfig(agent.home) ?? { version: 3 };
@@ -1060,23 +1154,45 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	const discordChannel = getPrimaryDiscordChannel(currentProfile);
 	const telegramChannel = getPrimaryTelegramChannel(currentProfile);
 	const model = getProfileModel(currentProfile) ?? {};
-	const hasFeishuUpdate = draft.appId !== undefined || draft.appSecret !== undefined || draft.brand !== undefined;
-	const hasWechatUpdate =
+	const hasFeishuDraft = draft.appId !== undefined || draft.appSecret !== undefined || draft.brand !== undefined;
+	const hasWechatDraft =
 		draft.wechatAccountId !== undefined ||
 		draft.wechatBaseUrl !== undefined ||
 		draft.wechatBotToken !== undefined;
-	const hasSlackUpdate =
+	const hasSlackDraft =
 		draft.slackBotToken !== undefined ||
 		draft.slackAppToken !== undefined ||
 		draft.slackSigningSecret !== undefined ||
 		draft.slackTeamId !== undefined ||
 		draft.slackAppId !== undefined ||
 		draft.slackBotUserId !== undefined;
-	const hasDiscordUpdate =
+	const hasDiscordDraft =
 		draft.discordBotToken !== undefined ||
 		draft.discordApplicationId !== undefined ||
 		draft.discordGuildId !== undefined;
-	const hasTelegramUpdate = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
+	const hasTelegramDraft = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
+	const hasFeishuUpdate = feishuChannel
+		? hasFeishuDraft
+		: hasNonEmptyDraftValue(draft.appId, draft.appSecret);
+	const hasWechatUpdate = wechatChannel
+		? hasWechatDraft
+		: hasNonEmptyDraftValue(draft.wechatAccountId, draft.wechatBotToken);
+	const hasSlackUpdate = slackChannel
+		? hasSlackDraft
+		: hasNonEmptyDraftValue(
+				draft.slackBotToken,
+				draft.slackAppToken,
+				draft.slackSigningSecret,
+				draft.slackTeamId,
+				draft.slackAppId,
+				draft.slackBotUserId,
+			);
+	const hasDiscordUpdate = discordChannel
+		? hasDiscordDraft
+		: hasNonEmptyDraftValue(draft.discordBotToken, draft.discordApplicationId, draft.discordGuildId);
+	const hasTelegramUpdate = telegramChannel
+		? hasTelegramDraft
+		: hasNonEmptyDraftValue(draft.telegramBotToken, draft.telegramBotUsername);
 	const nextAppId = draft.appId ?? feishuChannel?.appId ?? "";
 	const nextBrand = draft.brand ?? feishuChannel?.brand ?? "feishu";
 	const nextAppSecret = draft.appSecret ?? readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
@@ -1205,16 +1321,34 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	if (draft.name && draft.name !== agent.name) {
 		registerProfileHome(id, {
 			displayName: draft.name,
-			enabled: agent.enabled,
-			active: agent.active,
+			desiredState: agent.desiredState,
+			selected: agent.selected,
 		});
 	}
 	return getAgent(id);
 }
 
+async function reauthorizeWechatAgent(id: string): Promise<AgentDetails> {
+	const agent = await getAgent(id);
+	if (!agent.channelKinds?.includes("wechat") && !agent.wechat) {
+		throw new Error("当前 Agent 未配置微信渠道");
+	}
+	const shouldRestart = agent.status === "running" || agent.status === "starting";
+	const wechat = await createWechatLoginForSession(id, emitOnboardEvent);
+	await updateAgent(id, {
+		wechatAccountId: wechat.accountId,
+		wechatBaseUrl: wechat.baseUrl,
+	});
+	if (!shouldRestart) {
+		return getAgent(id);
+	}
+	await stopRunningAgent(id);
+	return startAgent(id);
+}
+
 async function startAgent(id: string): Promise<AgentDetails> {
 	if (agentProcesses.isRunning(id)) {
-		updateProfileRegistryEntry(id, { enabled: true, active: true });
+		updateProfileRegistryEntry(id, { desiredState: "running", selected: true });
 		return getAgent(id);
 	}
 	const existing = await getAgent(id);
@@ -1229,11 +1363,11 @@ async function startAgent(id: string): Promise<AgentDetails> {
 			},
 			...(readRuntimeProcessRecord(existing.home) ? { process: readRuntimeProcessRecord(existing.home)! } : {}),
 		});
-		updateProfileRegistryEntry(id, { enabled: true, active: true });
+		updateProfileRegistryEntry(id, { desiredState: "running", selected: true });
 		return getAgent(id);
 	}
 	await agentProcesses.start(id);
-	updateProfileRegistryEntry(id, { enabled: true, active: true });
+	updateProfileRegistryEntry(id, { desiredState: "running", selected: true });
 	return getAgent(id);
 }
 
@@ -1281,11 +1415,11 @@ async function stopRunningAgent(id: string): Promise<void> {
 				reason: "paused",
 			},
 		});
-		updateProfileRegistryEntry(id, { enabled: false });
+		updateProfileRegistryEntry(id, { desiredState: "paused" });
 		return;
 	}
 	await agentProcesses.stop(id, "paused");
-	updateProfileRegistryEntry(id, { enabled: false });
+	updateProfileRegistryEntry(id, { desiredState: "paused" });
 }
 
 function emitDeleteEvent(event: AgentDeleteEvent): void {
@@ -1465,6 +1599,22 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:codex-diagnostic", async (): Promise<DesktopCodexDiagnostic> => {
+		try {
+			return await checkCodexEnvironmentForDesktop();
+		} catch (error) {
+			console.error("[ipc] agents:codex-diagnostic failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:codex-login", async (_event, sessionId: string): Promise<DesktopCodexDiagnostic> => {
+		try {
+			return await openCodexLoginForDesktop(sessionId, emitOnboardEvent, (url) => shell.openExternal(url));
+		} catch (error) {
+			console.error("[ipc] agents:codex-login failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:create-feishu-app", async (_event, sessionId: string): Promise<DesktopFeishuAppCredentials> => {
 		try {
 			return await createFeishuAppForSession(sessionId, emitOnboardEvent);
@@ -1478,6 +1628,22 @@ app.whenReady().then(() => {
 			return await createWechatLoginForSession(sessionId, emitOnboardEvent);
 		} catch (error) {
 			console.error("[ipc] agents:create-wechat-login failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:sync-feishu-app-profile", async (_event, id: string): Promise<AgentDetails> => {
+		try {
+			return await withAgentOperation(id, () => syncFeishuAppProfile(id));
+		} catch (error) {
+			console.error("[ipc] agents:sync-feishu-app-profile failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:reauthorize-wechat", async (_event, id: string): Promise<AgentDetails> => {
+		try {
+			return await withAgentOperation(id, () => reauthorizeWechatAgent(id));
+		} catch (error) {
+			console.error("[ipc] agents:reauthorize-wechat failed:", error);
 			throw error;
 		}
 	});
@@ -1616,6 +1782,14 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:skill-folder-open", async (_event, id: string, sourceId: string, skillName: string) => {
+		try {
+			return await openAgentSkillFolder(id, sourceId, skillName);
+		} catch (error) {
+			console.error("[ipc] agents:skill-folder-open failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:system-prompt", async (_event, id: string) => {
 		try {
 			return await getAgentSystemPrompt(id);
@@ -1636,8 +1810,8 @@ app.whenReady().then(() => {
 		return getAgentLogs(id);
 	});
 	createWindow();
-	void restoreEnabledAgents().catch((error) => {
-		console.error("[desktop] failed to restore enabled agents:", error);
+	void restoreDesiredRunningAgents().catch((error) => {
+		console.error("[desktop] failed to restore auto-start agents:", error);
 	});
 });
 

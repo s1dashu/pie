@@ -1,8 +1,10 @@
 export type AgentStatus = "running" | "starting" | "paused" | "terminated";
+export type AgentDesiredState = "running" | "paused";
 export type RuntimeEnvironmentLifecycleState =
 	| "created"
 	| "starting"
 	| "running"
+	| "degraded"
 	| "stopping"
 	| "stopped"
 	| "failed";
@@ -23,10 +25,10 @@ export interface AgentSummary {
 	id: string;
 	name: string;
 	status: AgentStatus;
+	desiredState: AgentDesiredState;
 	avatarSeed: string;
 	avatarUrl?: string;
-	enabled: boolean;
-	active: boolean;
+	selected: boolean;
 	home: string;
 	runtimeEnvironment?: RuntimeEnvironmentSummary;
 	createdAt?: string;
@@ -73,8 +75,10 @@ export interface AgentDetails extends AgentSummary {
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type DesktopAgentFramework = "ousia" | "pi";
+export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code";
 export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
+export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
 export type DesktopLanguage = "zh" | "en";
 export type DesktopCloseWindowBehavior = "hide" | "quit";
 export type DesktopLogRetention = "7d" | "30d" | "90d" | "forever";
@@ -87,6 +91,7 @@ export interface DesktopSettings {
 	openAtLogin: boolean;
 	runtimeLogRetention: DesktopLogRetention;
 	usageEventRetention: DesktopLogRetention;
+	appearanceGrayHue?: number;
 }
 
 export type DesktopSettingsDraft = Partial<
@@ -99,6 +104,7 @@ export type DesktopSettingsDraft = Partial<
 		| "openAtLogin"
 		| "runtimeLogRetention"
 		| "usageEventRetention"
+		| "appearanceGrayHue"
 	>
 >;
 
@@ -134,6 +140,24 @@ export interface DesktopModelOption {
 	provider: string;
 }
 
+export interface DesktopCodexModelOption {
+	id: string;
+	name?: string;
+	defaultThinkingLevel?: DesktopThinkingLevel;
+	supportedThinkingLevels: DesktopThinkingLevel[];
+	description?: string;
+}
+
+export interface DesktopCodexDiagnostic {
+	installed: boolean;
+	authenticated: boolean;
+	executablePath?: string;
+	version?: string;
+	authMethod?: "cli" | "env" | "unknown";
+	error?: string;
+	loginCommand?: string[];
+}
+
 export interface DesktopModelCatalog {
 	models: DesktopModelOption[];
 	providers: string[];
@@ -154,6 +178,7 @@ export interface AgentCreationSession {
 	home: string;
 	models: DesktopModelOption[];
 	providers: string[];
+	codexModels: DesktopCodexModelOption[];
 }
 
 export interface BotAvatarOption {
@@ -211,11 +236,14 @@ export interface AgentCreationDraft {
 	model: string;
 	thinkingLevel: DesktopThinkingLevel;
 	apiKey?: string;
+	codexSandboxMode?: DesktopCodexSandboxMode;
+	codexWebSearchMode?: DesktopCodexWebSearchMode;
 }
 
 export interface AgentOnboardEvent {
 	sessionId: string;
 	type: AgentOnboardEventType;
+	source?: "codex-login" | "feishu" | "wechat";
 	message?: string;
 	url?: string;
 	qr?: string;
@@ -307,8 +335,12 @@ export interface PieDesktopApi {
 	uploadAgentAvatar(id: string, upload: AgentAvatarUpload): Promise<AgentDetails>;
 	downloadAgentAvatar(id: string): Promise<void>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
+	checkCodexEnvironment(): Promise<DesktopCodexDiagnostic>;
+	openCodexLogin(sessionId: string): Promise<DesktopCodexDiagnostic>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
 	createWechatLogin(sessionId: string): Promise<DesktopWechatCredentials>;
+	syncFeishuAppProfile(id: string): Promise<AgentDetails>;
+	reauthorizeWechat(id: string): Promise<AgentDetails>;
 	completeAgentCreation(draft: AgentCreationDraft): Promise<AgentDetails>;
 	getAgent(id: string): Promise<AgentDetails>;
 	updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>;
@@ -323,6 +355,7 @@ export interface PieDesktopApi {
 	findReusableProviderCredential(provider: string, excludeAgentId?: string): Promise<ProviderCredentialReuse | undefined>;
 	getAgentSkillSources(id: string): Promise<AgentSkillSource[]>;
 	openAgentSkillSource(id: string, sourceId: string): Promise<AgentSkillSource[]>;
+	openAgentSkillFolder(id: string, sourceId: string, skillName: string): Promise<void>;
 	getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	openAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
