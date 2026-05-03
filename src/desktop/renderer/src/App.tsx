@@ -1,15 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Toaster, toast } from "./components/ui/sonner";
-import { CreateAgentDialog } from "./features/agents/CreateAgentDialog";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
 import { AgentSidebar } from "./layout/AgentSidebar";
 
-type AppSelection = { type: "agent"; id: string } | { type: "settings" };
+type AppSelection = { type: "agent"; id: string } | { type: "settings" } | { type: "create" };
 
 export function App(): JSX.Element {
 	const [selection, setSelection] = useState<AppSelection | undefined>();
-	const [creating, setCreating] = useState(false);
 	const queryClient = useQueryClient();
 	const selectedId = selection?.type === "agent" ? selection.id : undefined;
 
@@ -41,7 +39,7 @@ export function App(): JSX.Element {
 	}, [selected.error]);
 
 	useEffect(() => {
-		if (!agents.data || selection?.type === "settings") {
+		if (!agents.data || selection?.type === "settings" || selection?.type === "create") {
 			return;
 		}
 		if (!agents.data.length) {
@@ -90,27 +88,26 @@ export function App(): JSX.Element {
 				onSelectAgent={(id) => setSelection({ type: "agent", id })}
 				onSelectSettings={() => setSelection({ type: "settings" })}
 				onCreateAgent={() => {
-					setCreating(true);
+					setSelection({ type: "create" });
 				}}
 			/>
 			<AgentDetailPane
 				agent={selectedId ? selected.data : undefined}
 				showSettings={selection?.type === "settings"}
+				showCreateAgent={selection?.type === "create"}
 				hasAgents={Boolean(agents.data?.length)}
 				isLoadingAgents={agents.isLoading}
-				onCreateAgent={() => setCreating(true)}
+				onCreateAgent={() => setSelection({ type: "create" })}
 				onError={handleError}
 				onCloseSettings={() => setSelection(undefined)}
+				onCancelCreate={() => {
+					setSelection(agents.data?.[0] ? { type: "agent", id: agents.data[0].id } : undefined);
+				}}
+				onCreated={(agent) => setSelection({ type: "agent", id: agent.id })}
 				onDeleted={() => {
 					setSelection(undefined);
 					queryClient.removeQueries({ queryKey: ["agent", selectedId] });
 				}}
-			/>
-			<CreateAgentDialog
-				open={creating}
-				onClose={() => setCreating(false)}
-				onError={handleError}
-				onCreated={(agent) => setSelection({ type: "agent", id: agent.id })}
 			/>
 			<Toaster />
 		</main>

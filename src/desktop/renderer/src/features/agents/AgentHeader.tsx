@@ -246,7 +246,7 @@ export function AgentHeader({
 								onClick={onPause}
 								aria-label="Pause Agent"
 							>
-								<span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--slate-12)] text-white transition-colors group-hover/button:bg-[var(--slate-11)]">
+								<span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--lime-9)] text-[var(--lime-12)] transition-colors group-hover/button:bg-[var(--lime-10)]">
 									<AppIcon IconComponent={PauseBold} className="size-4" />
 								</span>
 							</Button>

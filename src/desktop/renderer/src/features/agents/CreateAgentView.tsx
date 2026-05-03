@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { RestartCircleBoldDuotone } from "solar-icon-set";
@@ -19,7 +21,6 @@ import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../../components/ui/dialog";
 import { Spinner } from "../../components/ui/spinner-1";
 import { cn } from "../../lib/utils";
 import { thinkingLevelOptions } from "./agent-display";
@@ -35,20 +36,20 @@ const channelOptions = [
 
 const manualChannelKinds: DesktopChannelKind[] = ["discord", "telegram", "slack"];
 const controlSurfaceClass = "border-transparent bg-[var(--slate-2)] hover:border-transparent focus-visible:border-transparent";
+type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model";
 
-export function CreateAgentDialog({
-	open,
-	onClose,
+export function CreateAgentView({
+	onCancel,
 	onCreated,
 	onError,
 }: {
-	open: boolean;
-	onClose: () => void;
+	onCancel: () => void;
 	onCreated: (agent: AgentDetails) => void;
 	onError: (message: string) => void;
-}): JSX.Element | null {
+}): JSX.Element {
 	const [session, setSession] = useState<AgentCreationSession | undefined>();
-	const [step, setStep] = useState<"config" | "identity" | "auth" | "credentials" | "model">("config");
+	const [step, setStep] = useState<CreateAgentStep>("config");
+	const [stepHistory, setStepHistory] = useState<CreateAgentStep[]>([]);
 	const [name, setName] = useState("");
 	const [avatarId, setAvatarId] = useState("");
 	const [feishu, setFeishu] = useState<DesktopFeishuAppCredentials | undefined>();
@@ -77,7 +78,7 @@ export function CreateAgentDialog({
 	const botAvatars = useQuery({
 		queryKey: ["bot-avatars"],
 		queryFn: () => window.pie.listBotAvatars(),
-		enabled: open && channels.includes("wechat"),
+		enabled: channels.includes("wechat"),
 	});
 	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
 		setFeishu(created);
@@ -98,6 +99,19 @@ export function CreateAgentDialog({
 			return reusable?.value ?? "";
 		});
 	};
+	const goToStep = (nextStep: CreateAgentStep) => {
+		setStepHistory((current) => [...current, step]);
+		setStep(nextStep);
+	};
+	const goBack = () => {
+		const previous = stepHistory.at(-1);
+		if (!previous) {
+			onCancel();
+			return;
+		}
+		setStepHistory((current) => current.slice(0, -1));
+		setStep(previous);
+	};
 
 	const begin = useMutation({
 		mutationFn: () => window.pie.beginAgentCreation(),
@@ -112,6 +126,7 @@ export function CreateAgentDialog({
 			setModel(defaultModel);
 			void prefillProviderApiKey(defaultProvider, created.profileId, true);
 			setStep("config");
+			setStepHistory([]);
 		},
 		onError: (err: Error) => onError(err.message),
 	});
@@ -137,7 +152,6 @@ export function CreateAgentDialog({
 			if (created.wechat) {
 				setWechat(created.wechat);
 			}
-			setStep("model");
 		},
 		onError: (err: Error) => onError(err.message),
 	});
@@ -199,39 +213,13 @@ export function CreateAgentDialog({
 		onSuccess: async (agent) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
 			onCreated(agent);
-			onClose();
 		},
 		onError: (err: Error) => onError(err.message),
 	});
 
 	useEffect(() => {
-		if (open) {
-			begin.mutate();
-		} else {
-			setStep("config");
-			setSession(undefined);
-			setFeishu(undefined);
-			setWechat(undefined);
-			setQrEvent(undefined);
-			setStatus("");
-			setName("");
-			setAvatarId("");
-			setChannels(["feishu"]);
-			setSlackBotToken("");
-			setSlackAppToken("");
-			setSlackSigningSecret("");
-			setSlackTeamId("");
-			setSlackAppId("");
-			setSlackBotUserId("");
-			setDiscordBotToken("");
-			setDiscordApplicationId("");
-			setDiscordGuildId("");
-			setTelegramBotToken("");
-			setTelegramBotUsername("");
-			setFramework("pi");
-			setApiKey("");
-		}
-	}, [open]);
+		begin.mutate();
+	}, []);
 
 	useEffect(() => {
 		if (channels.includes("wechat") && !avatarId && botAvatars.data?.[0]) {
@@ -275,28 +263,101 @@ export function CreateAgentDialog({
 	const authPrompt = channels.includes("wechat")
 		? "请使用微信扫码连接 bot"
 		: "请使用飞书或 Lark 扫码授权创建 bot";
+	const visibleSteps = createAgentStepFlow({
+		requiresIdentity,
+		requiresQrAuth,
+		requiresManualCredentials,
+	});
+	const stepDescription = {
+		config: "选择框架和 IM 渠道。",
+		identity: "设置微信里对应的本地 Agent 名称和头像。",
+		auth: "扫码授权已选择的 IM 渠道。",
+		credentials: "填写所选 IM 渠道的连接凭证。",
+		model: "配置模型供应商和 API Key。",
+	}[step];
+	const handleNext = () => {
+		if (step === "config") {
+			setStatus("");
+			setQrEvent(undefined);
+			if (requiresIdentity) {
+				goToStep("identity");
+			} else if (requiresQrAuth) {
+				goToStep("auth");
+				authenticateChannels.mutate();
+			} else if (requiresManualCredentials) {
+				goToStep("credentials");
+			} else {
+				goToStep("model");
+			}
+			return;
+		}
+		if (step === "identity") {
+			setStatus("");
+			setQrEvent(undefined);
+			goToStep("auth");
+			authenticateChannels.mutate();
+			return;
+		}
+		if (step === "auth") {
+			goToStep("model");
+			return;
+		}
+		if (step === "credentials") {
+			goToStep("model");
+			return;
+		}
+		complete.mutate();
+	};
+	const nextDisabled = begin.isPending
+		|| !session
+		|| (step === "config" && !channels.length)
+		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
+		|| (step === "auth" && (authenticateChannels.isPending || (channels.includes("feishu") && !feishu) || (channels.includes("wechat") && !wechat)))
+		|| (step === "model" && complete.isPending);
+	const currentStepIndex = visibleSteps.indexOf(step);
 
 	return (
-		<Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-			<DialogContent className="sm:max-w-md pie-smooth-corner">
-				<DialogHeader>
-					<DialogTitle>创建 Agent</DialogTitle>
-					<DialogDescription>
-						{step === "config" && "选择框架和 IM 渠道。"}
-						{step === "identity" && "设置微信里对应的本地 Agent 名称和头像。"}
-						{step === "auth" && "扫码授权已选择的 IM 渠道。"}
-						{step === "credentials" && "填写所选 IM 渠道的连接凭证。"}
-						{step === "model" && "配置模型供应商和 API Key。"}
-					</DialogDescription>
-				</DialogHeader>
+		<div className="flex h-full flex-col overflow-hidden bg-white">
+			<header className="drag-region flex h-[72px] shrink-0 items-center justify-between gap-4 px-7 pt-3">
+				<div className="min-w-0">
+					<h1 className="text-xl font-semibold tracking-normal text-balance">创建 Agent</h1>
+					<p className="mt-1 text-sm text-muted-foreground text-pretty">{stepDescription}</p>
+				</div>
+				<div className="flex shrink-0 items-center gap-4">
+					<div className="flex items-center gap-2">
+						{visibleSteps.map((item, index) => (
+							<span
+								key={item}
+								className={cn(
+									"h-1.5 w-10 rounded-full transition-colors",
+									index <= currentStepIndex ? "bg-[var(--lime-9)]" : "bg-[var(--slate-5)]",
+								)}
+							/>
+						))}
+					</div>
+					<AceternityTooltip content="关闭创建" side="bottom">
+						<Button
+							variant="unstyled"
+							size="inline"
+							className="no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
+							onClick={onCancel}
+							aria-label="关闭创建 Agent"
+						>
+							<HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-5" />
+						</Button>
+					</AceternityTooltip>
+				</div>
+			</header>
 
-				<div>
-					{begin.isPending || !session ? (
-						<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-							<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
-						</div>
-					) : step === "config" ? (
-						<div className="space-y-4 rounded-3xl p-5">
+			<div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+				<div className="flex min-h-full items-center justify-center">
+					<div className="w-full max-w-[640px]">
+						{begin.isPending || !session ? (
+							<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+								<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
+							</div>
+						) : step === "config" ? (
+							<div className="space-y-6">
 							<Field label="框架">
 								<Select value={framework} onValueChange={(value) => setFramework(value as DesktopAgentFramework)}>
 									<SelectTrigger className={controlSurfaceClass}>
@@ -315,7 +376,7 @@ export function CreateAgentDialog({
 							<ChannelPicker selected={channels[0]} onSelect={selectChannel} />
 						</div>
 					) : step === "identity" ? (
-						<div className="space-y-4 rounded-3xl p-5">
+						<div className="space-y-6">
 							<Field label="Agent 名称">
 								<Input className={controlSurfaceClass} value={name} onChange={(event) => setName(event.target.value)} />
 							</Field>
@@ -327,7 +388,7 @@ export function CreateAgentDialog({
 							/>
 						</div>
 					) : step === "auth" ? (
-						<div className="space-y-4 text-center">
+						<div className="space-y-5 text-center">
 							<div className="text-sm font-normal text-foreground">
 								{status || authPrompt}
 							</div>
@@ -342,7 +403,7 @@ export function CreateAgentDialog({
 							</div>
 						</div>
 					) : step === "credentials" ? (
-						<div className="space-y-4 rounded-3xl p-5">
+						<div className="space-y-4">
 							<ManualChannelCredentials
 								channels={channels}
 								slackBotToken={slackBotToken}
@@ -370,7 +431,7 @@ export function CreateAgentDialog({
 							/>
 						</div>
 					) : (
-						<div className="space-y-4 rounded-3xl p-5">
+						<div className="space-y-6">
 							{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="供应商">
@@ -411,72 +472,54 @@ export function CreateAgentDialog({
 							</Field>
 						</div>
 					)}
+					</div>
 				</div>
+			</div>
 
-				<DialogFooter>
-					{step === "config" && session && (
-						<Button
-							disabled={!channels.length}
-							onClick={() => {
-								setStatus("");
-								setQrEvent(undefined);
-								if (requiresIdentity) {
-									setStep("identity");
-								} else if (requiresQrAuth) {
-									setStep("auth");
-									authenticateChannels.mutate();
-								} else if (requiresManualCredentials) {
-									setStep("credentials");
-								} else {
-									setStep("model");
-								}
-							}}
-						>
-							{requiresIdentity ? "下一步：名称头像" : requiresQrAuth ? "下一步：扫码授权" : requiresManualCredentials ? "下一步：渠道配置" : "下一步：模型配置"}
-						</Button>
-					)}
-					{step === "identity" && (
-						<Button
-							disabled={!name.trim() || botAvatars.isLoading}
-							onClick={() => {
-								setStatus("");
-								setQrEvent(undefined);
-								setStep("auth");
-								authenticateChannels.mutate();
-							}}
-						>
-							下一步：扫码授权
-						</Button>
-					)}
+			<footer className="no-drag flex shrink-0 items-center justify-between border-t border-foreground/5 px-8 py-5">
+				<Button variant="secondary" onClick={goBack} disabled={complete.isPending}>
+					返回上一步
+				</Button>
+				<div className="flex items-center gap-3">
 					{step === "auth" && (
-						<Button disabled={authenticateChannels.isPending} onClick={() => authenticateChannels.mutate()}>
+						<Button variant="secondary" disabled={authenticateChannels.isPending} onClick={() => authenticateChannels.mutate()}>
 							重新扫码
 						</Button>
 					)}
-					{step === "credentials" && (
-						<Button onClick={() => setStep("model")}>
-							下一步：模型配置
-						</Button>
-					)}
-					{step === "model" && (
-						<Button
-							disabled={complete.isPending}
-							onClick={() => complete.mutate()}
-						>
-							{complete.isPending ? (
-								<>
-									<Spinner size={18} color="currentColor" />
-									正在创建
-								</>
-							) : (
-								"完成创建"
-							)}
-						</Button>
-					)}
-				</DialogFooter>
-			</DialogContent>
-		</Dialog>
+					<Button disabled={nextDisabled} onClick={handleNext}>
+						{complete.isPending ? (
+							<>
+								<Spinner size={18} color="currentColor" />
+								正在创建
+							</>
+						) : step === "model" ? (
+							"完成创建"
+						) : (
+							"下一步"
+						)}
+					</Button>
+				</div>
+			</footer>
+		</div>
 	);
+}
+
+function createAgentStepFlow({
+	requiresIdentity,
+	requiresQrAuth,
+	requiresManualCredentials,
+}: {
+	requiresIdentity: boolean;
+	requiresQrAuth: boolean;
+	requiresManualCredentials: boolean;
+}): CreateAgentStep[] {
+	return [
+		"config",
+		...(requiresIdentity ? ["identity" as const] : []),
+		...(requiresQrAuth ? ["auth" as const] : []),
+		...(requiresManualCredentials ? ["credentials" as const] : []),
+		"model",
+	];
 }
 
 function ChannelPicker({
