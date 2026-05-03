@@ -36,6 +36,9 @@ export function statusTone(status: AgentSummary["status"]): string {
 	if (status === "running") {
 		return "bg-[var(--lime-9)]";
 	}
+	if (status === "starting") {
+		return "text-[var(--lime-10)]";
+	}
 	if (status === "paused") {
 		return "bg-accent";
 	}
@@ -45,6 +48,9 @@ export function statusTone(status: AgentSummary["status"]): string {
 export function statusLabel(status: AgentSummary["status"]): string {
 	if (status === "running") {
 		return "运行中";
+	}
+	if (status === "starting") {
+		return "启动中";
 	}
 	if (status === "paused") {
 		return "已暂停";

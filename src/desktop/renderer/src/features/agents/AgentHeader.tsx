@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
 	AltArrowDownLineDuotone,
+	CheckCircleBoldDuotone,
 	FolderOpenBoldDuotone,
 	GalleryAddLineDuotone,
 	PauseCircleBoldDuotone,
@@ -10,6 +11,7 @@ import {
 } from "solar-icon-set";
 import type { AgentDetails } from "../../../shared/types";
 import { AgentAvatar } from "../../components/shared/agent-avatar";
+import { AgentStartingSpinner } from "../../components/shared/agent-starting-spinner";
 import { AppIcon } from "../../components/shared/app-icon";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
@@ -39,6 +41,7 @@ export function AgentHeader({
 	onPause,
 	onReveal,
 	onDelete,
+	deleteError,
 }: {
 	agent: AgentDetails;
 	isSaving: boolean;
@@ -50,8 +53,11 @@ export function AgentHeader({
 	onPause: () => void;
 	onReveal: () => void;
 	onDelete: () => void;
+	deleteError?: string;
 }): JSX.Element {
 	const [open, setOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [deleteStep, setDeleteStep] = useState<"idle" | "stop" | "files" | "done">("idle");
 	const [nameDraft, setNameDraft] = useState(agent.name);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const triggerRef = useRef<HTMLElement | null>(null);
@@ -60,6 +66,21 @@ export function AgentHeader({
 	useEffect(() => {
 		setNameDraft(agent.name);
 	}, [agent.id, agent.name]);
+
+	useEffect(() => {
+		return window.pie.onAgentDeleteEvent((event) => {
+			if (event.agentId !== agent.id) {
+				return;
+			}
+			setDeleteStep(event.step);
+		});
+	}, [agent.id]);
+
+	useEffect(() => {
+		if (deleteError && deleteStep !== "idle") {
+			setDeleteStep("idle");
+		}
+	}, [deleteError, deleteStep]);
 
 	useEffect(() => {
 		if (!open) {
@@ -215,16 +236,16 @@ export function AgentHeader({
 								<AppIcon IconComponent={PauseCircleBoldDuotone} className="size-7" />
 							</Button>
 						</AceternityTooltip>
-					) : isStarting ? (
+					) : isStarting || agent.status === "starting" ? (
 						<AceternityTooltip content="启动中" side="bottom">
 							<Button
 								variant="unstyled"
 								size="inline"
-								className="inline-flex h-8 w-8 cursor-default items-center justify-center text-[var(--slate-10)]"
+								className="inline-flex h-8 w-8 cursor-default items-center justify-center"
 								disabled
 								aria-label="Agent starting"
 							>
-								<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-7 animate-spin" />
+								<AgentStartingSpinner />
 							</Button>
 						</AceternityTooltip>
 					) : (
@@ -251,7 +272,18 @@ export function AgentHeader({
 							<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
 						</Button>
 					</AceternityTooltip>
-					<AlertDialog>
+					<AlertDialog
+						open={deleteOpen}
+						onOpenChange={(nextOpen) => {
+							if (deleteStep !== "idle" && deleteStep !== "done") {
+								return;
+							}
+							setDeleteOpen(nextOpen);
+							if (!nextOpen) {
+								setDeleteStep("idle");
+							}
+						}}
+					>
 						<AlertDialogTrigger
 							render={
 								<Button
@@ -270,19 +302,64 @@ export function AgentHeader({
 							<AlertDialogHeader>
 								<AlertDialogTitle>删除 Agent</AlertDialogTitle>
 								<AlertDialogDescription>
-									确定要删除 {agent.name} 吗？此操作无法撤销。
+									{deleteStep === "idle"
+										? `确定要删除 ${agent.name} 吗？此操作无法撤销。`
+										: "正在删除 Agent，请等待当前步骤完成。"}
 								</AlertDialogDescription>
 							</AlertDialogHeader>
-							<AlertDialogFooter>
-								<AlertDialogCancel>取消</AlertDialogCancel>
-								<AlertDialogAction onClick={onDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-									确认删除
-								</AlertDialogAction>
-							</AlertDialogFooter>
+							{deleteError && <p className="rounded-2xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{deleteError}</p>}
+							{deleteStep !== "idle" && <DeleteProgress step={deleteStep} />}
+							{deleteStep === "idle" ? (
+								<AlertDialogFooter>
+									<AlertDialogCancel>取消</AlertDialogCancel>
+									<AlertDialogAction
+										onClick={(event) => {
+											event.preventDefault();
+											setDeleteStep("stop");
+											onDelete();
+										}}
+										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+									>
+										确认删除
+									</AlertDialogAction>
+								</AlertDialogFooter>
+							) : null}
 						</AlertDialogContent>
 					</AlertDialog>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+const deleteSteps = [
+	{ id: "stop", label: "停止运行中的实例" },
+	{ id: "files", label: "清除 Agent 文件" },
+	{ id: "done", label: "删除完成" },
+] as const;
+
+function DeleteProgress({ step }: { step: "stop" | "files" | "done" }): JSX.Element {
+	const currentIndex = deleteSteps.findIndex((item) => item.id === step);
+	return (
+		<div className="space-y-2 rounded-2xl bg-[var(--slate-2)] p-3">
+			{deleteSteps.map((item, index) => {
+				const done = index < currentIndex || step === "done";
+				const active = index === currentIndex && step !== "done";
+				return (
+					<div key={item.id} className="flex min-h-8 items-center gap-3 text-sm">
+						<span className="grid h-5 w-5 shrink-0 place-items-center">
+							{done ? (
+								<AppIcon IconComponent={CheckCircleBoldDuotone} className="size-5 text-[var(--lime-10)]" />
+							) : active ? (
+								<span className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--lime-4)] border-t-[var(--lime-10)]" />
+							) : (
+								<span className="h-2 w-2 rounded-full bg-border" />
+							)}
+						</span>
+						<span className={active || done ? "text-foreground" : "text-muted-foreground"}>{item.label}</span>
+					</div>
+				);
+			})}
 		</div>
 	);
 }

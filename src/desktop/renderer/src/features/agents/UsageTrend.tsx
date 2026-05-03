@@ -7,7 +7,7 @@ export function UsageTrend({ usage }: { usage: AgentUsageStats }): JSX.Element {
 
 	if (!days.length) {
 		return (
-			<div className="pie-smooth-corner mt-3 flex h-28 items-center justify-center rounded-[24px] px-4 text-sm text-muted-foreground">
+			<div className="pie-smooth-corner mt-3 flex h-28 items-center justify-center rounded-[24px] text-sm text-muted-foreground">
 				暂无用量数据
 			</div>
 		);
@@ -16,7 +16,7 @@ export function UsageTrend({ usage }: { usage: AgentUsageStats }): JSX.Element {
 	const maxDay = Math.max(1, ...days.map((d) => d.tokens));
 
 	return (
-		<div className="pie-smooth-corner mt-3 rounded-[24px] px-4 py-3">
+		<div className="pie-smooth-corner mt-3 rounded-[24px] py-3">
 			<div className="space-y-2">
 				{days.map((day) => (
 					<AceternityTooltip

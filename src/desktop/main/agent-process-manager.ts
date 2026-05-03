@@ -14,7 +14,13 @@ export interface AgentProcessManagerOptions {
 }
 
 const MAX_AGENT_LOGS = 1000;
-const AGENT_READY_LOG_MARKER = "Pi Feishu bot ready";
+const AGENT_READY_LOG_MARKERS = [
+	"Pi Feishu bot ready",
+	"Pi Wechat channel ready",
+	"Pi Slack channel ready",
+	"Pi Discord channel ready",
+	"Pi Telegram channel ready",
+];
 const AGENT_START_TIMEOUT_MS = 30_000;
 
 async function getAvailableLocalPort(): Promise<number> {
@@ -200,7 +206,7 @@ export class AgentProcessManager {
 		if (!text) {
 			return;
 		}
-		if (stream === "stdout" && text.includes(AGENT_READY_LOG_MARKER)) {
+		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => text.includes(marker))) {
 			this.markAgentReady(agentId);
 		}
 		if (stream === "stdout" && text.startsWith("Agent: ")) {

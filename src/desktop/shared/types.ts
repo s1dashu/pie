@@ -1,5 +1,6 @@
-export type AgentStatus = "running" | "paused" | "terminated";
+export type AgentStatus = "running" | "starting" | "paused" | "terminated";
 export type AgentOnboardEventType = "qr" | "status" | "done" | "error";
+export type AgentDeleteEventStep = "stop" | "files" | "done";
 
 export interface AgentSummary {
 	id: string;
@@ -12,6 +13,8 @@ export interface AgentSummary {
 	home: string;
 	createdAt?: string;
 	updatedAt?: string;
+	frameworkKind?: string;
+	channelKinds?: string[];
 	modelLabel?: string;
 	appId?: string;
 }
@@ -19,6 +22,28 @@ export interface AgentSummary {
 export interface AgentDetails extends AgentSummary {
 	brand?: "feishu" | "lark";
 	appSecret?: string;
+	wechat?: {
+		accountId?: string;
+		baseUrl?: string;
+		botToken?: string;
+	};
+	slack?: {
+		botToken?: string;
+		appToken?: string;
+		signingSecret?: string;
+		teamId?: string;
+		appId?: string;
+		botUserId?: string;
+	};
+	discord?: {
+		botToken?: string;
+		applicationId?: string;
+		guildId?: string;
+	};
+	telegram?: {
+		botToken?: string;
+		botUsername?: string;
+	};
 	model?: {
 		provider?: string;
 		model?: string;
@@ -30,6 +55,8 @@ export interface AgentDetails extends AgentSummary {
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type DesktopAgentFramework = "ousia" | "pi";
+export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 export type DesktopLanguage = "zh" | "en";
 export type DesktopCloseWindowBehavior = "hide" | "quit";
 export type DesktopLogRetention = "7d" | "30d" | "90d" | "forever";
@@ -67,6 +94,20 @@ export interface AgentDraft {
 	appId?: string;
 	appSecret?: string;
 	brand?: "feishu" | "lark";
+	wechatAccountId?: string;
+	wechatBaseUrl?: string;
+	wechatBotToken?: string;
+	slackBotToken?: string;
+	slackAppToken?: string;
+	slackSigningSecret?: string;
+	slackTeamId?: string;
+	slackAppId?: string;
+	slackBotUserId?: string;
+	discordBotToken?: string;
+	discordApplicationId?: string;
+	discordGuildId?: string;
+	telegramBotToken?: string;
+	telegramBotUsername?: string;
 }
 
 export interface DesktopModelOption {
@@ -109,11 +150,37 @@ export interface DesktopFeishuAppCredentials {
 	avatarUrl?: string;
 }
 
+export interface DesktopWechatCredentials {
+	accountId: string;
+	baseUrl: string;
+	userId?: string;
+}
+
 export interface AgentCreationDraft {
 	sessionId: string;
+	framework: DesktopAgentFramework;
 	name?: string;
 	avatarId?: string;
-	feishu: DesktopFeishuAppCredentials;
+	channels: DesktopChannelKind[];
+	feishu?: DesktopFeishuAppCredentials;
+	wechat?: DesktopWechatCredentials;
+	slack?: {
+		botToken: string;
+		appToken: string;
+		signingSecret?: string;
+		teamId?: string;
+		appId?: string;
+		botUserId?: string;
+	};
+	discord?: {
+		botToken: string;
+		applicationId?: string;
+		guildId?: string;
+	};
+	telegram?: {
+		botToken: string;
+		botUsername?: string;
+	};
 	provider: string;
 	model: string;
 	thinkingLevel: DesktopThinkingLevel;
@@ -128,6 +195,13 @@ export interface AgentOnboardEvent {
 	qr?: string;
 	expiresIn?: number;
 	feishu?: DesktopFeishuAppCredentials;
+	wechat?: DesktopWechatCredentials;
+}
+
+export interface AgentDeleteEvent {
+	agentId: string;
+	step: AgentDeleteEventStep;
+	message: string;
 }
 
 export interface AgentLogEntry {
@@ -208,6 +282,7 @@ export interface PieDesktopApi {
 	downloadAgentAvatar(id: string): Promise<void>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
+	createWechatLogin(sessionId: string): Promise<DesktopWechatCredentials>;
 	completeAgentCreation(draft: AgentCreationDraft): Promise<AgentDetails>;
 	getAgent(id: string): Promise<AgentDetails>;
 	updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>;
@@ -226,4 +301,5 @@ export interface PieDesktopApi {
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;
+	onAgentDeleteEvent(callback: (event: AgentDeleteEvent) => void): () => void;
 }

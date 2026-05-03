@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type * as React from "react";
 import type { DesktopCloseWindowBehavior, DesktopLanguage, DesktopLogRetention, DesktopSettingsDraft } from "../../../shared/types";
 import { Field } from "../../components/shared/field";
+import { AceternityTooltip } from "../../components/shared/tooltip";
+import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 
@@ -22,7 +26,7 @@ const logRetentionOptions: Array<{ value: DesktopLogRetention; label: string }> 
 	{ value: "forever", label: "永久保存" },
 ];
 
-export function GlobalSettingsView({ onError }: { onError: (message: string) => void }): JSX.Element {
+export function GlobalSettingsView({ onError, onClose }: { onError: (message: string) => void; onClose: () => void }): JSX.Element {
 	const queryClient = useQueryClient();
 	const settings = useQuery({
 		queryKey: ["settings"],
@@ -44,11 +48,22 @@ export function GlobalSettingsView({ onError }: { onError: (message: string) => 
 
 	return (
 		<div className="flex h-full flex-col overflow-hidden bg-white">
-			<div className="drag-region flex h-[72px] shrink-0 items-center px-7 pt-3">
-				<div>
+			<div className="drag-region flex h-[72px] shrink-0 items-center justify-between gap-4 px-7 pt-3">
+				<div className="min-w-0">
 					<h1 className="text-xl font-semibold tracking-normal text-balance">全局设置</h1>
 					<p className="mt-1 text-sm text-muted-foreground text-pretty">这些设置影响 Pie Desktop 和所有 Agent 的运行方式。</p>
 				</div>
+				<AceternityTooltip content="关闭设置" side="bottom">
+					<Button
+						variant="unstyled"
+						size="inline"
+						className="no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
+						onClick={onClose}
+						aria-label="关闭全局设置"
+					>
+						<HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-5" />
+					</Button>
+				</AceternityTooltip>
 			</div>
 			<div className="flex-1 overflow-y-auto px-7 pb-8 pt-2">
 				{data ? (
@@ -170,7 +185,7 @@ function SettingToggle({
 	onCheckedChange: (checked: boolean) => void;
 }): JSX.Element {
 	return (
-		<label className="pie-smooth-corner flex min-h-14 items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2.5">
+		<label className="pie-smooth-corner flex min-h-14 cursor-pointer items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2.5">
 			<span className="min-w-0">
 				<span className="block text-sm font-medium leading-snug text-foreground text-balance">{title}</span>
 				<span className="mt-0.5 block text-sm font-normal leading-snug text-muted-foreground text-pretty">{description}</span>

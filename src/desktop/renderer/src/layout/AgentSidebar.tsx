@@ -4,8 +4,9 @@ import { AgentAvatar } from "../components/shared/agent-avatar";
 import { AppIcon } from "../components/shared/app-icon";
 import { AceternityTooltip } from "../components/shared/tooltip";
 import { Button } from "../components/ui/button";
+import { Spinner } from "../components/ui/spinner-1";
 import { cn } from "../lib/utils";
-import { statusLabel, statusTone } from "../features/agents/agent-display";
+import { statusTone } from "../features/agents/agent-display";
 
 export function AgentSidebar({
 	agents,
@@ -51,10 +52,10 @@ export function AgentSidebar({
 									<div className="min-w-0 flex-1">
 										<div className="truncate text-sm font-medium">{agent.name}</div>
 										<div className="mt-1 truncate text-xs text-muted-foreground opacity-80">
-											{agent.modelLabel ?? statusLabel(agent.status)}
+											{agent.modelLabel ?? "未配置模型"}
 										</div>
 									</div>
-									<span className={cn("mr-1.5 h-2 w-2 shrink-0 rounded-full", statusTone(agent.status))} />
+									<AgentStatusMark status={agent.status} />
 								</Button>
 							);
 						})}
@@ -86,4 +87,15 @@ export function AgentSidebar({
 			</div>
 		</div>
 	);
+}
+
+function AgentStatusMark({ status }: { status: AgentSummary["status"] }): JSX.Element {
+	if (status === "starting") {
+		return (
+			<span className="mr-1 grid h-5 w-5 shrink-0 place-items-center" aria-label="启动中">
+				<Spinner size={18} color="var(--lime-11)" />
+			</span>
+		);
+	}
+	return <span className={cn("mr-2 h-2 w-2 shrink-0 rounded-full", statusTone(status))} />;
 }

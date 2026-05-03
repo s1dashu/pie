@@ -40,6 +40,45 @@ export function App(): JSX.Element {
 		}
 	}, [selected.error]);
 
+	useEffect(() => {
+		if (!agents.data || selection?.type === "settings") {
+			return;
+		}
+		if (!agents.data.length) {
+			if (selection?.type === "agent") {
+				setSelection(undefined);
+			}
+			return;
+		}
+		const selectedAgentExists = selection?.type === "agent" && agents.data.some((agent) => agent.id === selection.id);
+		if (!selectedAgentExists) {
+			setSelection({ type: "agent", id: agents.data[0]!.id });
+		}
+	}, [agents.data, selection]);
+
+	useEffect(() => {
+		if (!agents.data || !selectedId) {
+			return;
+		}
+		const summary = agents.data.find((agent) => agent.id === selectedId);
+		if (!summary) {
+			return;
+		}
+		queryClient.setQueryData(["agent", selectedId], (current: typeof selected.data) => {
+			if (!current) {
+				return current;
+			}
+			return {
+				...current,
+				...summary,
+				model: current.model,
+				brand: current.brand,
+				appSecret: current.appSecret,
+				wechat: current.wechat,
+			};
+		});
+	}, [agents.data, queryClient, selected.data, selectedId]);
+
 	return (
 		<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-3)] p-[var(--app-shell-gap)] text-foreground">
 			<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
@@ -57,7 +96,11 @@ export function App(): JSX.Element {
 			<AgentDetailPane
 				agent={selectedId ? selected.data : undefined}
 				showSettings={selection?.type === "settings"}
+				hasAgents={Boolean(agents.data?.length)}
+				isLoadingAgents={agents.isLoading}
+				onCreateAgent={() => setCreating(true)}
 				onError={handleError}
+				onCloseSettings={() => setSelection(undefined)}
 				onDeleted={() => {
 					setSelection(undefined);
 					queryClient.removeQueries({ queryKey: ["agent", selectedId] });

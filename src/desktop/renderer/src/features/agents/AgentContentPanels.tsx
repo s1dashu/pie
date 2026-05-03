@@ -1,17 +1,19 @@
-import { useMemo } from "react";
-import { FolderOpenBoldDuotone } from "solar-icon-set";
+import { useMemo, useState } from "react";
+import type * as React from "react";
+import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone } from "solar-icon-set";
 import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { AppIcon } from "../../components/shared/app-icon";
 import { Field } from "../../components/shared/field";
-import { CompactMetric, UsageMetric } from "../../components/shared/metrics";
+import { UsageMetric } from "../../components/shared/metrics";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { TerminalLog } from "../logs/TerminalLog";
 import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLevelOptions, type AgentTab } from "./agent-display";
+import { ProviderSelect } from "./ProviderSelect";
 import { UsageTrend } from "./UsageTrend";
 
 export interface ResourceChartHistory {
@@ -80,29 +82,45 @@ export function AgentContentPanels({
 	onSaveChannel: () => void;
 }): JSX.Element {
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
-	const currentRunMessages = usage.currentRun.incomingMessages + usage.currentRun.outgoingMessages;
+	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
 	const cacheStats = getCacheStats(usage);
+	const hasFeishuChannel = Boolean(agent.channelKinds?.includes("feishu") || agent.appId);
+	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
+	const hasSlackChannel = Boolean(agent.channelKinds?.includes("slack") || agent.slack);
+	const hasDiscordChannel = Boolean(agent.channelKinds?.includes("discord") || agent.discord);
+	const hasTelegramChannel = Boolean(agent.channelKinds?.includes("telegram") || agent.telegram);
+	const channelKinds = [
+		...(hasFeishuChannel ? ["feishu"] : []),
+		...(hasWechatChannel ? ["wechat"] : []),
+		...(hasSlackChannel ? ["slack"] : []),
+		...(hasDiscordChannel ? ["discord"] : []),
+		...(hasTelegramChannel ? ["telegram"] : []),
+	];
 
 	return (
 		<div className={activeTab === "overview" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-3" : ""}>
 			{activeTab === "overview" ? (
 				<>
-					<div className="grid grid-cols-4 gap-3">
-						<CompactMetric
+					<div className="grid grid-cols-4 gap-4">
+						<UsageMetric
 							label="消息数"
-							value={formatCount(currentRunMessages)}
+							value={formatCount(totalMessages)}
+							hint={`收 ${formatCount(usage.total.incomingMessages)} · 发 ${formatCount(usage.total.outgoingMessages)}`}
 						/>
-						<CompactMetric
+						<UsageMetric
 							label="工具调用次数"
-							value={formatCount(usage.currentRun.actions)}
+							value={formatCount(usage.total.actions)}
+							hint={`失败 ${formatCount(usage.total.failedActions)}`}
 						/>
-						<CompactMetric
+						<UsageMetric
 							label="Token 消耗"
-							value={formatTokenCount(usage.currentRun.tokens)}
+							value={formatTokenCount(usage.total.tokens)}
+							hint={`${formatTokenCount(usage.total.inputTokens)} 入 · ${formatTokenCount(usage.total.outputTokens)} 出`}
 						/>
-						<CompactMetric
+						<UsageMetric
 							label="运行时长"
-							value={formatDuration(usage.currentRun.runDurationMs)}
+							value={formatDuration(usage.total.runDurationMs)}
+							hint={`本次运行 ${formatDuration(usage.currentRun.runDurationMs)}`}
 						/>
 					</div>
 					<div className="pie-smooth-corner flex min-h-0 flex-1 flex-col overflow-hidden rounded-[42px] bg-[var(--slate-2)] pb-4 pt-5">
@@ -118,17 +136,12 @@ export function AgentContentPanels({
 						<SectionTitle title="模型配置" />
 						<div className="grid grid-cols-2 gap-4">
 							<Field label="Provider">
-								<Select
+								<ProviderSelect
 									value={draft.provider ?? ""}
+									providers={providerOptions}
+									placeholder={isModelCatalogLoading ? "Loading providers..." : "Select provider"}
 									onValueChange={onUpdateProviderSelection}
-								>
-									<SelectTrigger>
-										<SelectValue placeholder={isModelCatalogLoading ? "Loading providers..." : "Select provider"} />
-									</SelectTrigger>
-									<SelectContent>
-										{providerOptions.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-									</SelectContent>
-								</Select>
+								/>
 							</Field>
 							<Field label="Model">
 								<Select
@@ -142,7 +155,7 @@ export function AgentContentPanels({
 									<SelectContent>
 										{modelOptions.map((item) => (
 											<SelectItem key={`${item.provider}/${item.id}`} value={item.id}>
-												{item.name && item.name !== item.id ? `${item.id} · ${item.name}` : item.id}
+												{item.name && item.name !== item.id ? item.name : item.id.split("/").filter(Boolean).at(-1) ?? item.id}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -163,9 +176,7 @@ export function AgentContentPanels({
 							</Select>
 						</Field>
 						<Field label="API Key">
-							<Input
-								variant="shadcn"
-								type="password"
+							<SecretInput
 								value={draft.apiKey ?? ""}
 								onChange={(event) => onUpdateField("apiKey", event.target.value)}
 								placeholder="留空保存会清除当前 provider 的 API Key"
@@ -213,45 +224,130 @@ export function AgentContentPanels({
 					</div>
 				</div>
 			) : activeTab === "channels" ? (
-				<div className="pie-smooth-corner mx-auto max-w-5xl space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-					<div className="flex items-center justify-between gap-4">
-						<SectionTitle title="渠道管理" description="当前仅支持飞书渠道。保存前会验证 App ID 和 App Secret。" />
-						<div className="pie-smooth-corner rounded-full bg-white px-3 py-1 text-xs font-medium text-muted-foreground">
-							飞书
+				<div className="mx-auto max-w-5xl space-y-4">
+					{hasFeishuChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="飞书" description="保存前会验证 App ID 和 App Secret。" />
+							<div className="grid grid-cols-2 gap-4">
+								<Field label="App ID">
+									<Input value={channelDraft.appId ?? ""} onChange={(event) => onUpdateChannelField("appId", event.target.value)} />
+								</Field>
+								<Field label="App Secret">
+									<SecretInput value={channelDraft.appSecret ?? ""} onChange={(event) => onUpdateChannelField("appSecret", event.target.value)} />
+								</Field>
+							</div>
+							<Field label="区域">
+								<Select
+									value={channelDraft.brand ?? "feishu"}
+									onValueChange={(value) => onUpdateChannelField("brand", value)}
+								>
+									<SelectTrigger>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{brandOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+									</SelectContent>
+								</Select>
+							</Field>
 						</div>
+					) : null}
+					{hasWechatChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="微信" description="Token 只保存到该 Agent 的 .env，不写入 config.json。" />
+							<div className="grid grid-cols-2 gap-4">
+								<Field label="Account ID">
+									<Input value={channelDraft.wechatAccountId ?? ""} onChange={(event) => onUpdateChannelField("wechatAccountId", event.target.value)} />
+								</Field>
+								<Field label="Base URL">
+									<Input value={channelDraft.wechatBaseUrl ?? ""} onChange={(event) => onUpdateChannelField("wechatBaseUrl", event.target.value)} />
+								</Field>
+							</div>
+							<Field label="Bot Token">
+								<SecretInput
+									value={channelDraft.wechatBotToken ?? ""}
+									onChange={(event) => onUpdateChannelField("wechatBotToken", event.target.value)}
+									placeholder="留空保存会清除当前微信 Bot Token"
+								/>
+							</Field>
+						</div>
+					) : null}
+					{hasSlackChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="Slack" description="Socket Mode 需要 Bot Token 和 App Token；token 只保存到该 Agent 的 .env。" />
+							<div className="grid grid-cols-2 gap-4">
+								<Field label="Bot Token">
+									<SecretInput value={channelDraft.slackBotToken ?? ""} onChange={(event) => onUpdateChannelField("slackBotToken", event.target.value)} />
+								</Field>
+								<Field label="App Token">
+									<SecretInput value={channelDraft.slackAppToken ?? ""} onChange={(event) => onUpdateChannelField("slackAppToken", event.target.value)} />
+								</Field>
+							</div>
+							<div className="grid grid-cols-3 gap-4">
+								<Field label="Team ID">
+									<Input value={channelDraft.slackTeamId ?? ""} onChange={(event) => onUpdateChannelField("slackTeamId", event.target.value)} />
+								</Field>
+								<Field label="App ID">
+									<Input value={channelDraft.slackAppId ?? ""} onChange={(event) => onUpdateChannelField("slackAppId", event.target.value)} />
+								</Field>
+								<Field label="Bot User ID">
+									<Input value={channelDraft.slackBotUserId ?? ""} onChange={(event) => onUpdateChannelField("slackBotUserId", event.target.value)} />
+								</Field>
+							</div>
+							<Field label="Signing Secret">
+								<SecretInput value={channelDraft.slackSigningSecret ?? ""} onChange={(event) => onUpdateChannelField("slackSigningSecret", event.target.value)} />
+							</Field>
+						</div>
+					) : null}
+					{hasDiscordChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="Discord" description="需要 Bot Token；服务端消息还需要开启 Message Content Intent。" />
+							<Field label="Bot Token">
+								<SecretInput value={channelDraft.discordBotToken ?? ""} onChange={(event) => onUpdateChannelField("discordBotToken", event.target.value)} />
+							</Field>
+							<div className="grid grid-cols-2 gap-4">
+								<Field label="Application ID">
+									<Input value={channelDraft.discordApplicationId ?? ""} onChange={(event) => onUpdateChannelField("discordApplicationId", event.target.value)} />
+								</Field>
+								<Field label="Guild ID">
+									<Input value={channelDraft.discordGuildId ?? ""} onChange={(event) => onUpdateChannelField("discordGuildId", event.target.value)} />
+								</Field>
+							</div>
+						</div>
+					) : null}
+					{hasTelegramChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+							<SectionTitle title="Telegram" description="从 BotFather 获取 Bot Token；token 只保存到该 Agent 的 .env。" />
+							<Field label="Bot Token">
+								<SecretInput value={channelDraft.telegramBotToken ?? ""} onChange={(event) => onUpdateChannelField("telegramBotToken", event.target.value)} />
+							</Field>
+							<Field label="Bot Username">
+								<Input value={channelDraft.telegramBotUsername ?? ""} onChange={(event) => onUpdateChannelField("telegramBotUsername", event.target.value)} />
+							</Field>
+						</div>
+					) : null}
+					{channelKinds.length ? (
+						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] p-5">
+							<label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2">
+								<span>
+									<span className="block text-sm font-medium text-foreground text-balance">在 IM 中显示工具调用</span>
+									<span className="block text-xs text-muted-foreground text-pretty">开启后，Agent 调用工具时会把工具名和执行状态同步发到已启用渠道。</span>
+								</span>
+								<Checkbox
+									checked={channelDraft.outputToolCallsToIm ?? true}
+									onCheckedChange={(checked) => onUpdateChannelField("outputToolCallsToIm", checked)}
+								/>
+							</label>
+						</div>
+					) : null}
+					{!channelKinds.length ? (
+						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-8 text-center text-sm text-muted-foreground">
+							该 Agent 还没有启用的 IM 渠道。
+						</div>
+					) : null}
+					<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-6 text-center text-sm text-muted-foreground">
+						配置更多渠道
 					</div>
-					<div className="grid grid-cols-2 gap-4">
-						<Field label="App ID">
-							<Input value={channelDraft.appId ?? ""} onChange={(event) => onUpdateChannelField("appId", event.target.value)} />
-						</Field>
-						<Field label="App Secret">
-							<Input value={channelDraft.appSecret ?? ""} onChange={(event) => onUpdateChannelField("appSecret", event.target.value)} />
-						</Field>
-					</div>
-					<Field label="区域">
-						<Select
-							value={channelDraft.brand ?? "feishu"}
-							onValueChange={(value) => onUpdateChannelField("brand", value)}
-						>
-							<SelectTrigger>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								{brandOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-							</SelectContent>
-						</Select>
-					</Field>
-					<label className="pie-smooth-corner flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-2">
-						<span>
-							<span className="block text-sm font-medium text-foreground text-balance">在飞书显示工具调用</span>
-							<span className="block text-xs text-muted-foreground text-pretty">开启后，Agent 调用工具时会把工具名和参数同步发到 IM。</span>
-						</span>
-						<Checkbox
-							checked={channelDraft.outputToolCallsToIm ?? true}
-							onCheckedChange={(checked) => onUpdateChannelField("outputToolCallsToIm", checked)}
-						/>
-					</label>
-					<div className="flex items-center justify-between gap-3 pt-4">
+					<div className="flex items-center justify-between gap-3 pt-1">
 						<div className="text-xs text-muted-foreground text-pretty">
 							{channelSaveMessage ?? "修改后点击保存；保存时会验证配置，运行中的 Bot 会自动重启。"}
 						</div>
@@ -307,7 +403,7 @@ export function AgentContentPanels({
 					</div>
 					<div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2">
 						<StorageDetailCard resources={resources} />
-						<div className="pie-smooth-corner min-w-0 rounded-[36px] bg-[var(--slate-2)] p-4">
+						<div className="pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 								<div className="min-w-0">
 									<SectionTitle title="近一周 Token 用量" description="每日消耗列表" />
@@ -378,8 +474,41 @@ function SectionTitle({
 		<div className={cn("min-w-0", className)}>
 			<div className="truncate text-xs font-medium uppercase text-muted-foreground">{title}</div>
 			{description ? (
-				<div className="mt-1 text-xs leading-snug text-muted-foreground text-pretty">{description}</div>
+				<div className="mt-1 truncate text-xs leading-none text-muted-foreground">{description}</div>
 			) : null}
+		</div>
+	);
+}
+
+function SecretInput({
+	value,
+	onChange,
+	placeholder,
+}: {
+	value: string;
+	onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+	placeholder?: string;
+}): JSX.Element {
+	const [visible, setVisible] = useState(false);
+	return (
+		<div className="group/secret-input relative">
+			<Input
+				type={visible ? "text" : "password"}
+				value={value}
+				onChange={onChange}
+				placeholder={placeholder}
+				className="pr-10"
+			/>
+			<Button
+				type="button"
+				variant="unstyled"
+				size="inline"
+				className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-[var(--slate-10)] opacity-0 transition-none hover:text-[var(--slate-12)] active:!translate-y-[-50%] focus:opacity-100 group-hover/secret-input:opacity-100 group-focus-within/secret-input:opacity-100"
+				onClick={() => setVisible((current) => !current)}
+				aria-label={visible ? "隐藏密钥" : "显示密钥"}
+			>
+				<AppIcon IconComponent={visible ? EyeClosedBold : EyeBold} className="size-5" />
+			</Button>
 		</div>
 	);
 }
@@ -400,10 +529,7 @@ function ResourceChartCard({
 		className?: string;
 	}): JSX.Element {
 		const stroke = "var(--slate-8)";
-		const fill = "var(--slate-a3)";
-
-	const path = useMemo(() => buildLinePath(points, 100, 44), [points]);
-	const areaPath = path ? `${path} L 100 44 L 0 44 Z` : "";
+		const maxValue = useMemo(() => Math.max(1, ...points), [points]);
 
 	return (
 		<div className={cn("pie-smooth-corner flex min-h-[8.5rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-4", className)}>
@@ -412,14 +538,25 @@ function ResourceChartCard({
 				<div className="shrink-0 text-right text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</div>
 			</div>
 			{hint ? (
-				<p className="mt-1 min-w-0 text-xs leading-snug text-balance text-muted-foreground">{hint}</p>
+				<p className="mt-1 min-w-0 truncate text-xs leading-none text-muted-foreground">{hint}</p>
 			) : null}
-			<div className="pie-smooth-corner relative mt-2 h-[72px] overflow-hidden rounded-2xl">
-				<svg viewBox="0 0 100 44" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
-					<path d={areaPath} fill={fill} />
-					<path d={path} fill="none" stroke={stroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-					<line x1="0" y1="32" x2="100" y2="32" stroke="var(--slate-a4)" strokeWidth="1" strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
-				</svg>
+			<div className="relative mt-2 h-[72px]">
+				<div className="absolute inset-0 flex items-end gap-px pb-0.5">
+					{points.length ? points.map((point, index) => (
+						<div
+							key={`${index}-${point}`}
+							className="min-w-0 flex-1 rounded-t-[3px]"
+							style={{
+								height: `${point > 0 ? Math.max(4, (point / maxValue) * 100) : 2}%`,
+								backgroundColor: stroke,
+								opacity: 0.28 + (point / maxValue) * 0.52,
+							}}
+						/>
+					)) : (
+						<div className="h-0.5 w-full rounded-full bg-[var(--slate-a4)]" />
+					)}
+				</div>
+				<div className="absolute inset-x-0 bottom-[27%] border-t border-dashed border-[var(--slate-a4)]" />
 			</div>
 		</div>
 	);
@@ -432,7 +569,7 @@ function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): J
 	const usedPercent = diskTotalBytes && diskTotalBytes > 0 ? (storageBytes / diskTotalBytes) * 100 : 0;
 
 	return (
-		<div className="pie-smooth-corner min-w-0 rounded-[36px] bg-[var(--slate-2)] p-4">
+		<div className="pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4">
 			<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 				<div className="min-w-0">
 					<SectionTitle title="存储空间" description="Profile home 与磁盘余量" />
@@ -441,7 +578,7 @@ function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): J
 					{formatBytes(storageBytes)}
 				</div>
 			</div>
-			<div className="pie-smooth-corner mt-3 space-y-3 rounded-[24px] px-4 py-3">
+			<div className="pie-smooth-corner mt-3 space-y-3 rounded-[24px] py-3">
 				<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
 					<div
 						className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
@@ -491,21 +628,6 @@ function getCacheStats(usage: AgentUsageStats): {
 		output,
 		denom,
 	};
-}
-
-function buildLinePath(points: number[], width: number, height: number): string {
-	if (!points.length) {
-		return "";
-	}
-	const maxValue = Math.max(1, ...points);
-	return points.map((point, index) => {
-		const x = points.length === 1 ? 0 : (index / (points.length - 1)) * width;
-		const y = height - Math.max(2, (point / maxValue) * (height - 4));
-		if (points.length === 1) {
-			return `M 0 ${y.toFixed(2)} L ${width} ${y.toFixed(2)}`;
-		}
-		return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-	}).join(" ");
 }
 
 function formatBytes(bytes: number): string {

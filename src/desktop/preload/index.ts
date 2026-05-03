@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentAvatarUpload, AgentCreationDraft, AgentDraft, AgentLogEntry, AgentOnboardEvent, DesktopSettingsDraft, PieDesktopApi } from "../shared/types.js";
+import type { AgentAvatarUpload, AgentCreationDraft, AgentDeleteEvent, AgentDraft, AgentLogEntry, AgentOnboardEvent, DesktopSettingsDraft, PieDesktopApi } from "../shared/types.js";
 
 const api: PieDesktopApi = {
 	getSettings: () => ipcRenderer.invoke("settings:get"),
@@ -11,6 +11,7 @@ const api: PieDesktopApi = {
 	downloadAgentAvatar: (id: string) => ipcRenderer.invoke("agents:avatar-download", id),
 	beginAgentCreation: () => ipcRenderer.invoke("agents:create-begin"),
 	createFeishuApp: (sessionId: string) => ipcRenderer.invoke("agents:create-feishu-app", sessionId),
+	createWechatLogin: (sessionId: string) => ipcRenderer.invoke("agents:create-wechat-login", sessionId),
 	completeAgentCreation: (draft: AgentCreationDraft) => ipcRenderer.invoke("agents:create-complete", draft),
 	getAgent: (id: string) => ipcRenderer.invoke("agents:get", id),
 	updateAgent: (id: string, draft: AgentDraft) => ipcRenderer.invoke("agents:update", id, draft),
@@ -36,6 +37,11 @@ const api: PieDesktopApi = {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentOnboardEvent) => callback(payload);
 		ipcRenderer.on("agents:onboard-event", listener);
 		return () => ipcRenderer.removeListener("agents:onboard-event", listener);
+	},
+	onAgentDeleteEvent: (callback: (event: AgentDeleteEvent) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: AgentDeleteEvent) => callback(payload);
+		ipcRenderer.on("agents:delete-event", listener);
+		return () => ipcRenderer.removeListener("agents:delete-event", listener);
 	},
 };
 

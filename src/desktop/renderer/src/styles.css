@@ -69,6 +69,8 @@
   --text-2xl: 1.5rem;
   --text-2xl--line-height: 1.875rem;
   --text-2xl--letter-spacing: 0;
+
+  --animate-fade-spin: fade-spin 1.2s linear infinite;
 }
 
 :root {
@@ -130,6 +132,15 @@ body {
 
 .agent-avatar-frame {
 	corner-shape: circle;
+}
+
+@keyframes fade-spin {
+	0% {
+		opacity: 0.15;
+	}
+	100% {
+		opacity: 1;
+	}
 }
 
 .agent-tabs-label {

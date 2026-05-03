@@ -4,6 +4,7 @@ import "@radix-ui/themes/styles.css";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ErrorBoundary } from "./components/shared/error-boundary";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -19,7 +20,9 @@ createRoot(document.getElementById("root")!).render(
 				hasBackground={false}
 				className="h-full w-full bg-transparent"
 			>
-				<App />
+				<ErrorBoundary>
+					<App />
+				</ErrorBoundary>
 			</Theme>
 		</QueryClientProvider>
 	</React.StrictMode>,

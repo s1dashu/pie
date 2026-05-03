@@ -8,7 +8,8 @@ import { AgentHeader } from "./AgentHeader";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { emptyUsage, type AgentTab, tabs } from "./agent-display";
 
-const MAX_RESOURCE_HISTORY_POINTS = 240;
+const MAX_RESOURCE_HISTORY_POINTS = 30;
+const resourceHistoryByAgent = new Map<string, ResourceChartHistory>();
 
 function createEmptyResourceHistory(): ResourceChartHistory {
 	return { memory: [], cpu: [] };
@@ -42,6 +43,20 @@ export function AgentDetailView({
 		appId: agent.appId ?? "",
 		appSecret: agent.appSecret ?? "",
 		brand: agent.brand ?? "feishu",
+		wechatAccountId: agent.wechat?.accountId ?? "",
+		wechatBaseUrl: agent.wechat?.baseUrl ?? "https://ilinkai.weixin.qq.com",
+		wechatBotToken: agent.wechat?.botToken ?? "",
+		slackBotToken: agent.slack?.botToken ?? "",
+		slackAppToken: agent.slack?.appToken ?? "",
+		slackSigningSecret: agent.slack?.signingSecret ?? "",
+		slackTeamId: agent.slack?.teamId ?? "",
+		slackAppId: agent.slack?.appId ?? "",
+		slackBotUserId: agent.slack?.botUserId ?? "",
+		discordBotToken: agent.discord?.botToken ?? "",
+		discordApplicationId: agent.discord?.applicationId ?? "",
+		discordGuildId: agent.discord?.guildId ?? "",
+		telegramBotToken: agent.telegram?.botToken ?? "",
+		telegramBotUsername: agent.telegram?.botUsername ?? "",
 		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 	});
 	const [modelSaveMessage, setModelSaveMessage] = useState<string | undefined>();
@@ -101,6 +116,20 @@ export function AgentDetailView({
 			appId: agent.appId ?? "",
 			appSecret: agent.appSecret ?? "",
 			brand: agent.brand ?? "feishu",
+			wechatAccountId: agent.wechat?.accountId ?? "",
+			wechatBaseUrl: agent.wechat?.baseUrl ?? "https://ilinkai.weixin.qq.com",
+			wechatBotToken: agent.wechat?.botToken ?? "",
+			slackBotToken: agent.slack?.botToken ?? "",
+			slackAppToken: agent.slack?.appToken ?? "",
+			slackSigningSecret: agent.slack?.signingSecret ?? "",
+			slackTeamId: agent.slack?.teamId ?? "",
+			slackAppId: agent.slack?.appId ?? "",
+			slackBotUserId: agent.slack?.botUserId ?? "",
+			discordBotToken: agent.discord?.botToken ?? "",
+			discordApplicationId: agent.discord?.applicationId ?? "",
+			discordGuildId: agent.discord?.guildId ?? "",
+			telegramBotToken: agent.telegram?.botToken ?? "",
+			telegramBotUsername: agent.telegram?.botUsername ?? "",
 			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 		});
 		setModelSaveMessage(undefined);
@@ -112,7 +141,7 @@ export function AgentDetailView({
 	}, [agent.id, agent.avatarUrl]);
 
 	useEffect(() => {
-		setResourceHistory(createEmptyResourceHistory());
+		setResourceHistory(resourceHistoryByAgent.get(agent.id) ?? createEmptyResourceHistory());
 	}, [agent.id]);
 
 	useEffect(() => {
@@ -123,13 +152,15 @@ export function AgentDetailView({
 			if (current.updatedAt === resources.updatedAt) {
 				return current;
 			}
-			return {
+			const next = {
 				updatedAt: resources.updatedAt,
 				memory: appendResourcePoint(current.memory, (resources.memoryBytes ?? 0) / 1024 / 1024),
 				cpu: appendResourcePoint(current.cpu, resources.cpuPercent ?? 0),
 			};
+			resourceHistoryByAgent.set(agent.id, next);
+			return next;
 		});
-	}, [resources?.updatedAt, resources?.memoryBytes, resources?.cpuPercent]);
+	}, [agent.id, resources?.updatedAt, resources?.memoryBytes, resources?.cpuPercent]);
 
 	const update = useMutation({
 		mutationFn: (newDraft: AgentDraft) => window.pie.updateAgent(agent.id, newDraft),
@@ -205,9 +236,6 @@ export function AgentDetailView({
 	});
 	const remove = useMutation({
 		mutationFn: async () => {
-			if (agent.status === "running") {
-				await window.pie.pauseAgent(agent.id);
-			}
 			return window.pie.deleteAgent(agent.id);
 		},
 		onSuccess: async () => {
@@ -284,6 +312,7 @@ export function AgentDetailView({
 					onPause={() => pause.mutate()}
 					onReveal={() => revealFinder.mutate()}
 					onDelete={() => remove.mutate()}
+					deleteError={remove.error instanceof Error ? remove.error.message : undefined}
 				/>
 				<div className="px-7 bg-white">
 					<TabsList variant="line" className="h-10 w-full justify-start gap-4 -ml-2">
@@ -296,8 +325,9 @@ export function AgentDetailView({
 					</TabsList>
 				</div>
 				<div className={cn(
-					"flex-1 bg-white px-7 pb-7 pt-4",
+					"flex-1 bg-white px-7 pt-4",
 					activeTab === "overview" ? "min-h-0 overflow-hidden" : "overflow-y-auto",
+					activeTab === "overview" ? "pb-7" : "pb-12",
 				)}>
 					<AgentContentPanels
 						activeTab={activeTab}

@@ -33,11 +33,13 @@ export function ProviderSelect({
 	value,
 	providers,
 	placeholder,
+	triggerClassName,
 	onValueChange,
 }: {
 	value: string;
 	providers: string[];
 	placeholder?: string;
+	triggerClassName?: string;
 	onValueChange: (provider: string) => void;
 }): JSX.Element {
 	const [showMoreProviders, setShowMoreProviders] = useState(false);
@@ -45,7 +47,7 @@ export function ProviderSelect({
 
 	return (
 		<Select value={value} onValueChange={onValueChange}>
-			<SelectTrigger>
+			<SelectTrigger className={triggerClassName}>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent align="start" alignItemWithTrigger={false}>

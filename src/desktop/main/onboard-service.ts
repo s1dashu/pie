@@ -10,6 +10,12 @@ import {
 } from "../../core/agent-home.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import {
+	DEFAULT_WECHAT_BASE_URL,
+	fetchLoginQr,
+	pollLoginQrStatus,
+} from "../../channels/wechat/platform/api.js";
+import { normalizeWechatAccountId } from "../../channels/wechat/state.js";
+import {
 	createAgentProfile,
 	getProfileModel,
 	getStoredProfile,
@@ -29,6 +35,7 @@ import type {
 	AgentOnboardEvent,
 	DesktopFeishuAppCredentials,
 	DesktopModelOption,
+	DesktopWechatCredentials,
 } from "../shared/types.js";
 
 type EmitOnboardEvent = (event: AgentOnboardEvent) => void;
@@ -219,11 +226,126 @@ export async function createFeishuAppForSession(
 	}
 }
 
+const WECHAT_BOT_TYPE = "3";
+const WECHAT_LOGIN_TIMEOUT_MS = 480_000;
+const WECHAT_QR_STATUS_TIMEOUT_MS = 35_000;
+const MAX_WECHAT_QR_REFRESH_COUNT = 3;
+
+export async function createWechatLoginForSession(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+): Promise<DesktopWechatCredentials> {
+	const homeDir = getProfileHomeDir(sessionId);
+	try {
+		emit({ sessionId, type: "status", message: "正在准备微信扫码授权..." });
+		let qr = await fetchLoginQr({
+			baseUrl: DEFAULT_WECHAT_BASE_URL,
+			botType: WECHAT_BOT_TYPE,
+		});
+		let refreshCount = 1;
+		let scanned = false;
+		const deadline = Date.now() + WECHAT_LOGIN_TIMEOUT_MS;
+		const emitQr = async (message: string) => {
+			emit({
+				sessionId,
+				type: "qr",
+				message,
+				url: qr.qrcode_img_content,
+				qr: await generateQrText(qr.qrcode_img_content),
+			});
+		};
+		await emitQr("请使用微信扫码连接 bot");
+		while (Date.now() < deadline) {
+			const status = await pollLoginQrStatus({
+				baseUrl: DEFAULT_WECHAT_BASE_URL,
+				qrcode: qr.qrcode,
+				timeoutMs: WECHAT_QR_STATUS_TIMEOUT_MS,
+			});
+			if (status.status === "wait") {
+				continue;
+			}
+			if (status.status === "scaned") {
+				if (!scanned) {
+					emit({ sessionId, type: "status", message: "已扫码，请在微信里继续确认..." });
+					scanned = true;
+				}
+				continue;
+			}
+			if (status.status === "scaned_but_redirect") {
+				emit({ sessionId, type: "status", message: "微信扫码已跳转，请继续等待确认..." });
+				continue;
+			}
+			if (status.status === "expired") {
+				refreshCount += 1;
+				if (refreshCount > MAX_WECHAT_QR_REFRESH_COUNT) {
+					throw new Error("微信登录二维码多次过期，请重新开始创建。");
+				}
+				emit({ sessionId, type: "status", message: `微信二维码已过期，正在刷新 (${refreshCount}/${MAX_WECHAT_QR_REFRESH_COUNT})...` });
+				qr = await fetchLoginQr({
+					baseUrl: DEFAULT_WECHAT_BASE_URL,
+					botType: WECHAT_BOT_TYPE,
+				});
+				scanned = false;
+				await emitQr("请使用新的微信二维码扫码连接 bot");
+				continue;
+			}
+			if (status.status === "confirmed") {
+				const token = status.bot_token?.trim();
+				const rawAccountId = status.ilink_bot_id?.trim();
+				if (!token || !rawAccountId) {
+					throw new Error("微信登录已确认，但响应缺少 bot token 或 account id。");
+				}
+				const wechat: DesktopWechatCredentials = {
+					accountId: normalizeWechatAccountId(rawAccountId),
+					baseUrl: status.baseurl?.trim() || DEFAULT_WECHAT_BASE_URL,
+					...(status.ilink_user_id?.trim() ? { userId: status.ilink_user_id.trim() } : {}),
+				};
+				upsertAgentEnv({
+					WECHAT_BOT_TOKEN: token,
+					WECHAT_ACCOUNT_ID: wechat.accountId,
+					WECHAT_BASE_URL: wechat.baseUrl,
+					...(wechat.userId ? { WECHAT_USER_ID: wechat.userId } : {}),
+				}, homeDir);
+				emit({ sessionId, type: "done", message: "微信已连接", wechat });
+				return wechat;
+			}
+		}
+		throw new Error("微信登录超时，请重新开始创建。");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		emit({ sessionId, type: "error", message });
+		throw error;
+	}
+}
+
 export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const profileId = draft.sessionId;
 	const homeDir = getProfileHomeDir(profileId);
-	if (!draft.feishu.appId.trim() || !draft.feishu.appSecret.trim()) {
+	const channels = Array.from(new Set(draft.channels)).filter(
+		(channel) =>
+			channel === "feishu" ||
+			channel === "wechat" ||
+			channel === "slack" ||
+			channel === "discord" ||
+			channel === "telegram",
+	);
+	if (!channels.length) {
+		throw new Error("至少选择一个 IM 渠道");
+	}
+	if (channels.includes("feishu") && (!draft.feishu?.appId.trim() || !draft.feishu.appSecret.trim())) {
 		throw new Error("飞书 App ID 和 App Secret 必填");
+	}
+	if (channels.includes("wechat") && !draft.wechat?.accountId.trim()) {
+		throw new Error("微信渠道尚未完成扫码授权");
+	}
+	if (channels.includes("slack") && (!draft.slack?.botToken.trim() || !draft.slack.appToken.trim())) {
+		throw new Error("Slack Bot Token 和 App Token 必填");
+	}
+	if (channels.includes("discord") && !draft.discord?.botToken.trim()) {
+		throw new Error("Discord Bot Token 必填");
+	}
+	if (channels.includes("telegram") && !draft.telegram?.botToken.trim()) {
+		throw new Error("Telegram Bot Token 必填");
 	}
 	if (!draft.provider.trim() || !draft.model.trim()) {
 		throw new Error("Provider 和模型必填");
@@ -251,35 +373,92 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	}
 
 	const profile = createAgentProfile({
-		feishu: {
-			kind: "feishu",
-			id: "feishu",
-			enabled: true,
-			appId: draft.feishu.appId.trim(),
-			brand: draft.feishu.brand,
+		backend: {
+			kind: draft.framework,
+			model: {
+				provider,
+				model,
+				thinkingLevel: draft.thinkingLevel as ThinkingLevel,
+				tools: exModel?.tools ?? "coding",
+				debug: exModel?.debug ?? false,
+				resumeSessions: draft.framework === "ousia",
+				outputToolCallsToIm: true,
+			},
 		},
-		model: {
-			provider,
-			model,
-			thinkingLevel: draft.thinkingLevel as ThinkingLevel,
-			tools: exModel?.tools ?? "coding",
-			debug: exModel?.debug ?? false,
-			resumeSessions: true,
-			outputToolCallsToIm: true,
-		},
+		channels: [
+			...(channels.includes("feishu") && draft.feishu
+				? [{
+						kind: "feishu" as const,
+						id: "feishu",
+						enabled: true,
+						appId: draft.feishu.appId.trim(),
+						brand: draft.feishu.brand,
+					}]
+				: []),
+			...(channels.includes("wechat")
+				? [{
+						kind: "wechat" as const,
+						id: "wechat",
+						enabled: true,
+						accountId: draft.wechat?.accountId.trim() || "wechat",
+						baseUrl: draft.wechat?.baseUrl.trim() || DEFAULT_WECHAT_BASE_URL,
+					}]
+				: []),
+			...(channels.includes("slack")
+				? [{
+						kind: "slack" as const,
+						id: "slack",
+						enabled: true,
+						teamId: draft.slack?.teamId?.trim() || undefined,
+						appId: draft.slack?.appId?.trim() || undefined,
+						botUserId: draft.slack?.botUserId?.trim() || undefined,
+					}]
+				: []),
+			...(channels.includes("discord")
+				? [{
+						kind: "discord" as const,
+						id: "discord",
+						enabled: true,
+						applicationId: draft.discord?.applicationId?.trim() || undefined,
+						guildId: draft.discord?.guildId?.trim() || undefined,
+					}]
+				: []),
+			...(channels.includes("telegram")
+				? [{
+						kind: "telegram" as const,
+						id: "telegram",
+						enabled: true,
+						botUsername: draft.telegram?.botUsername?.trim() || undefined,
+					}]
+				: []),
+		],
 	});
 
 	saveConfigStore(setStoredProfile(store, profile), homeDir);
-	const savedEnv: Record<string, string> = {
-		FEISHU_APP_SECRET: draft.feishu.appSecret.trim(),
-	};
+	const savedEnv: Record<string, string> = {};
+	if (channels.includes("feishu") && draft.feishu) {
+		savedEnv.FEISHU_APP_SECRET = draft.feishu.appSecret.trim();
+	}
+	if (channels.includes("slack") && draft.slack) {
+		savedEnv.SLACK_BOT_TOKEN = draft.slack.botToken.trim();
+		savedEnv.SLACK_APP_TOKEN = draft.slack.appToken.trim();
+		if (draft.slack.signingSecret?.trim()) {
+			savedEnv.SLACK_SIGNING_SECRET = draft.slack.signingSecret.trim();
+		}
+	}
+	if (channels.includes("discord") && draft.discord) {
+		savedEnv.DISCORD_BOT_TOKEN = draft.discord.botToken.trim();
+	}
+	if (channels.includes("telegram") && draft.telegram) {
+		savedEnv.TELEGRAM_BOT_TOKEN = draft.telegram.botToken.trim();
+	}
 	const envKey = getProviderCredentialEnv(provider);
 	if (envKey && apiKey) {
 		savedEnv[envKey] = apiKey;
 	}
 	upsertAgentEnv(savedEnv, homeDir);
 	registerProfileHome(profileId, {
-		displayName: draft.feishu.appName?.trim() || draft.name?.trim() || profileId,
+		displayName: draft.feishu?.appName?.trim() || draft.telegram?.botUsername?.trim() || draft.name?.trim() || profileId,
 		enabled: false,
 		active: true,
 	});

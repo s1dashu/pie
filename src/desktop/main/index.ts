@@ -6,6 +6,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import {
 	deleteProfileRegistryEntry,
 	getDefaultPieRootDir,
+	getProfileHomeDir,
 	loadProfileRegistry,
 	registerProfileHome,
 	updateProfileRegistryEntry,
@@ -13,10 +14,18 @@ import {
 import { getAgentEnvFilePath, readAgentEnvFile, upsertAgentEnv } from "../../core/agent-home.js";
 import {
 	getPrimaryFeishuChannel,
+	getPrimaryDiscordChannel,
+	getPrimarySlackChannel,
+	getPrimaryTelegramChannel,
+	getPrimaryWechatChannel,
 	getProfileModel,
 	normalizeConfigStore,
 	setProfileModel,
 	upsertFeishuChannel,
+	upsertDiscordChannel,
+	upsertSlackChannel,
+	upsertTelegramChannel,
+	upsertWechatChannel,
 	type AgentConfigStore,
 } from "../../core/config-store.js";
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
@@ -25,6 +34,7 @@ import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import type {
 	AgentCreationDraft,
 	AgentAvatarUpload,
+	AgentDeleteEvent,
 	AgentDetails,
 	AgentDraft,
 	AgentLogEntry,
@@ -36,6 +46,7 @@ import type {
 	BotAvatarOption,
 	DesktopModelCatalog,
 	DesktopFeishuAppCredentials,
+	DesktopWechatCredentials,
 	DesktopSettings,
 	DesktopSettingsDraft,
 } from "../shared/types.js";
@@ -43,8 +54,10 @@ import {
 	beginAgentCreation as beginCreationSession,
 	completeAgentCreation as completeCreationSession,
 	createFeishuAppForSession,
+	createWechatLoginForSession,
 	getProviderCredentialEnv,
 	loadModelCatalog,
+	loadModelOptions,
 } from "./onboard-service.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
@@ -56,6 +69,7 @@ const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 let isQuitting = false;
 let didStopAgentsForQuit = false;
+let isRestoringEnabledAgents = true;
 
 function logUnhandledMainProcessError(kind: string, error: unknown): void {
 	console.error(`[desktop] ${kind}:`, error);
@@ -355,7 +369,7 @@ function getAgentTypeSkillDir(profile: AgentConfigStore["profile"]): { label: st
 	if (kind === "claude" || kind === "claude-code") {
 		return { label: "Claude 共享 Skills", path: join(homedir(), ".claude", "skills") };
 	}
-	if (kind === "pi") {
+	if (kind === "ousia" || kind === "pi") {
 		return { label: "Pi Agent Skills", path: join(homedir(), ".pi", "skills") };
 	}
 	return { label: `${kind} 共享 Skills`, path: join(homedir(), `.${kind}`, "skills") };
@@ -546,11 +560,18 @@ function describeSkillSource(source: Omit<AgentSkillSource, "exists" | "skillCou
 
 function resolveSystemPromptPath(profile: AgentConfigStore["profile"], env: Record<string, string>): { label: string; description: string; path: string } {
 	const kind = String(profile?.backend.kind ?? "pi");
+	if (kind === "ousia") {
+		return {
+			label: "系统提示词",
+			description: "Ousia runtime 当前注入到 Agent session 的系统提示词。",
+			path: resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE?.trim() || getDefaultPiSystemPromptPath()),
+		};
+	}
 	if (kind === "pi") {
 		return {
 			label: "系统提示词",
-			description: "Pi runtime 当前注入到 Agent session 的系统提示词。",
-			path: resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE?.trim() || getDefaultPiSystemPromptPath()),
+			description: "Pi Coding Agent 原版系统提示词由上游运行时提供，Pie 不注入自定义 system prompt。",
+			path: resolve(env.PI_CODING_AGENT_SYSTEM_PROMPT_FILE?.trim() || join(homedir(), ".pi", "system-prompt.md")),
 		};
 	}
 	return {
@@ -593,6 +614,9 @@ function statusForProfile(id: string, enabled: boolean): AgentSummary["status"] 
 	if (agentProcesses.isReady(id)) {
 		return "running";
 	}
+	if (agentProcesses.isRunning(id) || (enabled && isRestoringEnabledAgents)) {
+		return "starting";
+	}
 	return enabled ? "paused" : "terminated";
 }
 
@@ -613,6 +637,14 @@ function profileHomeFromEntry(rootDir: string, entryHome: string): string {
 	return resolve(rootDir, entryHome);
 }
 
+function displayModelId(modelId: string | undefined): string | undefined {
+	const value = modelId?.trim();
+	if (!value) {
+		return undefined;
+	}
+	return value.split("/").filter(Boolean).at(-1) ?? value;
+}
+
 async function listAgents(): Promise<AgentSummary[]> {
 	const registry = loadProfileRegistry();
 	const rootDir = getDefaultPieRootDir();
@@ -621,7 +653,15 @@ async function listAgents(): Promise<AgentSummary[]> {
 		const config = readProfileConfig(home);
 		const model = getProfileModel(config?.profile);
 		const channel = getPrimaryFeishuChannel(config?.profile);
-		const modelLabel = model?.provider && model?.model ? `${model.provider}/${model.model}` : undefined;
+		const channelKinds = config?.profile?.channels
+			.filter((profileChannel) => profileChannel.enabled !== false)
+			.map((profileChannel) => profileChannel.kind);
+		const frameworkKind = config?.profile?.backend.kind ? String(config.profile.backend.kind) : undefined;
+		const selectedModelId = displayModelId(model?.model);
+		const modelOption = model?.provider && model?.model
+			? loadModelOptions(home).find((item) => item.provider === model.provider && item.id === selectedModelId)
+			: undefined;
+		const modelLabel = model?.provider && model?.model ? modelOption?.name || selectedModelId : undefined;
 		return {
 			id,
 			name: entry.displayName || id,
@@ -633,7 +673,9 @@ async function listAgents(): Promise<AgentSummary[]> {
 			home,
 			createdAt: entry.createdAt,
 			updatedAt: entry.updatedAt,
+			frameworkKind,
 			modelLabel,
+			channelKinds,
 			appId: channel?.appId,
 		};
 	});
@@ -669,17 +711,21 @@ async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<Desktop
 }
 
 async function restoreEnabledAgents(): Promise<void> {
-	if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
-		return;
+	try {
+		if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
+			return;
+		}
+		const agents = await listAgents();
+		await Promise.all(
+			agents
+				.filter((agent) => agent.enabled)
+				.map((agent) => withAgentOperation(agent.id, () => startAgent(agent.id)).catch((error) => {
+					console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
+				})),
+		);
+	} finally {
+		isRestoringEnabledAgents = false;
 	}
-	const agents = await listAgents();
-	await Promise.all(
-		agents
-			.filter((agent) => agent.enabled)
-			.map((agent) => withAgentOperation(agent.id, () => startAgent(agent.id)).catch((error) => {
-				console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
-			})),
-	);
 }
 
 async function getAgent(id: string): Promise<AgentDetails> {
@@ -692,12 +738,46 @@ async function getAgent(id: string): Promise<AgentDetails> {
 	const env = readProfileEnv(summary.home);
 	const profile = config?.profile;
 	const channel = getPrimaryFeishuChannel(profile);
+	const wechatChannel = getPrimaryWechatChannel(profile);
+	const slackChannel = getPrimarySlackChannel(profile);
+	const discordChannel = getPrimaryDiscordChannel(profile);
+	const telegramChannel = getPrimaryTelegramChannel(profile);
 	const model = getProfileModel(profile);
 	const apiKeyEnv = model?.provider ? getProviderCredentialEnv(model.provider) : undefined;
 	return {
 		...summary,
 		brand: channel?.brand,
 		appSecret: env.FEISHU_APP_SECRET,
+		wechat: wechatChannel
+			? {
+					accountId: wechatChannel.accountId,
+					baseUrl: wechatChannel.baseUrl,
+					botToken: env.WECHAT_BOT_TOKEN ?? "",
+				}
+			: undefined,
+		slack: slackChannel
+			? {
+					botToken: env.SLACK_BOT_TOKEN ?? "",
+					appToken: env.SLACK_APP_TOKEN ?? "",
+					signingSecret: env.SLACK_SIGNING_SECRET ?? "",
+					teamId: slackChannel.teamId,
+					appId: slackChannel.appId,
+					botUserId: slackChannel.botUserId,
+				}
+			: undefined,
+		discord: discordChannel
+			? {
+					botToken: env.DISCORD_BOT_TOKEN ?? "",
+					applicationId: discordChannel.applicationId,
+					guildId: discordChannel.guildId,
+				}
+			: undefined,
+		telegram: telegramChannel
+			? {
+					botToken: env.TELEGRAM_BOT_TOKEN ?? "",
+					botUsername: telegramChannel.botUsername,
+				}
+			: undefined,
 		model: {
 			...(model ?? {}),
 			...(apiKeyEnv ? { apiKeyEnv, apiKey: env[apiKeyEnv] ?? "" } : {}),
@@ -843,19 +923,33 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	const agent = await getAgent(id);
 	const current = readProfileConfig(agent.home) ?? { version: 3 };
 	const currentProfile = current.profile;
-	const channel = getPrimaryFeishuChannel(currentProfile) ?? {
-		kind: "feishu" as const,
-		id: "feishu",
-		enabled: true,
-		appId: "",
-		brand: "feishu" as const,
-	};
+	const feishuChannel = getPrimaryFeishuChannel(currentProfile);
+	const wechatChannel = getPrimaryWechatChannel(currentProfile);
+	const slackChannel = getPrimarySlackChannel(currentProfile);
+	const discordChannel = getPrimaryDiscordChannel(currentProfile);
+	const telegramChannel = getPrimaryTelegramChannel(currentProfile);
 	const model = getProfileModel(currentProfile) ?? {};
-	const hasChannelUpdate = draft.appId !== undefined || draft.appSecret !== undefined || draft.brand !== undefined;
-	const nextAppId = draft.appId ?? channel.appId;
-	const nextBrand = draft.brand ?? channel.brand ?? "feishu";
+	const hasFeishuUpdate = draft.appId !== undefined || draft.appSecret !== undefined || draft.brand !== undefined;
+	const hasWechatUpdate =
+		draft.wechatAccountId !== undefined ||
+		draft.wechatBaseUrl !== undefined ||
+		draft.wechatBotToken !== undefined;
+	const hasSlackUpdate =
+		draft.slackBotToken !== undefined ||
+		draft.slackAppToken !== undefined ||
+		draft.slackSigningSecret !== undefined ||
+		draft.slackTeamId !== undefined ||
+		draft.slackAppId !== undefined ||
+		draft.slackBotUserId !== undefined;
+	const hasDiscordUpdate =
+		draft.discordBotToken !== undefined ||
+		draft.discordApplicationId !== undefined ||
+		draft.discordGuildId !== undefined;
+	const hasTelegramUpdate = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
+	const nextAppId = draft.appId ?? feishuChannel?.appId ?? "";
+	const nextBrand = draft.brand ?? feishuChannel?.brand ?? "feishu";
 	const nextAppSecret = draft.appSecret ?? readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
-	if (hasChannelUpdate) {
+	if (hasFeishuUpdate) {
 		if (!nextAppId.trim() || !nextAppSecret.trim()) {
 			throw new Error("飞书 App ID 和 App Secret 必填");
 		}
@@ -865,26 +959,112 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 			brand: nextBrand,
 		});
 	}
+	const nextWechatAccountId = draft.wechatAccountId ?? wechatChannel?.accountId ?? "";
+	const nextWechatBaseUrl = draft.wechatBaseUrl ?? wechatChannel?.baseUrl ?? "https://ilinkai.weixin.qq.com";
+	if (hasWechatUpdate && !nextWechatAccountId.trim()) {
+		throw new Error("微信 Account ID 必填");
+	}
+	if (hasSlackUpdate) {
+		const env = readProfileEnv(agent.home);
+		const botToken = draft.slackBotToken ?? env.SLACK_BOT_TOKEN ?? "";
+		const appToken = draft.slackAppToken ?? env.SLACK_APP_TOKEN ?? "";
+		if (!botToken.trim() || !appToken.trim()) {
+			throw new Error("Slack Bot Token 和 App Token 必填");
+		}
+	}
+	if (hasDiscordUpdate) {
+		const token = draft.discordBotToken ?? readProfileEnv(agent.home).DISCORD_BOT_TOKEN ?? "";
+		if (!token.trim()) {
+			throw new Error("Discord Bot Token 必填");
+		}
+	}
+	if (hasTelegramUpdate) {
+		const token = draft.telegramBotToken ?? readProfileEnv(agent.home).TELEGRAM_BOT_TOKEN ?? "";
+		if (!token.trim()) {
+			throw new Error("Telegram Bot Token 必填");
+		}
+	}
 	validateModelDraft(draft);
-	const nextProfileWithChannel = upsertFeishuChannel(currentProfile, {
-		...channel,
-		appId: nextAppId.trim(),
-		brand: nextBrand,
-	});
+	let nextProfileWithChannel = currentProfile;
+	if (feishuChannel || hasFeishuUpdate) {
+		nextProfileWithChannel = upsertFeishuChannel(nextProfileWithChannel, {
+			...(feishuChannel ?? { kind: "feishu" as const, id: "feishu", enabled: true }),
+			appId: nextAppId.trim(),
+			brand: nextBrand,
+		});
+	}
+	if (wechatChannel || hasWechatUpdate) {
+		nextProfileWithChannel = upsertWechatChannel(nextProfileWithChannel, {
+			...(wechatChannel ?? { kind: "wechat" as const, id: "wechat", enabled: true }),
+			accountId: nextWechatAccountId.trim(),
+			baseUrl: nextWechatBaseUrl.trim(),
+		});
+	}
+	if (slackChannel || hasSlackUpdate) {
+		nextProfileWithChannel = upsertSlackChannel(nextProfileWithChannel, {
+			...(slackChannel ?? { kind: "slack" as const, id: "slack", enabled: true }),
+			teamId: draft.slackTeamId ?? slackChannel?.teamId,
+			appId: draft.slackAppId ?? slackChannel?.appId,
+			botUserId: draft.slackBotUserId ?? slackChannel?.botUserId,
+		});
+	}
+	if (discordChannel || hasDiscordUpdate) {
+		nextProfileWithChannel = upsertDiscordChannel(nextProfileWithChannel, {
+			...(discordChannel ?? { kind: "discord" as const, id: "discord", enabled: true }),
+			applicationId: draft.discordApplicationId ?? discordChannel?.applicationId,
+			guildId: draft.discordGuildId ?? discordChannel?.guildId,
+		});
+	}
+	if (telegramChannel || hasTelegramUpdate) {
+		nextProfileWithChannel = upsertTelegramChannel(nextProfileWithChannel, {
+			...(telegramChannel ?? { kind: "telegram" as const, id: "telegram", enabled: true }),
+			botUsername: draft.telegramBotUsername ?? telegramChannel?.botUsername,
+		});
+	}
 	const nextProfile = setProfileModel(nextProfileWithChannel, {
 		...model,
 		provider: draft.provider ?? model.provider,
 		model: draft.model ?? model.model,
 		thinkingLevel: draft.thinkingLevel ?? model.thinkingLevel,
-		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm,
+		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm ?? true,
 	});
 	writeProfileConfig(agent.home, {
 		...current,
 		version: 3,
 		profile: nextProfile,
 	});
-	if (hasChannelUpdate) {
+	if (hasFeishuUpdate) {
 		upsertAgentEnv({ FEISHU_APP_SECRET: nextAppSecret.trim() }, agent.home);
+	}
+	if (hasWechatUpdate) {
+		const envUpdates: Record<string, string | undefined> = {};
+		if (draft.wechatBotToken !== undefined) {
+			envUpdates.WECHAT_BOT_TOKEN = draft.wechatBotToken.trim();
+		}
+		if (draft.wechatAccountId !== undefined) {
+			envUpdates.WECHAT_ACCOUNT_ID = nextWechatAccountId.trim();
+		}
+		if (draft.wechatBaseUrl !== undefined) {
+			envUpdates.WECHAT_BASE_URL = nextWechatBaseUrl.trim();
+		}
+		upsertAgentEnv(envUpdates, agent.home);
+	}
+	if (hasSlackUpdate) {
+		upsertAgentEnv({
+			...(draft.slackBotToken !== undefined ? { SLACK_BOT_TOKEN: draft.slackBotToken.trim() } : {}),
+			...(draft.slackAppToken !== undefined ? { SLACK_APP_TOKEN: draft.slackAppToken.trim() } : {}),
+			...(draft.slackSigningSecret !== undefined ? { SLACK_SIGNING_SECRET: draft.slackSigningSecret.trim() } : {}),
+		}, agent.home);
+	}
+	if (hasDiscordUpdate) {
+		upsertAgentEnv({
+			...(draft.discordBotToken !== undefined ? { DISCORD_BOT_TOKEN: draft.discordBotToken.trim() } : {}),
+		}, agent.home);
+	}
+	if (hasTelegramUpdate) {
+		upsertAgentEnv({
+			...(draft.telegramBotToken !== undefined ? { TELEGRAM_BOT_TOKEN: draft.telegramBotToken.trim() } : {}),
+		}, agent.home);
 	}
 	const nextProvider = draft.provider ?? model.provider;
 	const apiKeyEnv = nextProvider ? getProviderCredentialEnv(nextProvider) : undefined;
@@ -925,13 +1105,44 @@ async function stopRunningAgent(id: string): Promise<void> {
 	updateProfileRegistryEntry(id, { enabled: false });
 }
 
-async function deleteAgent(id: string): Promise<void> {
-	const agent = await getAgent(id);
-	await stopRunningAgent(id);
-	deleteProfileRegistryEntry(id);
-	if (agent.home.startsWith(resolve(getDefaultPieRootDir(), "profiles"))) {
-		rmSync(agent.home, { recursive: true, force: true });
+function emitDeleteEvent(event: AgentDeleteEvent): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (win.isDestroyed() || win.webContents.isDestroyed()) {
+			continue;
+		}
+		win.webContents.send("agents:delete-event", event);
 	}
+}
+
+function waitForMinimumStepDuration(startedAt: number, minimumMs = 500): Promise<void> {
+	const remainingMs = minimumMs - (Date.now() - startedAt);
+	if (remainingMs <= 0) {
+		return Promise.resolve();
+	}
+	return new Promise((resolveWait) => setTimeout(resolveWait, remainingMs));
+}
+
+async function deleteAgent(id: string): Promise<void> {
+	const registry = loadProfileRegistry();
+	const entry = registry.profiles[id];
+	const rootDir = getDefaultPieRootDir();
+	const home = entry?.home ? profileHomeFromEntry(rootDir, entry.home) : getProfileHomeDir(id, rootDir);
+	let stepStartedAt = Date.now();
+	emitDeleteEvent({ agentId: id, step: "stop", message: "停止运行中的实例" });
+	if (agentProcesses.isRunning(id)) {
+		await agentProcesses.stop(id, "deleted");
+	}
+	await waitForMinimumStepDuration(stepStartedAt);
+	stepStartedAt = Date.now();
+	emitDeleteEvent({ agentId: id, step: "files", message: "清除 Agent 文件" });
+	deleteProfileRegistryEntry(id);
+	if (home.startsWith(resolve(rootDir, "profiles"))) {
+		rmSync(home, { recursive: true, force: true });
+	}
+	await waitForMinimumStepDuration(stepStartedAt);
+	stepStartedAt = Date.now();
+	emitDeleteEvent({ agentId: id, step: "done", message: "删除完成" });
+	await waitForMinimumStepDuration(stepStartedAt);
 }
 
 async function openAgentInEditor(id: string): Promise<void> {
@@ -1079,11 +1290,23 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:create-wechat-login", async (_event, sessionId: string): Promise<DesktopWechatCredentials> => {
+		try {
+			return await createWechatLoginForSession(sessionId, emitOnboardEvent);
+		} catch (error) {
+			console.error("[ipc] agents:create-wechat-login failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:create-complete", async (_event, draft: AgentCreationDraft) => {
 		try {
 			completeCreationSession(draft);
 			const agent = await getAgent(draft.sessionId);
-			await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
+			if (draft.feishu?.avatarUrl) {
+				await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
+			} else if (draft.channels.includes("wechat") && draft.avatarId) {
+				copyDefaultAvatarToProfile(draft.avatarId, agent.home);
+			}
 			return await withAgentOperation(draft.sessionId, () => startAgent(draft.sessionId));
 		} catch (error) {
 			console.error("[ipc] agents:create-complete failed:", error);
