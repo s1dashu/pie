@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 runtime 基于 `@mariozechner/pi-coding-agent`，但长期目标是能管理不同 backend 的 agent，例如 Pi、Openclaw、Hermes。
+Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 runtime 仍主要基于 `@mariozechner/pi-coding-agent` 的 session/tool 能力；产品侧可以选择不同 framework/backend，例如默认的 Pi，以及显式选择后才启用 Pie 额外 runtime 能力的 Ousia。长期目标是能管理 Openclaw、Hermes 等更多 backend。
 
 核心原则：
 
@@ -12,11 +12,11 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 
 
 ## 当前真实状态
 
-- 根目录 `pie` 是产品 runtime：desktop、CLI/onboard、Feishu channel、Task Engine、system prompt、agent home。
-- 当前主要开发对象是桌面端；CLI/onboard、Feishu channel、Task Engine 等能力服务于桌面端的 Agent 客户端体验。
+- 根目录 `pie` 是产品 runtime：desktop、CLI/onboard、channel adapters、Task Engine、system prompt、agent home。
+- 当前主要开发对象是桌面端；CLI/onboard、channel adapters、Task Engine 等能力服务于桌面端的 Agent 客户端体验。
 - `pi-feishu/` 是独立子包，定位为纯 Feishu/Lark channel package；不要把根目录产品能力写进子包文档。
-- 当前完成度较高的 channel 只有 `feishu`；`wechat/slack/discord/telegram` 只能作为规划或占位，不要描述为已支持。
-- 当前真正运行的 backend 是 Pi / `pi-coding-agent`；Openclaw、Hermes 只是架构预留。
+- 当前完成度较高的 channel 仍是 `feishu`；`wechat` 已有扫码登录、轮询和收发消息实现，但仍按早期集成处理；`slack/discord/telegram` 已有 adapter 和手动凭证入口，但首发前不要描述为稳定支持。
+- 当前真正运行的 backend/framework 是 Pi / `pi-coding-agent`，默认创建新 Agent 时选择 Pi。Ousia 是 Pie 的增强 framework：复用 `pi-coding-agent` session，但会注入 Pie system prompt，并启动 Task Engine 和 `/agent/turn` gateway。Openclaw、Hermes 只是架构预留。
 - Task Engine 的 scheduled task、runtime heartbeat、webhook/external intake 仍偏原型；不要描述为稳定产品能力。
 
 ## 架构结论
@@ -27,14 +27,17 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。当前 
 - 敏感信息只进 `<agent-home>/.env`，不要写入 `config.json`。
 - instance-level 能力放在 `src/runtime/`，例如 `/agent/turn` gateway、Task Engine 管理。
 - channel 目录只负责 channel adapter：收消息、发消息、channel 事件解析与投递，不负责启动 Task Engine 或通用 gateway。
-- backend 抽象先保持轻量。等第二个 backend 真接入时，再提炼统一 Agent API。
+- backend/framework 抽象先保持轻量。当前通过 `src/core/backend-framework.ts` 先解析 framework capability，再决定初始化动作：Pi 只启动所选 channel runtime；Ousia 才额外启动 Task Engine、turn gateway 和 Pie system prompt 注入。等 Openclaw/Hermes 至少一个真接入时，再提炼统一 Agent API。
 
 ## 关键入口
 
 - `src/cli/index.ts`：根 CLI 入口；`npm run start` / `pie` 启动 runtime；`pie onboard` 或 `pie --onboard` 进入配置。
 - `src/runtime/main.ts`：产品 runtime，初始化 agent home、启动 instance gateway、Task Engine 和当前可用 channel。
 - `src/channels/feishu/main.ts`：Feishu channel adapter。
+- `src/channels/wechat/main.ts`：WeChat channel adapter；当前仍属于早期集成。
+- `src/channels/common/`：Slack/Discord/Telegram 等 text channel adapter 共享 runtime。
 - `src/channels/feishu/session.ts`：Pi session pool、system prompt 注入、工具配置。
+- `src/core/backend-framework.ts`：framework capability 定义，决定 Pi/Ousia 初始化时需要启动哪些产品级 runtime 能力。
 - `src/core/config-store.ts`：agent profile/config schema。
 - `src/core/agent-home.ts`：`PIE_AGENT_HOME`、`.env`、agent home 路径。
 - `src/task-engine/`：Task Engine；入口是 `engine.ts` 和 `runtime.ts`。
