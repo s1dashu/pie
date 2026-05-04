@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
-import { join } from "node:path";
 import chalk from "chalk";
-import { AGENT_HOME_SUBDIRS } from "../../core/agent-home-layout.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -22,10 +20,6 @@ import type { CommonChannelRuntimeConfig } from "./config.js";
 import { extractTextPart, type IncomingChannelMessage, type TextChannelAdapter } from "./channel-model.js";
 import { formatToolImErrorLine, formatToolImLine } from "./tool-call-im.js";
 
-function truncate(text: string, max = 600): string {
-	return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
 function formatBackendLabel(kind: CommonChannelRuntimeConfig["backendKind"]): string {
 	if (kind === "ousia") {
 		return "Ousia";
@@ -33,17 +27,10 @@ function formatBackendLabel(kind: CommonChannelRuntimeConfig["backendKind"]): st
 	if (kind === "codex") {
 		return "Codex";
 	}
+	if (kind === "hermes") {
+		return "Hermes";
+	}
 	return "Pi Coding Agent";
-}
-
-function formatDefaultPromptLabel(kind: CommonChannelRuntimeConfig["backendKind"]): string {
-	if (kind === "codex") {
-		return "Codex default";
-	}
-	if (kind === "ousia") {
-		return "Ousia default";
-	}
-	return "Pi Coding Agent default";
 }
 
 function formatError(error: unknown): string {
@@ -56,6 +43,14 @@ function formatTaskPrompt(prompt: string): string {
 		throw new Error("Task prompt is empty.");
 	}
 	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
+}
+
+function formatThinkingForIm(text: string): string {
+	return text
+		.trim()
+		.split(/\r?\n/)
+		.map((line) => `> ${line}`)
+		.join("\n");
 }
 
 interface QueuedTextTurn {
@@ -129,17 +124,38 @@ class TextConversationController {
 
 	private async executeRequest(request: QueuedTextTurn): Promise<void> {
 		let unsubscribe: (() => void) | undefined;
+		let thinkingText = "";
+		let flushedThinkingLength = 0;
+		const flushThinking = async (): Promise<void> => {
+			const nextText = thinkingText.slice(flushedThinkingLength);
+			if (!nextText.trim()) {
+				return;
+			}
+			flushedThinkingLength = thinkingText.length;
+			await this.runtime.sendPlainReply(request.message, formatThinkingForIm(nextText));
+		};
 		try {
 			const session = await this.runtime.getSession(this.conversationKey);
-			if (this.runtime.shouldOutputToolCallsToIm()) {
+			if (this.runtime.shouldOutputToolCallsToIm() || this.runtime.shouldOutputThinkingToIm()) {
 				unsubscribe = session.subscribe((event) => {
-					if (event.type === "tool_execution_start") {
-						void this.runtime.sendPlainReply(request.message, formatToolImLine(event.toolName, event.args)).catch(() => undefined);
+					if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_delta" && event.delta) {
+						thinkingText += event.delta;
 					}
-					if (event.type === "tool_execution_end" && event.isError) {
-						void this.runtime
-							.sendPlainReply(request.message, formatToolImErrorLine(event.toolName, event.result))
-							.catch(() => undefined);
+					if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_finished" && event.thinking) {
+						thinkingText = event.thinking;
+					}
+					if (this.runtime.shouldOutputToolCallsToIm()) {
+						if (event.type === "tool_call_started") {
+							void flushThinking().catch(() => undefined);
+							void this.runtime
+								.sendPlainReply(request.message, formatToolImLine(event.name, event.args, this.runtime.getToolCallImMaxLength()))
+								.catch(() => undefined);
+						}
+						if (event.type === "tool_call_finished" && event.isError) {
+							void this.runtime
+								.sendPlainReply(request.message, formatToolImErrorLine(event.name, event.result, this.runtime.getToolCallImMaxLength()))
+								.catch(() => undefined);
+						}
 					}
 				});
 			}
@@ -149,6 +165,9 @@ class TextConversationController {
 				throw new Error(providerError);
 			}
 			const assistantText = extractAssistantText(session);
+			if (this.runtime.shouldOutputThinkingToIm()) {
+				await flushThinking();
+			}
 			await this.runtime.sendPlainReply(request.message, assistantText || "(empty response)");
 			request.resolve({ assistantText, interrupted: false });
 		} catch (error) {
@@ -218,6 +237,14 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		return this.config.outputToolCallsToIm;
 	}
 
+	shouldOutputThinkingToIm(): boolean {
+		return this.config.outputThinkingToIm;
+	}
+
+	getToolCallImMaxLength() {
+		return this.config.outputToolCallImMaxLength;
+	}
+
 	async sendPlainReply(message: IncomingChannelMessage, text: string): Promise<void> {
 		await this.adapter.sendText(message.target, text);
 	}
@@ -228,22 +255,12 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
-		const promptPreview = this.config.assistantSystemPrompt
-			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
-			: formatDefaultPromptLabel(this.config.backendKind);
-		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
 			chalk.bold(`${formatBackendLabel(this.config.backendKind)} ${this.channelLabel} channel ready`),
-			chalk.gray(`framework  ${formatBackendLabel(this.config.backendKind)}`),
-			chalk.gray(`mode       ${this.config.runMode}`),
-			chalk.gray(`home       ${this.config.homeDir}`),
-			chalk.gray(`layout     ${layoutRoots}`),
-			chalk.gray(`sessions   ${sessionMode} (${join(this.config.homeDir, "sessions")})`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? formatDefaultPromptLabel(this.config.backendKind)}`),
-			chalk.gray(`preview    ${promptPreview}`),
+			chalk.gray(`sessions   ${sessionMode}`),
 			chalk.gray(`status     waiting for ${this.channelLabel} events...`),
 		];
 		console.log(lines.join("\n"));

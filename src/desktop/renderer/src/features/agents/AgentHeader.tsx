@@ -17,6 +17,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "../../components/ui/popover";
 import { Spinner } from "../../components/ui/spinner-1";
+import { useI18n } from "../../lib/i18n";
 
 import {
 	AlertDialog,
@@ -42,6 +43,7 @@ export function AgentHeader({
 	onPause,
 	showWechatReauthorize,
 	isReauthorizingWechat,
+	showRestartConfigHint,
 	onOpenWechatReauthorize,
 	onReveal,
 	onDelete,
@@ -58,11 +60,13 @@ export function AgentHeader({
 	onPause: () => void;
 	showWechatReauthorize: boolean;
 	isReauthorizingWechat: boolean;
+	showRestartConfigHint: boolean;
 	onOpenWechatReauthorize: () => void;
 	onReveal: () => void;
 	onDelete: () => void;
 	deleteError?: string;
 }): JSX.Element {
+	const { t } = useI18n();
 	const [open, setOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [deleteStep, setDeleteStep] = useState<"idle" | "stop" | "files" | "done">("idle");
@@ -160,7 +164,7 @@ export function AgentHeader({
 									variant="unstyled"
 									size="inline"
 									className="pie-smooth-corner no-drag flex h-12 min-w-0 max-w-[420px] items-center gap-3 rounded-[24px] px-1.5 pr-3 text-left transition-[background-color,transform] hover:bg-[var(--slate-2)] aria-expanded:bg-[var(--slate-2)]"
-									aria-label="编辑 Agent 信息"
+									aria-label={t("editAgentInfo")}
 								/>
 							}
 						>
@@ -178,19 +182,19 @@ export function AgentHeader({
 					<PopoverContent ref={contentRef} className="no-drag" align="start" sideOffset={10}>
 						<div className="space-y-4">
 							<div>
-								<PopoverTitle>Agent 信息</PopoverTitle>
-								<PopoverDescription className="mt-1">编辑头像和显示名称</PopoverDescription>
+								<PopoverTitle>{t("agentInfo")}</PopoverTitle>
+								<PopoverDescription className="mt-1">{t("editAvatarAndName")}</PopoverDescription>
 							</div>
 								<div className="pie-smooth-corner space-y-5 rounded-[24px] bg-[var(--slate-2)] p-4">
 									<div>
-										<div className="mb-3.5 text-xs font-medium text-muted-foreground">Agent 头像</div>
+										<div className="mb-3.5 text-xs font-medium text-muted-foreground">{t("agentAvatar")}</div>
 										<div className="flex justify-center">
 											<button
 												type="button"
 												className="group/avatar-upload relative rounded-full outline-none transition-transform active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50"
 												onClick={() => fileInputRef.current?.click()}
 												disabled={isUploadingAvatar}
-												aria-label="更换头像"
+												aria-label={t("changeAvatar")}
 											>
 												<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={72} />
 												<span className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/35 text-white opacity-0 transition-opacity group-hover/avatar-upload:opacity-100 group-focus-visible/avatar-upload:opacity-100">
@@ -200,7 +204,7 @@ export function AgentHeader({
 										</div>
 									</div>
 									<label className="block">
-										<span className="mb-4 block text-xs font-medium text-muted-foreground">Agent 名称</span>
+										<span className="mb-4 block text-xs font-medium text-muted-foreground">{t("agentName")}</span>
 										<Input
 											className="bg-white"
 											value={nameDraft}
@@ -213,7 +217,7 @@ export function AgentHeader({
 													setNameDraft(agent.name);
 												}
 											}}
-											aria-label="Agent 名称"
+											aria-label={t("agentName")}
 										/>
 									</label>
 								</div>
@@ -225,14 +229,14 @@ export function AgentHeader({
 									disabled={isSaving || !nameDraft.trim()}
 								>
 									{isSaving && <AppIcon IconComponent={RestartCircleBoldDuotone} className="size-4 animate-spin" />}
-									保存名称
+									{t("saveName")}
 								</Button>
 							</div>
 						</div>
 					</PopoverContent>
 					</Popover>
 					{showWechatReauthorize ? (
-						<AceternityTooltip content="微信已失效，重新扫码授权" side="bottom">
+						<AceternityTooltip content={t("wechatExpired")} side="bottom">
 							<Button
 								type="button"
 								variant="unstyled"
@@ -241,14 +245,18 @@ export function AgentHeader({
 								onClick={onOpenWechatReauthorize}
 								disabled={isReauthorizingWechat}
 							>
-								<span>重新授权</span>
+								<span>{t("reauthorizeWechat")}</span>
 							</Button>
 						</AceternityTooltip>
+					) : showRestartConfigHint ? (
+						<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)]">
+							{t("restartAppliesLatestConfig")}
+						</span>
 					) : null}
 				</div>
 				<div className="no-drag flex items-center gap-2">
 					{isStarting || isPausing || agent.status === "starting" ? (
-						<AceternityTooltip content={isPausing ? "暂停中" : "启动中"} side="bottom">
+						<AceternityTooltip content={isPausing ? t("pausing") : t("starting")} side="bottom">
 							<Button
 								variant="unstyled"
 								size="inline"
@@ -260,7 +268,7 @@ export function AgentHeader({
 							</Button>
 						</AceternityTooltip>
 					) : agent.status === "running" ? (
-						<AceternityTooltip content="暂停 Agent" side="bottom">
+						<AceternityTooltip content={t("pauseAgent")} side="bottom">
 							<Button
 								variant="unstyled"
 								size="inline"
@@ -274,7 +282,7 @@ export function AgentHeader({
 							</Button>
 						</AceternityTooltip>
 					) : (
-						<AceternityTooltip content="启动 Agent" side="bottom">
+						<AceternityTooltip content={t("startAgent")} side="bottom">
 							<Button
 								variant="unstyled"
 								size="inline"
@@ -288,13 +296,13 @@ export function AgentHeader({
 							</Button>
 						</AceternityTooltip>
 					)}
-					<AceternityTooltip content="打开 Agent Profile" side="bottom">
+					<AceternityTooltip content={t("openAgentProfile")} side="bottom">
 						<Button
 							variant="unstyled"
 							size="inline"
 							className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
 							onClick={onReveal}
-							aria-label="Open Agent Profile"
+							aria-label={t("openAgentProfile")}
 						>
 							<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
 						</Button>
@@ -317,9 +325,9 @@ export function AgentHeader({
 									variant="unstyled"
 									size="inline"
 									className="inline-flex h-8 w-8 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--red-11)]"
-									aria-label="Delete Agent"
+									aria-label={t("deleteAgent")}
 								>
-									<AceternityTooltip content="删除 Agent" side="bottom" className="h-full w-full items-center justify-center">
+									<AceternityTooltip content={t("deleteAgent")} side="bottom" className="h-full w-full items-center justify-center">
 										<AppIcon IconComponent={TrashBinMinimalisticBoldDuotone} className="size-7" />
 									</AceternityTooltip>
 								</Button>
@@ -327,18 +335,18 @@ export function AgentHeader({
 						/>
 						<AlertDialogContent className="sm:max-w-md pie-smooth-corner">
 							<AlertDialogHeader>
-								<AlertDialogTitle>删除 Agent</AlertDialogTitle>
+								<AlertDialogTitle>{t("deleteAgent")}</AlertDialogTitle>
 								<AlertDialogDescription>
 									{deleteStep === "idle"
-										? `确定要删除 ${agent.name} 吗？此操作无法撤销`
-										: "正在删除 Agent，请等待当前步骤完成"}
+										? t("deleteConfirm", { name: agent.name })
+										: t("deletingAgent")}
 								</AlertDialogDescription>
 							</AlertDialogHeader>
 							{deleteError && <p className="rounded-2xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{deleteError}</p>}
 							{deleteStep !== "idle" && <DeleteProgress step={deleteStep} />}
 							{deleteStep === "idle" ? (
 								<AlertDialogFooter>
-									<AlertDialogCancel>取消</AlertDialogCancel>
+									<AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
 									<AlertDialogAction
 										onClick={(event) => {
 											event.preventDefault();
@@ -347,7 +355,7 @@ export function AgentHeader({
 										}}
 										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 									>
-										确认删除
+										{t("confirmDelete")}
 									</AlertDialogAction>
 								</AlertDialogFooter>
 							) : null}
@@ -360,12 +368,13 @@ export function AgentHeader({
 }
 
 const deleteSteps = [
-	{ id: "stop", label: "停止运行中的实例" },
-	{ id: "files", label: "清除 Agent 文件" },
-	{ id: "done", label: "删除完成" },
+	{ id: "stop", labelKey: "stopRunningInstance" },
+	{ id: "files", labelKey: "clearAgentFiles" },
+	{ id: "done", labelKey: "deleteDone" },
 ] as const;
 
 function DeleteProgress({ step }: { step: "stop" | "files" | "done" }): JSX.Element {
+	const { t } = useI18n();
 	const currentIndex = deleteSteps.findIndex((item) => item.id === step);
 	return (
 		<div className="space-y-2 rounded-2xl bg-[var(--slate-2)] p-3">
@@ -383,7 +392,7 @@ function DeleteProgress({ step }: { step: "stop" | "files" | "done" }): JSX.Elem
 								<span className="h-2 w-2 rounded-full bg-border" />
 							)}
 						</span>
-						<span className={active || done ? "text-foreground" : "text-muted-foreground"}>{item.label}</span>
+						<span className={active || done ? "text-foreground" : "text-muted-foreground"}>{t(item.labelKey)}</span>
 					</div>
 				);
 			})}

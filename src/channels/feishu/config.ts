@@ -3,17 +3,20 @@ import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { resolveBackendFramework } from "../../core/backend-framework.js";
+import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../../core/agent-home.js";
 import {
 	type AgentBackendKind,
+	type FeishuChannelProfile,
 	getPrimaryFeishuChannel,
 	getProfileModel,
 	getStoredProfile,
 	loadConfigStore,
 	type AgentConfigStore,
 } from "../../core/config-store.js";
+import { DEFAULT_FEISHU_MESSAGE_OUTPUT_MODE, type FeishuMessageOutputMode } from "../../core/message-style.js";
 import { resolveDefaultRuntimeHomeDir } from "../../core/profile-registry.js";
+import { DEFAULT_TOOL_CALL_IM_MAX_LENGTH, type ToolCallImMaxLength } from "../common/tool-call-im.js";
 import type { LarkConfig } from "./platform/index.js";
 
 /** Built-in tool names accepted by `createAgentSession({ tools })` (pi-coding-agent). */
@@ -45,6 +48,9 @@ export interface FeishuBotConfig {
 	verboseLogs: boolean;
 	resumeSessions: boolean;
 	outputToolCallsToIm: boolean;
+	outputToolCallImMaxLength: ToolCallImMaxLength;
+	outputThinkingToIm: boolean;
+	messageOutputMode: FeishuMessageOutputMode;
 	startedAtMs: number;
 }
 
@@ -60,6 +66,26 @@ function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boo
 		return false;
 	}
 	throw new Error(`Invalid boolean flag value: ${value}`);
+}
+
+function parseToolCallImMaxLength(value: string | undefined): ToolCallImMaxLength {
+	if (value == null || value === "") {
+		return DEFAULT_TOOL_CALL_IM_MAX_LENGTH;
+	}
+	if (value === "none" || value === "60" || value === "100" || value === "200") {
+		return value === "none" ? "none" : Number(value) as ToolCallImMaxLength;
+	}
+	throw new Error(`Invalid FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH: ${value}`);
+}
+
+function resolveFeishuMessageOutputMode(channel: FeishuChannelProfile | undefined, envValue: string | undefined): FeishuMessageOutputMode {
+	if (channel?.messageOutputMode) {
+		return channel.messageOutputMode;
+	}
+	if (envValue === "bubble" || envValue === "card") {
+		return envValue;
+	}
+	return DEFAULT_FEISHU_MESSAGE_OUTPUT_MODE;
 }
 
 function parseThinkingLevel(value: string | undefined): ThinkingLevel {
@@ -115,6 +141,12 @@ function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?:
 			label: modelId?.trim() || "codex default",
 		};
 	}
+	if (backendKind === "hermes") {
+		return {
+			modelId: modelId?.trim() || undefined,
+			label: modelId?.trim() || "hermes default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -138,7 +170,7 @@ function resolveRunMode(env: RuntimeEnv): "start" | "dev" {
 }
 
 function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content: string } {
-	const framework = resolveBackendFramework(getStoredProfile(loadConfigStore())?.backend.kind);
+	const framework = getAgentBackendDefinition(getStoredProfile(loadConfigStore())?.backend.kind ?? "pi").frameworkRuntime;
 	const filePath = resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE ?? framework.systemPrompt?.defaultPath ?? "");
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
@@ -178,6 +210,7 @@ function mergeStoredProfileIntoEnv(env: RuntimeEnv, store: AgentConfigStore): vo
 	if (ch) {
 		setEnvDefault(env, "FEISHU_APP_ID", ch.appId);
 		setEnvDefault(env, "FEISHU_BRAND", ch.brand);
+		setEnvDefault(env, "FEISHU_BOT_IM_OUTPUT_MODE", ch.messageOutputMode);
 		setEnvDefault(env, "FEISHU_ENCRYPT_KEY", ch.encryptKey);
 		setEnvDefault(env, "FEISHU_VERIFICATION_TOKEN", ch.verificationToken);
 	}
@@ -196,11 +229,17 @@ function mergeStoredProfileIntoEnv(env: RuntimeEnv, store: AgentConfigStore): vo
 		if (env.FEISHU_BOT_IM_TOOL_CALLS === undefined && m.outputToolCallsToIm != null) {
 			env.FEISHU_BOT_IM_TOOL_CALLS = m.outputToolCallsToIm ? "1" : "0";
 		}
+		if (env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH === undefined && m.outputToolCallImMaxLength != null) {
+			env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH = String(m.outputToolCallImMaxLength);
+		}
+		if (env.FEISHU_BOT_IM_THINKING === undefined && m.outputThinkingToIm != null) {
+			env.FEISHU_BOT_IM_THINKING = m.outputThinkingToIm ? "1" : "0";
+		}
 	}
 }
 
 function resolveBackendKind(store: AgentConfigStore): AgentBackendKind {
-	return resolveBackendFramework(getStoredProfile(store)?.backend.kind).kind;
+	return getAgentBackendDefinition(getStoredProfile(store)?.backend.kind ?? "pi").kind;
 }
 
 export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotConfig {
@@ -217,9 +256,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	}
 
 	const homeDir = resolveAgentHomeDir();
+	const feishuChannel = getPrimaryFeishuChannel(getStoredProfile(store));
 	const { model, modelId, label: modelLabel } = resolveModel(env, backendKind);
 	const { tools, label: toolLabel } = resolveTools(env.FEISHU_BOT_TOOLS);
-	const framework = resolveBackendFramework(backendKind);
+	const framework = getAgentBackendDefinition(backendKind).frameworkRuntime;
 	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const runMode = resolveRunMode(env);
 	const debug = parseBooleanFlag(env.FEISHU_BOT_DEBUG, false);
@@ -248,6 +288,9 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 		verboseLogs: debug,
 		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, true),
 		outputToolCallsToIm: parseBooleanFlag(env.FEISHU_BOT_IM_TOOL_CALLS, true),
+		outputToolCallImMaxLength: parseToolCallImMaxLength(env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH),
+		outputThinkingToIm: parseBooleanFlag(env.FEISHU_BOT_IM_THINKING, false),
+		messageOutputMode: resolveFeishuMessageOutputMode(feishuChannel, env.FEISHU_BOT_IM_OUTPUT_MODE),
 		startedAtMs: Date.now(),
 	};
 }

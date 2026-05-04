@@ -3,32 +3,29 @@ import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import type { DesktopCloseWindowBehavior, DesktopLanguage, DesktopLogRetention, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
+import type { DesktopLanguage, DesktopLogRetention, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { applyAppearanceTheme, getAppearanceStepColor, getDefaultPreviewHue } from "../../lib/appearance-theme";
+import { useI18n } from "../../lib/i18n";
 
 const languageOptions: Array<{ value: DesktopLanguage; label: string }> = [
-	{ value: "zh", label: "中文" },
+	{ value: "zh", label: "简体中文" },
 	{ value: "en", label: "English" },
 ];
 
-const closeWindowOptions: Array<{ value: DesktopCloseWindowBehavior; label: string }> = [
-	{ value: "hide", label: "隐藏到后台" },
-	{ value: "quit", label: "退出 Pie" },
-];
-
-const logRetentionOptions: Array<{ value: DesktopLogRetention; label: string }> = [
-	{ value: "7d", label: "保存 7 天" },
-	{ value: "30d", label: "保存 30 天" },
-	{ value: "90d", label: "保存 90 天" },
-	{ value: "forever", label: "永久保存" },
+const logRetentionOptions: Array<{ value: DesktopLogRetention; labelKey: "retention7d" | "retention30d" | "retention90d" | "retentionForever" }> = [
+	{ value: "7d", labelKey: "retention7d" },
+	{ value: "30d", labelKey: "retention30d" },
+	{ value: "90d", labelKey: "retention90d" },
+	{ value: "forever", labelKey: "retentionForever" },
 ];
 
 export function GlobalSettingsView({ onError, onClose }: { onError: (message: string) => void; onClose: () => void }): JSX.Element {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const hasInitializedAppearance = useRef(false);
 	const previewAppearanceFrame = useRef<number | undefined>(undefined);
@@ -107,16 +104,16 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 		<div className="flex h-full flex-col overflow-hidden bg-white">
 			<div className="drag-region flex h-[72px] shrink-0 items-center justify-between gap-4 px-7 pt-3">
 				<div className="min-w-0">
-					<h1 className="text-xl font-semibold tracking-normal text-balance">全局设置</h1>
-					<p className="mt-1 text-sm text-muted-foreground text-pretty">管理 Pie Desktop 和 Agent 运行</p>
+					<h1 className="text-xl font-semibold tracking-normal text-balance">{t("globalSettings")}</h1>
+					<p className="mt-1 text-sm text-muted-foreground text-pretty">{t("settingsSubtitle")}</p>
 				</div>
-				<AceternityTooltip content="关闭设置" side="bottom">
+				<AceternityTooltip content={t("closeSettings")} side="bottom">
 					<Button
 						variant="unstyled"
 						size="inline"
 						className="no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
 						onClick={onClose}
-						aria-label="关闭全局设置"
+						aria-label={t("closeSettings")}
 					>
 						<HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-5" />
 					</Button>
@@ -125,8 +122,8 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 			<div className="flex-1 overflow-y-auto px-7 pb-8 pt-2">
 				{data ? (
 					<div className="mx-auto flex max-w-3xl flex-col gap-5">
-						<SettingsSection title="通用">
-							<Field label="语言">
+						<SettingsSection title={t("general")}>
+							<Field label={t("language")}>
 								<Select value={data.language} onValueChange={(value) => updateField("language", value as DesktopLanguage)}>
 									<SelectTrigger>
 										<SelectValue />
@@ -134,7 +131,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 									<SelectContent>
 										{languageOptions.map((item) => (
 											<SelectItem key={item.value} value={item.value}>
-												{item.label}
+												{item.value === "zh" ? t("simplifiedChinese") : item.label}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -142,7 +139,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 							</Field>
 						</SettingsSection>
 
-						<SettingsSection title="外观" contentClassName="space-y-4">
+						<SettingsSection title={t("appearance")} contentClassName="space-y-4">
 							<GrayHuePicker
 								hue={appearanceGrayHueDraft}
 								onHuePreview={previewAppearance}
@@ -151,43 +148,35 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 							/>
 						</SettingsSection>
 
-						<SettingsSection title="生命周期" contentClassName="space-y-5">
-							<Field label="关闭窗口时">
-								<Select value={data.closeWindowBehavior} onValueChange={(value) => updateField("closeWindowBehavior", value as DesktopCloseWindowBehavior)}>
-									<SelectTrigger>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										{closeWindowOptions.map((item) => (
-											<SelectItem key={item.value} value={item.value}>
-												{item.label}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</Field>
+						<SettingsSection title={t("lifecycle")} contentClassName="space-y-5">
 							<SettingToggle
-								title="退出 Pie 时终止全部 Agent"
-								description="退出时停止运行中的 Agent"
+								title={t("quitTerminatesAgents")}
+								description={t("quitTerminatesAgentsDesc")}
 								checked={data.quitTerminatesAgents}
 								onCheckedChange={(checked) => updateField("quitTerminatesAgents", checked)}
 							/>
 							<SettingToggle
-								title="重启后自动启动上次运行中的 Agent"
-								description="启动时恢复上次运行状态"
+								title={t("restoreAgents")}
+								description={t("restoreAgentsDesc")}
 								checked={data.restoreRunningAgentsOnLaunch}
 								onCheckedChange={(checked) => updateField("restoreRunningAgentsOnLaunch", checked)}
 							/>
 							<SettingToggle
-								title="开机自动启动 Pie"
-								description="登录系统后自动打开"
+								title={t("openAtLogin")}
+								description={t("openAtLoginDesc")}
 								checked={data.openAtLogin}
 								onCheckedChange={(checked) => updateField("openAtLogin", checked)}
 							/>
+							<SettingToggle
+								title={t("keepAwakeWhileOpen")}
+								description={t("keepAwakeWhileOpenDesc")}
+								checked={data.keepAwakeWhileOpen}
+								onCheckedChange={(checked) => updateField("keepAwakeWhileOpen", checked)}
+							/>
 						</SettingsSection>
 
-						<SettingsSection title="日志保存策略">
-							<Field label="运行日志">
+						<SettingsSection title={t("logRetention")}>
+							<Field label={t("runtimeLogs")}>
 								<Select value={data.runtimeLogRetention} onValueChange={(value) => updateField("runtimeLogRetention", value as DesktopLogRetention)}>
 									<SelectTrigger>
 										<SelectValue />
@@ -195,13 +184,13 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 									<SelectContent>
 										{logRetentionOptions.map((item) => (
 											<SelectItem key={item.value} value={item.value}>
-												{item.label}
+												{t(item.labelKey)}
 											</SelectItem>
 										))}
 									</SelectContent>
 								</Select>
 							</Field>
-							<Field label="用量事件">
+							<Field label={t("usageEvents")}>
 								<Select value={data.usageEventRetention} onValueChange={(value) => updateField("usageEventRetention", value as DesktopLogRetention)}>
 									<SelectTrigger>
 										<SelectValue />
@@ -209,7 +198,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 									<SelectContent>
 										{logRetentionOptions.map((item) => (
 											<SelectItem key={item.value} value={item.value}>
-												{item.label}
+												{t(item.labelKey)}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -220,7 +209,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 					</div>
 				) : (
 					<div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-						{settings.isLoading ? "正在加载设置..." : "设置加载失败"}
+						{settings.isLoading ? t("settingsLoading") : t("settingsLoadFailed")}
 					</div>
 				)}
 			</div>
@@ -258,6 +247,7 @@ function GrayHuePicker({
 	onHueCommit: (hue: number) => void;
 	onReset: () => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const trackRef = useRef<HTMLDivElement | null>(null);
 	const labelRef = useRef<HTMLDivElement | null>(null);
 	const thumbRef = useRef<HTMLDivElement | null>(null);
@@ -273,7 +263,7 @@ function GrayHuePicker({
 		const nextProgress = nextHue / 359;
 		trackRef.current?.setAttribute("aria-valuenow", String(nextHue));
 		if (labelRef.current) {
-			labelRef.current.textContent = custom ? `当前 Hue ${nextHue}°` : "使用 Radix Slate 默认色系";
+			labelRef.current.textContent = custom ? t("currentHue", { hue: nextHue }) : t("defaultSlateHue");
 		}
 		if (thumbRef.current) {
 			thumbRef.current.style.left = `calc(${nextProgress * 100}% + ${(0.5 - nextProgress) * 32}px)`;
@@ -324,9 +314,9 @@ function GrayHuePicker({
 		<div className="space-y-4">
 			<div className="flex items-start justify-between gap-4">
 				<div className="min-w-0">
-					<div className="text-sm font-medium leading-snug text-foreground text-balance">灰阶色系</div>
+					<div className="text-sm font-medium leading-snug text-foreground text-balance">{t("chooseColor")}</div>
 					<div ref={labelRef} className="mt-0.5 text-xs leading-5 text-muted-foreground text-pretty">
-						{isCustom ? `当前 Hue ${previewHue}°` : "使用 Radix Slate 默认色系"}
+						{isCustom ? t("currentHue", { hue: previewHue }) : t("defaultSlateHue")}
 					</div>
 				</div>
 				<Button
@@ -337,14 +327,14 @@ function GrayHuePicker({
 					onClick={onReset}
 					disabled={!isCustom}
 				>
-					重置
+					{t("reset")}
 				</Button>
 			</div>
 			<div>
 				<div
 					ref={trackRef}
 					role="slider"
-					aria-label="灰阶色系 Hue"
+					aria-label={t("grayHue")}
 					aria-valuemin={0}
 					aria-valuemax={359}
 					aria-valuenow={previewHue}
@@ -437,7 +427,7 @@ function SettingToggle({
 			<Checkbox
 				checked={checked}
 				onCheckedChange={onCheckedChange}
-				className="mt-0.5"
+				className="mt-0.5 translate-x-0.5"
 			/>
 			<span className="min-w-0 flex-1">
 				<span className="block text-sm font-medium leading-snug text-foreground text-balance">{title}</span>

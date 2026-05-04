@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { resolveBackendFramework } from "../../core/backend-framework.js";
+import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../../core/agent-home.js";
 import {
 	type AgentBackendKind,
@@ -15,6 +15,7 @@ import {
 } from "../../core/config-store.js";
 import { resolveDefaultRuntimeHomeDir } from "../../core/profile-registry.js";
 import type { PieChannelKind } from "../../runtime/types.js";
+import { DEFAULT_TOOL_CALL_IM_MAX_LENGTH, type ToolCallImMaxLength } from "./tool-call-im.js";
 
 type BuiltinToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 type RuntimeEnv = Record<string, string | undefined>;
@@ -42,6 +43,8 @@ export interface CommonChannelRuntimeConfig {
 	verboseLogs: boolean;
 	resumeSessions: boolean;
 	outputToolCallsToIm: boolean;
+	outputToolCallImMaxLength: ToolCallImMaxLength;
+	outputThinkingToIm: boolean;
 	startedAtMs: number;
 }
 
@@ -64,6 +67,16 @@ function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boo
 		return false;
 	}
 	throw new Error(`Invalid boolean flag value: ${value}`);
+}
+
+function parseToolCallImMaxLength(value: string | undefined): ToolCallImMaxLength {
+	if (value == null || value === "") {
+		return DEFAULT_TOOL_CALL_IM_MAX_LENGTH;
+	}
+	if (value === "none" || value === "60" || value === "100" || value === "200") {
+		return value === "none" ? "none" : Number(value) as ToolCallImMaxLength;
+	}
+	throw new Error(`Invalid tool call IM truncation value: ${value}`);
 }
 
 function parseThinkingLevel(value: string | undefined, label: string): ThinkingLevel {
@@ -131,6 +144,12 @@ function resolveModel(
 			label: modelId?.trim() || "codex default",
 		};
 	}
+	if (backendKind === "hermes") {
+		return {
+			modelId: modelId?.trim() || undefined,
+			label: modelId?.trim() || "hermes default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -172,6 +191,12 @@ function mergeStoredModelIntoEnv(env: RuntimeEnv, prefix: string, store: AgentCo
 	if (env[`${prefix}_BOT_IM_TOOL_CALLS`] === undefined && model.outputToolCallsToIm != null) {
 		env[`${prefix}_BOT_IM_TOOL_CALLS`] = model.outputToolCallsToIm ? "1" : "0";
 	}
+	if (env[`${prefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`] === undefined && model.outputToolCallImMaxLength != null) {
+		env[`${prefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`] = String(model.outputToolCallImMaxLength);
+	}
+	if (env[`${prefix}_BOT_IM_THINKING`] === undefined && model.outputThinkingToIm != null) {
+		env[`${prefix}_BOT_IM_THINKING`] = model.outputThinkingToIm ? "1" : "0";
+	}
 }
 
 export function loadCommonChannelConfig(options: CommonConfigOptions): CommonChannelRuntimeConfig {
@@ -186,8 +211,9 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	}
 	mergeStoredModelIntoEnv(env, options.envPrefix, store);
 
-	const framework = resolveBackendFramework(profile?.backend.kind);
-	const backendKind = framework.kind;
+	const backend = getAgentBackendDefinition(profile?.backend.kind ?? "pi");
+	const framework = backend.frameworkRuntime;
+	const backendKind = backend.kind;
 	const { model, modelId, label: modelLabel } = resolveModel(
 		env,
 		`${options.envPrefix}_BOT_PROVIDER`,
@@ -217,6 +243,8 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		verboseLogs: parseBooleanFlag(env[`${options.envPrefix}_BOT_DEBUG`], false),
 		resumeSessions: parseBooleanFlag(env[`${options.envPrefix}_BOT_RESUME_SESSIONS`], true),
 		outputToolCallsToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_TOOL_CALLS`], true),
+		outputToolCallImMaxLength: parseToolCallImMaxLength(env[`${options.envPrefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`]),
+		outputThinkingToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_THINKING`], false),
 		startedAtMs: Date.now(),
 	};
 }

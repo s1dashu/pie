@@ -1,21 +1,21 @@
 import {
 	ChartSquareBoldDuotone,
 	CodeSquareBoldDuotone,
+	NotesMinimalisticBoldDuotone,
 	RadioMinimalisticBoldDuotone,
 	ShieldStarBoldDuotone,
-	Widget5BoldDuotone,
 	type SolarIconProps,
 } from "solar-icon-set";
-import type { AgentSummary, AgentUsageStats, DesktopThinkingLevel, RuntimeEnvironmentLifecycleState } from "../../../shared/types";
+import type { AgentSummary, AgentUsageStats, DesktopLanguage, DesktopThinkingLevel, RuntimeEnvironmentLifecycleState } from "../../../shared/types";
 
-export type AgentTab = "overview" | "model" | "skills" | "usage" | "channels";
+export type AgentTab = "overview" | "logs" | "model" | "skills" | "channels";
 
-export const tabs: Array<{ id: AgentTab; label: string; icon: (props: SolarIconProps) => JSX.Element }> = [
-	{ id: "overview", label: "概览", icon: Widget5BoldDuotone },
-	{ id: "usage", label: "监控", icon: ChartSquareBoldDuotone },
-	{ id: "model", label: "模型", icon: CodeSquareBoldDuotone },
-	{ id: "skills", label: "技能", icon: ShieldStarBoldDuotone },
-	{ id: "channels", label: "渠道", icon: RadioMinimalisticBoldDuotone },
+export const tabs: Array<{ id: AgentTab; labelKey: "overview" | "logs" | "model" | "skills" | "channels"; icon: (props: SolarIconProps) => JSX.Element }> = [
+	{ id: "overview", labelKey: "overview", icon: ChartSquareBoldDuotone },
+	{ id: "logs", labelKey: "logs", icon: NotesMinimalisticBoldDuotone },
+	{ id: "model", labelKey: "model", icon: CodeSquareBoldDuotone },
+	{ id: "skills", labelKey: "skills", icon: ShieldStarBoldDuotone },
+	{ id: "channels", labelKey: "channels", icon: RadioMinimalisticBoldDuotone },
 ];
 
 export const thinkingLevelOptions: Array<{ value: DesktopThinkingLevel; label: string }> = [
@@ -45,39 +45,39 @@ export function statusTone(status: AgentSummary["status"]): string {
 	return "bg-border";
 }
 
-export function statusLabel(status: AgentSummary["status"]): string {
+export function statusLabel(status: AgentSummary["status"], language: DesktopLanguage = "zh"): string {
 	if (status === "running") {
-		return "运行中";
+		return language === "en" ? "Running" : "运行中";
 	}
 	if (status === "starting") {
-		return "启动中";
+		return language === "en" ? "Starting" : "启动中";
 	}
 	if (status === "paused") {
-		return "已暂停";
+		return language === "en" ? "Paused" : "已暂停";
 	}
-	return "未启动";
+	return language === "en" ? "Not started" : "未启动";
 }
 
-export function runtimeLifecycleLabel(state: RuntimeEnvironmentLifecycleState | undefined): string {
+export function runtimeLifecycleLabel(state: RuntimeEnvironmentLifecycleState | undefined, language: DesktopLanguage = "zh"): string {
 	if (state === "created") {
-		return "已创建";
+		return language === "en" ? "Created" : "已创建";
 	}
 	if (state === "starting") {
-		return "启动中";
+		return language === "en" ? "Starting" : "启动中";
 	}
 	if (state === "running") {
-		return "运行中";
+		return language === "en" ? "Running" : "运行中";
 	}
 	if (state === "degraded") {
-		return "运行中，渠道无法连通";
+		return language === "en" ? "Running, channel unreachable" : "运行中，渠道无法连通";
 	}
 	if (state === "stopping") {
-		return "停止中";
+		return language === "en" ? "Stopping" : "停止中";
 	}
 	if (state === "failed") {
-		return "运行失败";
+		return language === "en" ? "Failed" : "运行失败";
 	}
-	return "已停止";
+	return language === "en" ? "Stopped" : "已停止";
 }
 
 export function runtimeLifecycleTone(state: RuntimeEnvironmentLifecycleState | undefined): string {
@@ -96,8 +96,8 @@ export function runtimeLifecycleTone(state: RuntimeEnvironmentLifecycleState | u
 	return "bg-border";
 }
 
-export function formatCount(value: number): string {
-	return new Intl.NumberFormat("zh-CN").format(value);
+export function formatCount(value: number, language: DesktopLanguage = "zh"): string {
+	return new Intl.NumberFormat(language === "en" ? "en-US" : "zh-CN").format(value);
 }
 
 export function formatTokenCount(value: number): string {
@@ -124,12 +124,13 @@ export function formatDuration(ms: number): string {
 }
 
 export function emptyUsage(): AgentUsageStats {
-	const emptyBucket = { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 };
+	const emptyBucket = { incomingMessages: 0, outgoingMessages: 0, actions: 0, failedActions: 0, turns: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, runDurationMs: 0 };
 	return {
 		today: { ...emptyBucket },
 		total: { ...emptyBucket },
 		currentRun: { ...emptyBucket },
 		recentDays: [],
+		averageTtfsMs: undefined,
 		updatedAt: new Date(0).toISOString(),
 	};
 }

@@ -187,7 +187,7 @@ Exec task:
 Scheduling support:
 
 1. Agent tasks: `once`, `interval`, `cron`
-2. Exec tasks: `interval`, `cron`, `webhook`
+2. Exec tasks: `interval`, `cron`
 
 Observability files are written under `<agent-home>/runtime/`, including task engine state, event streams, heartbeat files, and internal gateway logs.
 
@@ -237,7 +237,7 @@ For runtime, build entrypoint, or desktop changes, also run the relevant build c
 
 ## Security
 
-Pie executes tools and shell commands through the underlying agent runtime. Do not expose local webhook or gateway ports to the public internet without an explicit ingress, auth, and deployment design.
+Pie executes tools and shell commands through the underlying agent runtime. Do not expose local gateway ports to the public internet without an explicit ingress, auth, and deployment design.
 
 ## License
 

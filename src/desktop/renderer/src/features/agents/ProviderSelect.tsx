@@ -9,6 +9,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../components/ui/select";
+import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 
 const PRIMARY_PROVIDER_IDS = [
@@ -42,6 +43,7 @@ export function ProviderSelect({
 	triggerClassName?: string;
 	onValueChange: (provider: string) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const [showMoreProviders, setShowMoreProviders] = useState(false);
 	const providerGroups = useMemo(() => groupProviderOptions(providers, value), [providers, value]);
 
@@ -64,13 +66,13 @@ export function ProviderSelect({
 						{showMoreProviders ? (
 							<SelectGroup>
 								<div className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs text-muted-foreground">
-									<span>更多供应商</span>
+									<span>{t("moreProviders")}</span>
 									<ProviderListToggle
 										className="-my-1 -mr-1 rounded-lg px-2 py-1 text-xs"
 										fullWidth={false}
 										onClick={() => setShowMoreProviders(false)}
 									>
-										收起
+										{t("collapse")}
 									</ProviderListToggle>
 								</div>
 								{providerGroups.secondary.map((provider) => (
@@ -81,7 +83,7 @@ export function ProviderSelect({
 							</SelectGroup>
 						) : (
 							<ProviderListToggle onClick={() => setShowMoreProviders(true)}>
-								更多供应商
+								{t("moreProviders")}
 							</ProviderListToggle>
 						)}
 					</>

@@ -8,7 +8,6 @@ export interface RuntimeProcessRecord {
 	startedAt: string;
 	command: string[];
 	gatewayPort?: number;
-	webhookPort?: number;
 }
 
 export interface RuntimeStateRecord {
@@ -47,7 +46,6 @@ export function readRuntimeProcessRecord(homeDir: string): RuntimeProcessRecord 
 			startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : new Date(0).toISOString(),
 			command: Array.isArray(parsed.command) ? parsed.command.filter((item): item is string => typeof item === "string") : [],
 			gatewayPort: typeof parsed.gatewayPort === "number" ? parsed.gatewayPort : undefined,
-			webhookPort: typeof parsed.webhookPort === "number" ? parsed.webhookPort : undefined,
 		};
 	} catch {
 		return undefined;
@@ -92,7 +90,6 @@ export function readRuntimeStateRecord(homeDir: string): RuntimeStateRecord | un
 							? parsed.process.command.filter((item): item is string => typeof item === "string")
 							: [],
 						gatewayPort: typeof parsed.process.gatewayPort === "number" ? parsed.process.gatewayPort : undefined,
-						webhookPort: typeof parsed.process.webhookPort === "number" ? parsed.process.webhookPort : undefined,
 					}
 				: undefined,
 			updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString(),

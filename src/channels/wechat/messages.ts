@@ -3,7 +3,7 @@ import { MessageItemType, MessageState, MessageType, type MessageItem, type Send
 
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
 const DEFAULT_MAX_WECHAT_TEXT_BYTES = 6000;
-const WECHAT_TEXT_NATURAL_SPLIT_AFTER_CHARS = 2000;
+const WECHAT_TEXT_NATURAL_SPLIT_AFTER_CHARS = 3000;
 
 export class MessageDedup {
 	private readonly ids = new Set<string>();

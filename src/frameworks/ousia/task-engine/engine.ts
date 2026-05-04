@@ -8,7 +8,6 @@ import {
 	isProcessAlive,
 	TASK_ENGINE_RELOAD_MS,
 } from "./engine-context.js";
-import { createWebhookServer } from "./webhook-server.js";
 import { tickAgentTasks } from "./agent-delivery.js";
 import { tickExecTasks } from "./exec-runner.js";
 import { loadAgentTasks, loadExecTasks } from "./task-loader.js";
@@ -48,7 +47,6 @@ appendEngineEvent(ctx, {
 	type: "task_engine_start",
 	homeDir: ctx.homeDir,
 	taskDir: ctx.taskDir,
-	webhookPort: ctx.webhookPort,
 	gatewayPort: ctx.gatewayPort,
 });
 
@@ -58,7 +56,6 @@ if (!acquireEngineLock(ctx)) {
 
 let shutdownStarted = false;
 let reloadTimer: ReturnType<typeof setInterval>;
-const server = createWebhookServer(ctx, execTasks);
 
 function shutdown(reason: string): void {
 	if (shutdownStarted) {
@@ -66,11 +63,9 @@ function shutdown(reason: string): void {
 	}
 	shutdownStarted = true;
 	clearInterval(reloadTimer);
-	server.close(() => {
-		appendEngineEvent(ctx, { type: reason });
-		releaseEngineLock(ctx);
-		process.exit(0);
-	});
+	appendEngineEvent(ctx, { type: reason });
+	releaseEngineLock(ctx);
+	process.exit(0);
 }
 
 loadTasks();
@@ -81,10 +76,6 @@ reloadTimer = setInterval(() => {
 		shutdown("task_engine_parent_exit");
 	}
 }, TASK_ENGINE_RELOAD_MS);
-
-server.listen(ctx.webhookPort, "127.0.0.1", () => {
-	appendEngineEvent(ctx, { type: "execTask_webhook_listening", port: ctx.webhookPort });
-});
 
 process.on("SIGINT", () => {
 	shutdown("task_engine_sigint");

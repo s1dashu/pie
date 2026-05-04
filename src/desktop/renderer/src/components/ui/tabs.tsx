@@ -1,7 +1,7 @@
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs"
 import { cva, type VariantProps } from "class-variance-authority"
 import { motion } from "motion/react"
-import { useCallback, useLayoutEffect, useState, type Ref } from "react"
+import { useCallback, useLayoutEffect, useRef, useState, type Ref } from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -61,6 +61,7 @@ function TabsList({
 }: TabsPrimitive.List.Props & VariantProps<typeof tabsListVariants> & { ref?: Ref<HTMLDivElement> }) {
   const [listElement, setListElement] = useState<HTMLDivElement | null>(null)
   const [indicatorPosition, setIndicatorPosition] = useState<TabsIndicatorPosition | null>(null)
+  const frameRef = useRef<number | null>(null)
   const setListRef = useCallback(
     (node: HTMLDivElement | null) => {
       setListElement(node)
@@ -74,12 +75,12 @@ function TabsList({
   )
   const updateIndicatorPosition = useCallback(() => {
     if (variant !== "line" || !listElement) {
-      setIndicatorPosition(null)
+      setIndicatorPosition((current) => current === null ? current : null)
       return
     }
     const activeTab = listElement.querySelector<HTMLElement>("[data-active]")
     if (!activeTab) {
-      setIndicatorPosition(null)
+      setIndicatorPosition((current) => current === null ? current : null)
       return
     }
     const rootElement = listElement.closest<HTMLElement>("[data-slot='tabs']")
@@ -109,33 +110,54 @@ function TabsList({
       current.orientation === nextPosition.orientation
         ? current
         : nextPosition
-    )
+      )
   }, [listElement, variant])
+  const scheduleIndicatorPositionUpdate = useCallback(() => {
+    if (frameRef.current !== null) {
+      return
+    }
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null
+      updateIndicatorPosition()
+    })
+  }, [updateIndicatorPosition])
 
   useLayoutEffect(() => {
-    updateIndicatorPosition()
-  })
+    scheduleIndicatorPositionUpdate()
+    return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
+    }
+  }, [scheduleIndicatorPositionUpdate, props.children])
 
   useLayoutEffect(() => {
     if (variant !== "line" || !listElement) {
       return
     }
-    const resizeObserver = new ResizeObserver(updateIndicatorPosition)
+    const resizeObserver = new ResizeObserver(scheduleIndicatorPositionUpdate)
     resizeObserver.observe(listElement)
-    listElement.querySelectorAll<HTMLElement>("[data-slot='tabs-trigger']").forEach((tab) => resizeObserver.observe(tab))
-    const mutationObserver = new MutationObserver(updateIndicatorPosition)
+    listElement.querySelectorAll<HTMLElement>("[data-slot='tabs-trigger']").forEach((tab) => {
+      resizeObserver.observe(tab)
+    })
+    const mutationObserver = new MutationObserver(scheduleIndicatorPositionUpdate)
     mutationObserver.observe(listElement, {
       attributes: true,
       attributeFilter: ["data-active"],
       subtree: true,
     })
-    window.addEventListener("resize", updateIndicatorPosition)
+    window.addEventListener("resize", scheduleIndicatorPositionUpdate)
     return () => {
       resizeObserver.disconnect()
       mutationObserver.disconnect()
-      window.removeEventListener("resize", updateIndicatorPosition)
+      window.removeEventListener("resize", scheduleIndicatorPositionUpdate)
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
     }
-  }, [listElement, updateIndicatorPosition, variant])
+  }, [listElement, scheduleIndicatorPositionUpdate, variant])
 
   return (
     <TabsPrimitive.List

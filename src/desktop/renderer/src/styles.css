@@ -3,12 +3,20 @@
 @import "shadcn/tailwind.css";
 @import "@radix-ui/colors/slate.css";
 @import "@radix-ui/colors/slate-alpha.css";
+@import "@radix-ui/colors/slate-dark.css";
+@import "@radix-ui/colors/slate-dark-alpha.css";
 @import "@radix-ui/colors/lime.css";
 @import "@radix-ui/colors/lime-alpha.css";
+@import "@radix-ui/colors/lime-dark.css";
+@import "@radix-ui/colors/lime-dark-alpha.css";
 @import "@radix-ui/colors/amber.css";
 @import "@radix-ui/colors/amber-alpha.css";
+@import "@radix-ui/colors/amber-dark.css";
+@import "@radix-ui/colors/amber-dark-alpha.css";
 @import "@radix-ui/colors/red.css";
 @import "@radix-ui/colors/red-alpha.css";
+@import "@radix-ui/colors/red-dark.css";
+@import "@radix-ui/colors/red-dark-alpha.css";
 @import "@radix-ui/colors/white-alpha.css";
 @import "@radix-ui/colors/black-alpha.css";
 
@@ -80,7 +88,7 @@
 	--control-radius: 18px;
 	--control-menu-radius: calc(var(--control-radius) + 4px);
 	--control-item-radius: calc(var(--control-radius) - 4px);
-	--app-shell-radius: 60px;
+	--app-shell-radius: 48px;
 	--app-shell-gap: 6px;
 	--agent-detail-radius: calc(var(--app-shell-radius) - var(--app-shell-gap));
 	font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
@@ -89,6 +97,38 @@
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
+}
+
+.dark {
+	color: var(--slate-12);
+	--color-card: var(--slate-2);
+	--color-card-hover: var(--slate-a4);
+	--color-primary-foreground: var(--slate-1);
+}
+
+.dark .bg-white {
+	background-color: var(--slate-1);
+}
+
+.dark .bg-white\/95 {
+	background-color: color-mix(in oklab, var(--slate-1) 95%, transparent);
+}
+
+.dark .bg-white\/88 {
+	background-color: color-mix(in oklab, var(--slate-1) 88%, transparent);
+}
+
+.dark .bg-white\/70 {
+	background-color: color-mix(in oklab, var(--slate-2) 70%, transparent);
+}
+
+.dark .border-black\/5 {
+	border-color: var(--white-a2);
+}
+
+.dark .ring-black\/5,
+.dark .ring-foreground\/5 {
+	--tw-ring-color: var(--white-a3);
 }
 
 * {
@@ -213,4 +253,13 @@ button:not(:disabled),
 
 ::-webkit-scrollbar-thumb:active {
 	background: var(--black-a4);
+}
+
+.dark *:hover > ::-webkit-scrollbar-thumb,
+.dark ::-webkit-scrollbar-thumb:hover {
+	background: var(--white-a3);
+}
+
+.dark ::-webkit-scrollbar-thumb:active {
+	background: var(--white-a4);
 }

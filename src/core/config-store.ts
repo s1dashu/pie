@@ -2,6 +2,12 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { resolveAgentHomeDir } from "./agent-home.js";
+import {
+	isFeishuMessageOutputMode,
+	isToolCallImMaxLength,
+	type FeishuMessageOutputMode,
+	type ToolCallImMaxLength,
+} from "./message-style.js";
 
 export type { LoadAgentEnvOptions } from "./agent-home.js";
 export {
@@ -28,6 +34,7 @@ export interface FeishuChannelProfile {
 	enabled: boolean;
 	appId: string;
 	brand?: "feishu" | "lark";
+	messageOutputMode?: FeishuMessageOutputMode;
 	encryptKey?: string;
 	verificationToken?: string;
 }
@@ -74,6 +81,8 @@ export interface ModelProfile {
 	debug?: boolean;
 	resumeSessions?: boolean;
 	outputToolCallsToIm?: boolean;
+	outputToolCallImMaxLength?: ToolCallImMaxLength;
+	outputThinkingToIm?: boolean;
 	agentDir?: string;
 	workDir?: string;
 }
@@ -153,6 +162,7 @@ function normalizeFeishuChannel(value: unknown): FeishuChannelProfile | undefine
 		enabled: typeof value.enabled === "boolean" ? value.enabled : true,
 		appId,
 		brand: value.brand === "lark" ? "lark" : "feishu",
+		messageOutputMode: isFeishuMessageOutputMode(value.messageOutputMode) ? value.messageOutputMode : undefined,
 		encryptKey: typeof value.encryptKey === "string" && value.encryptKey.trim() ? value.encryptKey.trim() : undefined,
 		verificationToken:
 			typeof value.verificationToken === "string" && value.verificationToken.trim()
@@ -242,6 +252,12 @@ function normalizeModelProfile(value: unknown): ModelProfile | undefined {
 	}
 	if (typeof value.outputToolCallsToIm === "boolean") {
 		out.outputToolCallsToIm = value.outputToolCallsToIm;
+	}
+	if (isToolCallImMaxLength(value.outputToolCallImMaxLength)) {
+		out.outputToolCallImMaxLength = value.outputToolCallImMaxLength;
+	}
+	if (typeof value.outputThinkingToIm === "boolean") {
+		out.outputThinkingToIm = value.outputThinkingToIm;
 	}
 	if (typeof value.agentDir === "string" && value.agentDir.trim()) {
 		out.agentDir = value.agentDir.trim();
@@ -346,7 +362,10 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 }
 
 export function getProfileModel(profile: AgentProfile | undefined): ModelProfile | undefined {
-	return profile?.backend.kind === "ousia" || profile?.backend.kind === "pi" || profile?.backend.kind === "codex"
+	return profile?.backend.kind === "ousia" ||
+		profile?.backend.kind === "pi" ||
+		profile?.backend.kind === "codex" ||
+		profile?.backend.kind === "hermes"
 		? profile.backend.model
 		: undefined;
 }

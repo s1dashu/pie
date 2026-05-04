@@ -85,6 +85,7 @@ export class LarkClient {
 				appSecret,
 				appType: Lark.AppType.SelfBuild,
 				domain: resolveBrand(this.account.brand),
+				loggerLevel: Lark.LoggerLevel.error,
 			});
 		}
 		return this.sdkClient;
@@ -264,6 +265,7 @@ export class LarkClient {
 		const dispatcher = new Lark.EventDispatcher({
 			encryptKey: this.account.encryptKey ?? "",
 			verificationToken: this.account.verificationToken ?? "",
+			loggerLevel: wsLoggerLevel,
 		});
 		dispatcher.register(handlers as never);
 

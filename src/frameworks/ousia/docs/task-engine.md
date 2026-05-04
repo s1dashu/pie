@@ -1,6 +1,6 @@
 # Ousia Task Engine
 
-Ousia Task Engine is Ousia's unified surface for scheduled work, webhook intake, and future agent turns.
+Ousia Task Engine is Ousia's unified surface for scheduled work and future agent turns.
 
 New tasks should use `tasks/<task-id>/task.json`. Link a task to a project with `task.json` `projectId`.
 The engine keeps runtime files next to each spec:

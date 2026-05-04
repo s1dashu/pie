@@ -6,6 +6,7 @@ import { AppIcon } from "../components/shared/app-icon";
 import { AceternityTooltip } from "../components/shared/tooltip";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner-1";
+import { useI18n } from "../lib/i18n";
 import { cn } from "../lib/utils";
 import { runtimeLifecycleLabel, runtimeLifecycleTone, statusTone } from "../features/agents/agent-display";
 
@@ -26,6 +27,7 @@ export function AgentSidebar({
 	onSelectSettings: () => void;
 	onCreateAgent: () => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const selectionTransition = {
 		type: "spring",
 		stiffness: 520,
@@ -61,7 +63,7 @@ export function AgentSidebar({
 						<AnimatePresence initial={false}>
 							{agents?.map((agent) => {
 								const isSelected = agent.id === selectedId;
-								const subtitle = formatAgentSubtitle(agent);
+								const subtitle = formatAgentSubtitle(agent, t);
 								return (
 									<motion.div
 										key={agent.id}
@@ -102,16 +104,16 @@ export function AgentSidebar({
 				)}
 			</div>
 			<div className="flex shrink-0 items-center gap-2 px-3 pb-4 pt-2">
-				<AceternityTooltip content="创建新的 Agent" className="min-w-0 flex-1">
+				<AceternityTooltip content={t("createAgentTooltip")} className="min-w-0 flex-1">
 					<Button
 						className="no-drag h-9 w-full min-w-0 rounded-4xl shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
 						onClick={onCreateAgent}
-						aria-label="创建新的 Agent"
+						aria-label={t("createAgentTooltip")}
 					>
-						<span className="truncate">创建</span>
+						<span className="truncate">{t("create")}</span>
 					</Button>
 				</AceternityTooltip>
-				<AceternityTooltip content="全局设置">
+				<AceternityTooltip content={t("globalSettings")}>
 					<Button
 						variant="unstyled"
 						size="inline"
@@ -120,7 +122,7 @@ export function AgentSidebar({
 							settingsSelected ? "text-[var(--lime-11)]" : "",
 						)}
 						onClick={onSelectSettings}
-						aria-label="全局设置"
+						aria-label={t("globalSettings")}
 					>
 						<AppIcon IconComponent={SettingsMinimalisticBoldDuotone} className="size-7" />
 					</Button>
@@ -130,16 +132,16 @@ export function AgentSidebar({
 	);
 }
 
-function formatFrameworkName(kind: string | undefined): string {
+function formatFrameworkName(kind: string | undefined, t: ReturnType<typeof useI18n>["t"]): string {
 	if (!kind?.trim()) {
-		return "Agent";
+		return t("agent");
 	}
 	return formatMetadataLabel(kind);
 }
 
-function formatChannelNames(kinds: string[] | undefined): string {
+function formatChannelNames(kinds: string[] | undefined, t: ReturnType<typeof useI18n>["t"]): string {
 	const values = kinds?.map(formatMetadataLabel).filter(Boolean) ?? [];
-	return values.length ? values.join("+") : "No Channel";
+	return values.length ? values.join("+") : t("noChannel");
 }
 
 function formatMetadataLabel(value: string | undefined): string {
@@ -151,28 +153,29 @@ function formatMetadataLabel(value: string | undefined): string {
 		.join(" ");
 }
 
-function formatAgentSubtitle(agent: AgentSummary): string {
-	const framework = formatFrameworkName(agent.frameworkKind);
-	const channels = formatChannelNames(agent.channelKinds);
-	return `${framework} on ${channels}`;
+function formatAgentSubtitle(agent: AgentSummary, t: ReturnType<typeof useI18n>["t"]): string {
+	const framework = formatFrameworkName(agent.frameworkKind, t);
+	const channels = formatChannelNames(agent.channelKinds, t);
+	return `${framework} ${t("on")} ${channels}`;
 }
 
-function formatRuntimeTooltip(agent: AgentSummary): string {
+function formatRuntimeTooltip(agent: AgentSummary, language: ReturnType<typeof useI18n>["language"], t: ReturnType<typeof useI18n>["t"]): string {
 	const lifecycle = agent.runtimeEnvironment?.lifecycle;
-	const label = runtimeLifecycleLabel(lifecycle?.state);
+	const label = runtimeLifecycleLabel(lifecycle?.state, language);
 	const workDir = agent.runtimeEnvironment?.workDir;
 	if (!workDir) {
 		return label;
 	}
-	return `${label} · 工作目录：${workDir}`;
+	return `${label} · ${t("workDir")}: ${workDir}`;
 }
 
 function AgentStatusMark({ agent }: { agent: AgentSummary }): JSX.Element {
+	const { language, t } = useI18n();
 	const status = agent.status;
 	if (status === "starting") {
 		return (
-			<AceternityTooltip content={formatRuntimeTooltip(agent)} side="bottom">
-				<span className="mr-1 grid h-5 w-5 shrink-0 place-items-center" aria-label="启动中">
+			<AceternityTooltip content={formatRuntimeTooltip(agent, language, t)} side="bottom">
+				<span className="mr-1 grid h-5 w-5 shrink-0 place-items-center" aria-label={t("starting")}>
 					<Spinner size={18} color="var(--slate-11)" />
 				</span>
 			</AceternityTooltip>
@@ -180,7 +183,7 @@ function AgentStatusMark({ agent }: { agent: AgentSummary }): JSX.Element {
 	}
 	const lifecycleTone = runtimeLifecycleTone(agent.runtimeEnvironment?.lifecycle.state);
 	return (
-		<AceternityTooltip content={formatRuntimeTooltip(agent)} side="bottom">
+		<AceternityTooltip content={formatRuntimeTooltip(agent, language, t)} side="bottom">
 			<span className={cn("mr-2 h-2 w-2 shrink-0 rounded-full", agent.runtimeEnvironment ? lifecycleTone : statusTone(status))} />
 		</AceternityTooltip>
 	);

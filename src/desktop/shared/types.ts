@@ -41,6 +41,7 @@ export interface AgentSummary {
 
 export interface AgentDetails extends AgentSummary {
 	brand?: "feishu" | "lark";
+	feishuMessageOutputMode?: DesktopFeishuMessageOutputMode;
 	appSecret?: string;
 	wechat?: {
 		accountId?: string;
@@ -50,10 +51,6 @@ export interface AgentDetails extends AgentSummary {
 	slack?: {
 		botToken?: string;
 		appToken?: string;
-		signingSecret?: string;
-		teamId?: string;
-		appId?: string;
-		botUserId?: string;
 	};
 	discord?: {
 		botToken?: string;
@@ -69,26 +66,30 @@ export interface AgentDetails extends AgentSummary {
 		model?: string;
 		thinkingLevel?: string;
 		outputToolCallsToIm?: boolean;
+		outputToolCallImMaxLength?: 60 | 100 | 200 | "none";
+		outputThinkingToIm?: boolean;
 		apiKey?: string;
 		apiKeyEnv?: string;
 	};
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code";
+export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code" | "hermes";
 export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
+export type DesktopFeishuMessageOutputMode = "bubble" | "card";
 export type DesktopLanguage = "zh" | "en";
-export type DesktopCloseWindowBehavior = "hide" | "quit";
 export type DesktopLogRetention = "7d" | "30d" | "90d" | "forever";
+export type DesktopColorScheme = "system" | "light" | "dark";
 
 export interface DesktopSettings {
 	language: DesktopLanguage;
-	closeWindowBehavior: DesktopCloseWindowBehavior;
+	colorScheme: DesktopColorScheme;
 	quitTerminatesAgents: boolean;
 	restoreRunningAgentsOnLaunch: boolean;
 	openAtLogin: boolean;
+	keepAwakeWhileOpen: boolean;
 	runtimeLogRetention: DesktopLogRetention;
 	usageEventRetention: DesktopLogRetention;
 	appearanceGrayHue?: number;
@@ -98,10 +99,11 @@ export type DesktopSettingsDraft = Partial<
 	Pick<
 		DesktopSettings,
 		| "language"
-		| "closeWindowBehavior"
+		| "colorScheme"
 		| "quitTerminatesAgents"
 		| "restoreRunningAgentsOnLaunch"
 		| "openAtLogin"
+		| "keepAwakeWhileOpen"
 		| "runtimeLogRetention"
 		| "usageEventRetention"
 		| "appearanceGrayHue"
@@ -114,19 +116,18 @@ export interface AgentDraft {
 	model?: string;
 	thinkingLevel?: DesktopThinkingLevel;
 	outputToolCallsToIm?: boolean;
+	outputToolCallImMaxLength?: 60 | 100 | 200 | "none";
+	outputThinkingToIm?: boolean;
 	apiKey?: string;
 	appId?: string;
 	appSecret?: string;
 	brand?: "feishu" | "lark";
+	feishuMessageOutputMode?: DesktopFeishuMessageOutputMode;
 	wechatAccountId?: string;
 	wechatBaseUrl?: string;
 	wechatBotToken?: string;
 	slackBotToken?: string;
 	slackAppToken?: string;
-	slackSigningSecret?: string;
-	slackTeamId?: string;
-	slackAppId?: string;
-	slackBotUserId?: string;
 	discordBotToken?: string;
 	discordApplicationId?: string;
 	discordGuildId?: string;
@@ -156,6 +157,15 @@ export interface DesktopCodexDiagnostic {
 	authMethod?: "cli" | "env" | "unknown";
 	error?: string;
 	loginCommand?: string[];
+}
+
+export interface DesktopRuntimeDiagnostic {
+	installed: boolean;
+	ready: boolean;
+	executablePath?: string;
+	version?: string;
+	error?: string;
+	installCommand?: string[];
 }
 
 export interface DesktopModelCatalog {
@@ -218,10 +228,6 @@ export interface AgentCreationDraft {
 	slack?: {
 		botToken: string;
 		appToken: string;
-		signingSecret?: string;
-		teamId?: string;
-		appId?: string;
-		botUserId?: string;
 	};
 	discord?: {
 		botToken: string;
@@ -243,7 +249,7 @@ export interface AgentCreationDraft {
 export interface AgentOnboardEvent {
 	sessionId: string;
 	type: AgentOnboardEventType;
-	source?: "codex-login" | "feishu" | "wechat";
+	source?: "codex-install" | "codex-login" | "feishu" | "hermes-install" | "wechat";
 	message?: string;
 	url?: string;
 	qr?: string;
@@ -272,6 +278,7 @@ export interface UsageBucket {
 	outgoingMessages: number;
 	actions: number;
 	failedActions: number;
+	turns: number;
 	tokens: number;
 	inputTokens: number;
 	outputTokens: number;
@@ -289,6 +296,7 @@ export interface AgentUsageStats {
 	total: UsageBucket;
 	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
+	averageTtfsMs?: number;
 	runningSince?: string;
 	updatedAt: string;
 }
@@ -330,13 +338,17 @@ export interface PieDesktopApi {
 	getSettings(): Promise<DesktopSettings>;
 	updateSettings(draft: DesktopSettingsDraft): Promise<DesktopSettings>;
 	listAgents(): Promise<AgentSummary[]>;
+	openAgentFromMenuBar(id: string): Promise<void>;
 	listBotAvatars(): Promise<BotAvatarOption[]>;
 	downloadBotAvatar(id: string): Promise<void>;
 	uploadAgentAvatar(id: string, upload: AgentAvatarUpload): Promise<AgentDetails>;
 	downloadAgentAvatar(id: string): Promise<void>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
 	checkCodexEnvironment(): Promise<DesktopCodexDiagnostic>;
+	installCodex(sessionId: string): Promise<DesktopCodexDiagnostic>;
 	openCodexLogin(sessionId: string): Promise<DesktopCodexDiagnostic>;
+	checkHermesEnvironment(): Promise<DesktopRuntimeDiagnostic>;
+	installHermes(sessionId: string): Promise<DesktopRuntimeDiagnostic>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
 	createWechatLogin(sessionId: string): Promise<DesktopWechatCredentials>;
 	syncFeishuAppProfile(id: string): Promise<AgentDetails>;
@@ -362,4 +374,5 @@ export interface PieDesktopApi {
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;
 	onAgentDeleteEvent(callback: (event: AgentDeleteEvent) => void): () => void;
+	onSelectAgent(callback: (agentId: string) => void): () => void;
 }

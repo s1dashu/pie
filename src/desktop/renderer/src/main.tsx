@@ -13,6 +13,7 @@ createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>
 		<QueryClientProvider client={queryClient}>
 			<Theme
+				appearance="inherit"
 				accentColor="lime"
 				grayColor="slate"
 				radius="large"

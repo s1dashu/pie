@@ -52,7 +52,14 @@ export class ConversationController {
 	}
 
 	async submit(event: LarkMessageEvent, promptText: string): Promise<ConversationResult> {
-		const reporter = new LarkProgressReporter(event, this.config.feishu, this.config.outputToolCallsToIm);
+		const reporter = new LarkProgressReporter(
+			event,
+			this.config.feishu,
+			this.config.outputToolCallsToIm,
+			this.config.outputToolCallImMaxLength,
+			this.config.outputThinkingToIm,
+			this.config.messageOutputMode,
+		);
 		await reporter.markReceived();
 		let resolvePromise: (result: ConversationResult) => void = () => undefined;
 		let rejectPromise: (error: unknown) => void = () => undefined;
@@ -176,11 +183,7 @@ export class ConversationController {
 		let sawFirstTextDelta = false;
 		const onSessionEvent = (event: SessionEvent): void => {
 			request.reporter.onSessionEvent(event);
-			if (event.type !== "message_update") {
-				return;
-			}
-			const assistantEvent = event.assistantMessageEvent as { type?: string; delta?: string; content?: string } | undefined;
-			if (!sawFirstThinkingDelta && assistantEvent?.type === "thinking_delta" && assistantEvent.delta) {
+			if (!sawFirstThinkingDelta && event.type === "thinking_delta" && event.delta) {
 				sawFirstThinkingDelta = true;
 				this.logTurnTiming(
 					"first_thinking_delta",
@@ -188,7 +191,7 @@ export class ConversationController {
 					`since_prompt=${Date.now() - promptStartedAt}ms`,
 				);
 			}
-			if (!sawFirstTextDelta && assistantEvent?.type === "text_delta" && assistantEvent.delta) {
+			if (!sawFirstTextDelta && event.type === "text_delta" && event.delta) {
 				sawFirstTextDelta = true;
 				this.logTurnTiming(
 					"first_text_delta",

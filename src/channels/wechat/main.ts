@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-import { join } from "node:path";
 import process from "node:process";
 import chalk from "chalk";
-import { AGENT_HOME_SUBDIRS } from "../../core/agent-home-layout.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -62,10 +60,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-function truncate(text: string, max = 600): string {
-	return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
 function formatBackendLabel(kind: WechatBotConfig["backendKind"]): string {
 	if (kind === "ousia") {
 		return "Ousia";
@@ -73,17 +67,10 @@ function formatBackendLabel(kind: WechatBotConfig["backendKind"]): string {
 	if (kind === "codex") {
 		return "Codex";
 	}
+	if (kind === "hermes") {
+		return "Hermes";
+	}
 	return "Pi Coding Agent";
-}
-
-function formatDefaultPromptLabel(kind: WechatBotConfig["backendKind"]): string {
-	if (kind === "codex") {
-		return "Codex default";
-	}
-	if (kind === "ousia") {
-		return "Ousia default";
-	}
-	return "Pi Coding Agent default";
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -92,6 +79,14 @@ function formatTaskPrompt(prompt: string): string {
 		throw new Error("Task prompt is empty.");
 	}
 	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
+}
+
+function formatThinkingForIm(text: string): string {
+	return text
+		.trim()
+		.split(/\r?\n/)
+		.map((line) => `> ${line}`)
+		.join("\n");
 }
 
 function formatError(error: unknown): string {
@@ -194,6 +189,8 @@ class WechatConversationController {
 		let toolSendQueue = Promise.resolve();
 		let assistantSendQueue = Promise.resolve();
 		let activeAssistantText = "";
+		let thinkingText = "";
+		let flushedThinkingLength = 0;
 		let sentAssistantText = false;
 		const flushToolLines = (): Promise<void> => {
 			if (!pendingToolLines.length) {
@@ -220,11 +217,20 @@ class WechatConversationController {
 			sentAssistantText = true;
 			assistantSendQueue = assistantSendQueue
 				.then(async () => {
+					await flushThinkingText();
 					await flushToolLines();
 					await this.runtime.sendPlainReply(request.message, trimmed);
 				})
 				.catch((error) => console.warn(chalk.gray(`Wechat assistant update skipped: ${formatError(error)}`)));
 			return assistantSendQueue;
+		};
+		const flushThinkingText = (): Promise<void> => {
+			const nextText = thinkingText.slice(flushedThinkingLength);
+			if (!nextText.trim()) {
+				return assistantSendQueue;
+			}
+			flushedThinkingLength = thinkingText.length;
+			return this.runtime.sendPlainReply(request.message, formatThinkingForIm(nextText));
 		};
 		const flushActiveAssistantText = (): Promise<void> => {
 			const text = activeAssistantText;
@@ -234,33 +240,37 @@ class WechatConversationController {
 		try {
 			const session = await this.runtime.getSession(this.conversationKey);
 			unsubscribe = session.subscribe((event) => {
-				if (event.type === "message_update") {
-					const assistantEvent = event.assistantMessageEvent as { type?: string; delta?: string; content?: string } | undefined;
-					if (assistantEvent?.type === "text_start") {
-						activeAssistantText = "";
-					}
-					if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
-						activeAssistantText += assistantEvent.delta;
-					}
-					if (assistantEvent?.type === "text_end") {
-						if (assistantEvent.content?.trim()) {
-							activeAssistantText = assistantEvent.content;
-						}
-						void flushActiveAssistantText();
-					}
+				if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_delta" && event.delta) {
+					thinkingText += event.delta;
 				}
-				if (event.type === "message_end") {
+				if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_finished" && event.thinking) {
+					thinkingText = event.thinking;
+				}
+				if (event.type === "text_start") {
+					activeAssistantText = "";
+				}
+				if (event.type === "text_delta" && event.delta) {
+					activeAssistantText += event.delta;
+				}
+				if (event.type === "text_finished") {
+					if (event.text.trim()) {
+						activeAssistantText = event.text;
+					}
 					void flushActiveAssistantText();
 				}
-				if (this.runtime.shouldOutputToolCallsToIm()) {
-					if (event.type === "tool_execution_start") {
-						void flushActiveAssistantText();
-						appendToolLine(formatToolImLine(event.toolName, event.args));
-					}
-					if (event.type === "tool_execution_end" && event.isError) {
-						appendToolLine(formatToolImErrorLine(event.toolName, event.result));
-					}
+				if (event.type === "turn_finished") {
+					void flushActiveAssistantText();
 				}
+					if (this.runtime.shouldOutputToolCallsToIm()) {
+						if (event.type === "tool_call_started") {
+							void flushThinkingText();
+							void flushActiveAssistantText();
+							appendToolLine(formatToolImLine(event.name, event.args, this.runtime.getToolCallImMaxLength()));
+						}
+						if (event.type === "tool_call_finished" && event.isError) {
+							appendToolLine(formatToolImErrorLine(event.name, event.result, this.runtime.getToolCallImMaxLength()));
+						}
+					}
 			});
 			await session.prompt(request.promptText);
 			const providerError = extractLastAssistantError(session);
@@ -270,6 +280,10 @@ class WechatConversationController {
 			const assistantText = extractAssistantText(session);
 			await flushActiveAssistantText();
 			await assistantSendQueue;
+			if (this.runtime.shouldOutputThinkingToIm()) {
+				await flushThinkingText();
+				await assistantSendQueue;
+			}
 			await flushToolLines();
 			if (!sentAssistantText) {
 				await this.runtime.sendPlainReply(request.message, assistantText || "(empty response)");
@@ -345,6 +359,14 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	shouldOutputToolCallsToIm(): boolean {
 		return this.config.outputToolCallsToIm;
+	}
+
+	shouldOutputThinkingToIm(): boolean {
+		return this.config.outputThinkingToIm;
+	}
+
+	getToolCallImMaxLength() {
+		return this.config.outputToolCallImMaxLength;
 	}
 
 	async sendPlainReply(message: WechatMessage, text: string): Promise<void> {
@@ -431,24 +453,13 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
-		const promptPreview = this.config.assistantSystemPrompt
-			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
-			: formatDefaultPromptLabel(this.config.backendKind);
-		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
 			chalk.bold(`${formatBackendLabel(this.config.backendKind)} Wechat channel ready`),
-			chalk.gray(`framework  ${formatBackendLabel(this.config.backendKind)}`),
-			chalk.gray(`mode       ${this.config.runMode}`),
-			chalk.gray(`home       ${this.config.homeDir}`),
-			chalk.gray(`layout     ${layoutRoots}`),
-			chalk.gray(`sessions   ${sessionMode} (${join(this.config.homeDir, "sessions")})`),
 			chalk.gray(`account    ${this.config.wechat.accountId}`),
-			chalk.gray(`baseUrl    ${this.config.wechat.baseUrl}`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? formatDefaultPromptLabel(this.config.backendKind)}`),
-			chalk.gray(`preview    ${promptPreview}`),
+			chalk.gray(`sessions   ${sessionMode}`),
 			chalk.gray("status     waiting for Wechat events..."),
 		];
 		console.log(lines.join("\n"));

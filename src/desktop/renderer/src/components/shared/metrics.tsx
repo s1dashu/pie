@@ -3,11 +3,11 @@ import { cn } from "../../lib/utils";
 /** 固定高度，副标题永远单行，避免窄屏时把卡片撑高。 */
 function metricHintSlot(hint?: string): JSX.Element {
 	return (
-		<div className="mt-1 flex min-h-[1rem] w-full min-w-0 items-end">
+		<div className="mt-1 flex min-h-[1rem] w-full min-w-0 items-end max-[760px]:min-h-0">
 			{hint ? (
-				<p className="w-full truncate text-xs leading-none text-muted-foreground">{hint}</p>
+				<p className="w-full truncate text-xs leading-none text-muted-foreground max-[760px]:hidden">{hint}</p>
 			) : (
-				<span className="block min-h-[1.25em] w-full" aria-hidden />
+				<span className="block min-h-[1.25em] w-full max-[760px]:hidden" aria-hidden />
 			)}
 		</div>
 	);
@@ -47,13 +47,13 @@ export function UsageMetric({
 	return (
 		<div
 			className={cn(
-				"pie-smooth-corner flex min-h-[7.75rem] min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4",
+				"pie-smooth-corner flex min-h-[7.75rem] min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-3.5 max-[760px]:min-h-[5.6rem] max-[760px]:rounded-[28px] max-[760px]:px-2.5 max-[760px]:py-3",
 				className,
 			)}
 		>
-			<div className="truncate text-xs font-medium uppercase text-muted-foreground">{label}</div>
+			<div className="truncate text-xs font-medium uppercase text-muted-foreground max-[760px]:text-[11px] max-[760px]:leading-none">{label}</div>
 			<div className="min-h-2 flex-1" aria-hidden />
-			<div className="text-lg font-bold tracking-tight text-foreground tabular-nums min-[960px]:text-2xl">{value}</div>
+			<div className="truncate whitespace-nowrap text-lg font-bold tracking-tight text-foreground tabular-nums min-[960px]:text-2xl max-[760px]:text-xl">{value}</div>
 			{metricHintSlot(hint)}
 		</div>
 	);

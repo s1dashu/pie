@@ -7,11 +7,12 @@ import { createInterface } from "node:readline";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import chalk from "chalk";
 import { sanitizePathSegment } from "../../channels/feishu/messages.js";
-import { appendAgentUsageEvent, estimateTokensFromText } from "../../core/usage-stats.js";
+import { getAgentRoundInputText } from "../types.js";
 import type {
 	AgentBackendAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
+	AgentRoundInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
@@ -84,6 +85,14 @@ class CodexAppServerSession implements AgentConversationSession {
 	private activeTurn: ActiveTurn | undefined;
 	private starting?: Promise<void>;
 	private aborted = false;
+	private roundIndex = 0;
+	private turnIndex = 0;
+	private currentRoundId = "";
+	private currentTurnId = "";
+	private readonly tokenUsageByTurnId = new Map<string, unknown>();
+	private readonly completedTurnIds = new Set<string>();
+	private readonly flushedTokenUsageTurnIds = new Set<string>();
+	private readonly pieTurnByCodexTurnId = new Map<string, { roundId: string; turnId: string }>();
 
 	constructor(
 		private readonly options: {
@@ -128,12 +137,6 @@ class CodexAppServerSession implements AgentConversationSession {
 			throw new Error("Codex has no active turn to steer.");
 		}
 		this.state.messages.push({ role: "user", content: prompt });
-		appendAgentUsageEvent(this.options.homeDir, {
-			type: "message",
-			direction: "incoming",
-			textChars: Array.from(prompt).length,
-			estimatedTokens: estimateTokensFromText(prompt),
-		});
 		await this.request("turn/steer", {
 			threadId: this.threadId,
 			expectedTurnId: this.activeTurnId,
@@ -144,8 +147,8 @@ class CodexAppServerSession implements AgentConversationSession {
 		}
 	}
 
-	async prompt(text: string): Promise<void> {
-		const prompt = text.trim();
+	async prompt(input: AgentRoundInputLike): Promise<void> {
+		const prompt = getAgentRoundInputText(input).trim();
 		if (!prompt) {
 			throw new Error("Prompt is empty.");
 		}
@@ -155,16 +158,14 @@ class CodexAppServerSession implements AgentConversationSession {
 		await this.ensureStarted();
 		const threadId = await this.ensureThread();
 		this.state.messages.push({ role: "user", content: prompt });
-		appendAgentUsageEvent(this.options.homeDir, {
-			type: "message",
-			direction: "incoming",
-			textChars: Array.from(prompt).length,
-			estimatedTokens: estimateTokensFromText(prompt),
-		});
-		console.log(`${chalk.cyan("User:")} ${prompt.slice(0, 160)}`);
 
 		const startedAt = Date.now();
 		this.aborted = false;
+		this.roundIndex += 1;
+		this.turnIndex = 0;
+		this.currentRoundId = `round_${this.roundIndex}`;
+		this.currentTurnId = "";
+		this.emit({ type: "round_started", roundId: this.currentRoundId });
 		await new Promise<void>((resolve, reject) => {
 			this.activeTurn = { prompt, startedAt, assistantText: "", resolve, reject };
 			this.request("turn/start", {
@@ -327,15 +328,28 @@ class CodexAppServerSession implements AgentConversationSession {
 				break;
 			}
 			case "turn/started": {
-				this.activeTurnId = extractTurnId(message.params) ?? this.activeTurnId;
-				this.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "" } });
+				const turnId = extractTurnId(message.params);
+				this.activeTurnId = turnId ?? this.activeTurnId;
+				this.startNextTurn();
+				if (turnId) {
+					this.pieTurnByCodexTurnId.set(turnId, { roundId: this.ensureRound(), turnId: this.ensureTurn() });
+				}
+				break;
+			}
+			case "thread/tokenUsage/updated": {
+				const turnId = extractTurnId(message.params);
+				const usage = extractCodexTokenUsagePayload(message.params);
+				if (turnId && usage) {
+					this.tokenUsageByTurnId.set(turnId, usage);
+					this.flushTokenUsage(turnId);
+				}
 				break;
 			}
 			case "item/agentMessage/delta": {
 				const delta = extractStringField(message.params, "delta");
 				if (delta) {
 					this.activeTurn!.assistantText += delta;
-					this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
+					this.emit({ type: "text_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", delta });
 				}
 				break;
 			}
@@ -343,7 +357,7 @@ class CodexAppServerSession implements AgentConversationSession {
 			case "item/reasoning/textDelta": {
 				const delta = extractStringField(message.params, "delta");
 				if (delta) {
-					this.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } });
+					this.emit({ type: "thinking_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta });
 				}
 				break;
 			}
@@ -371,28 +385,28 @@ class CodexAppServerSession implements AgentConversationSession {
 			const text = typeof typedItem.text === "string" ? typedItem.text : "";
 			if (text && !this.activeTurn?.assistantText) {
 				this.activeTurn!.assistantText = text;
-				this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } });
+				this.emit({ type: "text_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", delta: text });
 			}
 			return;
 		}
 		if (type === "reasoning" && message.method === "item/completed") {
 			const text = joinStringArray(typedItem.summary) || joinStringArray(typedItem.content);
 			if (text) {
-				this.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: text } });
+				this.emit({ type: "thinking_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta: text });
 			}
 			return;
 		}
 		if (type === "commandExecution") {
 			const command = typeof typedItem.command === "string" ? typedItem.command : "";
 			if (message.method === "item/started") {
-				this.emit({ type: "tool_execution_start", toolName: "bash", args: { command } });
+				this.emit({ type: "tool_call_started", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "bash", args: { command } });
 			} else {
-				this.emit({ type: "tool_execution_end", toolName: "bash", result: typedItem.output ?? "", isError: Boolean(typedItem.error) });
+				this.emit({ type: "tool_call_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "bash", result: typedItem.output ?? "", isError: Boolean(typedItem.error) });
 			}
 			return;
 		}
 		if (type === "webSearch" && message.method === "item/started") {
-			this.emit({ type: "tool_execution_start", toolName: "web_search", args: { query: typedItem.query } });
+			this.emit({ type: "tool_call_started", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "web_search", args: { query: typedItem.query } });
 		}
 	}
 
@@ -408,25 +422,26 @@ class CodexAppServerSession implements AgentConversationSession {
 			return;
 		}
 		const assistantText = active.assistantText.trim();
+		const turnId = extractTurnId(params) ?? this.activeTurnId;
+		if (turnId) {
+			const usage = extractUsagePayload(params);
+			if (usage && !this.tokenUsageByTurnId.has(turnId)) {
+				this.tokenUsageByTurnId.set(turnId, usage);
+			}
+			this.completedTurnIds.add(turnId);
+			this.flushTokenUsage(turnId);
+		}
 		this.state.messages.push({ role: "assistant", content: assistantText });
-		appendAgentUsageEvent(this.options.homeDir, {
-			type: "message",
-			direction: "outgoing",
-			textChars: Array.from(assistantText).length,
-			estimatedTokens: estimateTokensFromText(assistantText),
-		});
-		this.emit({ type: "message_update", assistantMessageEvent: { type: "text_end", content: assistantText } });
-		this.emit({ type: "message_end" });
+		this.emit({ type: "text_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", text: assistantText });
+		this.emit({ type: "turn_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), status: "success" });
+		this.emit({ type: "round_finished", roundId: this.ensureRound(), status: "success", finalText: assistantText });
 		if (this.options.verboseLogs) {
 			console.log(chalk.gray(`> codex_app_server complete elapsed=${Date.now() - active.startedAt}ms chars=${assistantText.length}`));
 		}
-		if (assistantText) {
-			for (const line of assistantText.split(/\r?\n/)) {
-				console.log(`${chalk.green("Agent:")} ${line}`);
-			}
-		}
 		this.activeTurn = undefined;
 		this.activeTurnId = undefined;
+		this.currentTurnId = "";
+		this.currentRoundId = "";
 		active.resolve();
 	}
 
@@ -443,6 +458,11 @@ class CodexAppServerSession implements AgentConversationSession {
 		});
 		this.activeTurn = undefined;
 		this.activeTurnId = undefined;
+		const status = this.aborted ? "aborted" : "error";
+		this.emit({ type: "turn_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), status });
+		this.emit({ type: "round_finished", roundId: this.ensureRound(), status });
+		this.currentTurnId = "";
+		this.currentRoundId = "";
 		if (this.aborted) {
 			active.resolve();
 		} else {
@@ -485,6 +505,46 @@ class CodexAppServerSession implements AgentConversationSession {
 		for (const listener of this.listeners) {
 			listener(event as AgentSessionEvent);
 		}
+	}
+
+	private ensureRound(): string {
+		if (!this.currentRoundId) {
+			this.roundIndex += 1;
+			this.currentRoundId = `round_${this.roundIndex}`;
+		}
+		return this.currentRoundId;
+	}
+
+	private ensureTurn(): string {
+		this.ensureRound();
+		if (!this.currentTurnId) {
+			this.startNextTurn();
+		}
+		return this.currentTurnId;
+	}
+
+	private startNextTurn(): void {
+		const roundId = this.ensureRound();
+		if (this.currentTurnId) {
+			this.emit({ type: "turn_finished", roundId, turnId: this.currentTurnId, status: "success" });
+		}
+		this.turnIndex += 1;
+		this.currentTurnId = `turn_${this.turnIndex}`;
+		this.emit({ type: "turn_started", roundId, turnId: this.currentTurnId, index: this.turnIndex });
+	}
+
+	private flushTokenUsage(turnId: string): void {
+		if (!this.completedTurnIds.has(turnId) || this.flushedTokenUsageTurnIds.has(turnId)) {
+			return;
+		}
+		const usage = this.tokenUsageByTurnId.get(turnId);
+		if (!usage) {
+			return;
+		}
+		this.flushedTokenUsageTurnIds.add(turnId);
+		this.tokenUsageByTurnId.delete(turnId);
+		const pieTurn = this.pieTurnByCodexTurnId.get(turnId);
+		this.emit({ type: "token_usage", ...(pieTurn ?? {}), usage });
 	}
 
 	private sessionDir(): string {
@@ -742,6 +802,11 @@ function extractTurnId(value: unknown): string | undefined {
 	return typeof turn?.id === "string" ? turn.id : undefined;
 }
 
+function makeToolCallId(item: Record<string, unknown>): string {
+	const id = item.id ?? item.callId ?? item.call_id;
+	return typeof id === "string" && id.trim() ? id.trim() : `tool_${String(item.type ?? "call")}`;
+}
+
 function extractStringField(value: unknown, key: string): string {
 	if (!value || typeof value !== "object") {
 		return "";
@@ -760,6 +825,58 @@ function extractErrorMessage(value: unknown): string | undefined {
 	}
 	const error = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : undefined;
 	return typeof error?.message === "string" ? error.message : undefined;
+}
+
+function extractUsagePayload(value: unknown): unknown | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	if (record.usage && typeof record.usage === "object") {
+		return record.usage;
+	}
+	const turn = record.turn && typeof record.turn === "object" ? record.turn as Record<string, unknown> : undefined;
+	if (turn?.usage && typeof turn.usage === "object") {
+		return turn.usage;
+	}
+	return undefined;
+}
+
+function extractCodexTokenUsagePayload(value: unknown): unknown | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	const tokenUsage = record.tokenUsage && typeof record.tokenUsage === "object" ? record.tokenUsage as Record<string, unknown> : undefined;
+	const last = tokenUsage?.last && typeof tokenUsage.last === "object" ? tokenUsage.last as Record<string, unknown> : undefined;
+	if (!last) {
+		return undefined;
+	}
+	const inputTokens = readNumber(last, "inputTokens") ?? 0;
+	const cachedInputTokens = readNumber(last, "cachedInputTokens") ?? 0;
+	const outputTokens = readNumber(last, "outputTokens") ?? 0;
+	const totalTokens = readNumber(last, "totalTokens") ?? inputTokens + outputTokens;
+	const reasoningOutputTokens = readNumber(last, "reasoningOutputTokens") ?? 0;
+	if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0) {
+		return undefined;
+	}
+
+	return {
+		input_tokens: inputTokens,
+		output_tokens: outputTokens,
+		total_tokens: totalTokens,
+		input_tokens_details: {
+			cached_tokens: cachedInputTokens,
+		},
+		output_tokens_details: {
+			reasoning_tokens: reasoningOutputTokens,
+		},
+	};
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function joinStringArray(value: unknown): string {

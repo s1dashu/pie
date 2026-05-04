@@ -66,37 +66,85 @@ export function isRecentMessage(event: LarkMessageEvent, startedAtMs: number): b
 	return createdAt >= startedAtMs - 5000;
 }
 
+function textFromPostCell(cell: unknown): string {
+	if (!cell || typeof cell !== "object") {
+		return "";
+	}
+	const value = cell as Record<string, unknown>;
+	if (typeof value.text === "string") {
+		return value.text;
+	}
+	if (typeof value.user_name === "string") {
+		return `@${value.user_name}`;
+	}
+	if (typeof value.emoji_type === "string") {
+		return `[${value.emoji_type}]`;
+	}
+	return "";
+}
+
+function flattenPostRows(rows: unknown): string {
+	if (!Array.isArray(rows)) {
+		return "";
+	}
+	const lines: string[] = [];
+	for (const row of rows) {
+		if (!Array.isArray(row)) {
+			continue;
+		}
+		const line = row.map(textFromPostCell).join("").trim();
+		if (line) {
+			lines.push(line);
+		}
+	}
+	return lines.join("\n").trim();
+}
+
+function collectNestedText(value: unknown, parts: string[]): void {
+	if (typeof value === "string") {
+		parts.push(value);
+		return;
+	}
+	if (!value || typeof value !== "object") {
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			collectNestedText(item, parts);
+		}
+		return;
+	}
+	const record = value as Record<string, unknown>;
+	for (const key of ["text", "content", "title", "user_name", "emoji_type"]) {
+		collectNestedText(record[key], parts);
+	}
+}
+
 function flattenPostContent(content: unknown): string {
 	if (!content || typeof content !== "object") {
 		return "";
 	}
 
-	const localeValues = Object.values(content as Record<string, unknown>);
-	const textParts: string[] = [];
+	const record = content as Record<string, unknown>;
+	const directContent = flattenPostRows(record.content);
+	if (directContent) {
+		return directContent;
+	}
+
+	const localeValues = Object.values(record);
 	for (const locale of localeValues) {
 		if (!locale || typeof locale !== "object" || !("content" in locale)) {
 			continue;
 		}
-		const rows = (locale as { content?: unknown }).content;
-		if (!Array.isArray(rows)) {
-			continue;
-		}
-		for (const row of rows) {
-			if (!Array.isArray(row)) {
-				continue;
-			}
-			for (const cell of row) {
-				if (!cell || typeof cell !== "object") {
-					continue;
-				}
-				const maybeText = (cell as { text?: unknown }).text;
-				if (typeof maybeText === "string") {
-					textParts.push(maybeText);
-				}
-			}
+		const localeContent = flattenPostRows((locale as { content?: unknown }).content);
+		if (localeContent) {
+			return localeContent;
 		}
 	}
-	return textParts.join("\n").trim();
+
+	const nestedTextParts: string[] = [];
+	collectNestedText(content, nestedTextParts);
+	return nestedTextParts.join("\n").trim();
 }
 
 function stripBotMentions(text: string, botOpenId: string | undefined): string {

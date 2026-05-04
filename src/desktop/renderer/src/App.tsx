@@ -1,13 +1,55 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { AgentDetails, AgentSummary } from "../shared/types";
+import { AgentAvatar } from "./components/shared/agent-avatar";
 import { Toaster, toast } from "./components/ui/sonner";
+import { runtimeLifecycleLabel, runtimeLifecycleTone, statusLabel, statusTone } from "./features/agents/agent-display";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
 import { AgentSidebar } from "./layout/AgentSidebar";
-import { applyAppearanceTheme } from "./lib/appearance-theme";
+import { cn } from "./lib/utils";
+import { applyDesktopAppearance, watchSystemColorScheme } from "./lib/appearance-theme";
+import { I18nProvider, useI18n } from "./lib/i18n";
 
 type AppSelection = { type: "agent"; id: string } | { type: "settings" } | { type: "create" };
 
+function agentSummaryFingerprint(agent: AgentSummary): string {
+	return JSON.stringify({
+		id: agent.id,
+		name: agent.name,
+		status: agent.status,
+		avatarSeed: agent.avatarSeed,
+		avatarUrl: agent.avatarUrl,
+		desiredState: agent.desiredState,
+		selected: agent.selected,
+		home: agent.home,
+		runtimeEnvironment: agent.runtimeEnvironment,
+		createdAt: agent.createdAt,
+		updatedAt: agent.updatedAt,
+		frameworkKind: agent.frameworkKind,
+		modelLabel: agent.modelLabel,
+		channelKinds: agent.channelKinds,
+		appId: agent.appId,
+	});
+}
+
+function mergeAgentSummaryIntoDetails(current: AgentDetails, summary: AgentSummary): AgentDetails {
+	const next = {
+		...current,
+		...summary,
+		model: current.model,
+		brand: current.brand,
+		appSecret: current.appSecret,
+		wechat: current.wechat,
+	};
+	return agentSummaryFingerprint(current) === agentSummaryFingerprint(next) ? current : next;
+}
+
 export function App(): JSX.Element {
+	const mode = new URLSearchParams(window.location.search).get("mode");
+	if (mode === "menubar") {
+		return <MenuBarAgentList />;
+	}
+
 	const [selection, setSelection] = useState<AppSelection | undefined>();
 	const queryClient = useQueryClient();
 	const selectedId = selection?.type === "agent" ? selection.id : undefined;
@@ -32,8 +74,11 @@ export function App(): JSX.Element {
 	});
 
 	useEffect(() => {
-		applyAppearanceTheme(settings.data?.appearanceGrayHue);
-	}, [settings.data?.appearanceGrayHue]);
+		applyDesktopAppearance(settings.data?.colorScheme, settings.data?.appearanceGrayHue);
+		return watchSystemColorScheme(settings.data?.colorScheme, () => {
+			applyDesktopAppearance(settings.data?.colorScheme, settings.data?.appearanceGrayHue);
+		});
+	}, [settings.data?.appearanceGrayHue, settings.data?.colorScheme]);
 
 	useEffect(() => {
 		if (agents.error) {
@@ -46,6 +91,14 @@ export function App(): JSX.Element {
 			handleError((selected.error as Error).message);
 		}
 	}, [selected.error]);
+
+	useEffect(() => {
+		return window.pie.onSelectAgent((agentId) => {
+			setSelection({ type: "agent", id: agentId });
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+		});
+	}, [queryClient]);
 
 	useEffect(() => {
 		if (!agents.data || selection?.type === "settings" || selection?.type === "create") {
@@ -75,50 +128,129 @@ export function App(): JSX.Element {
 			if (!current) {
 				return current;
 			}
-			return {
-				...current,
-				...summary,
-				model: current.model,
-				brand: current.brand,
-				appSecret: current.appSecret,
-				wechat: current.wechat,
-			};
+			return mergeAgentSummaryIntoDetails(current, summary);
 		});
 	}, [agents.data, queryClient, selected.data, selectedId]);
 
 	return (
-		<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
-			<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
-			<AgentSidebar
-				agents={agents.data}
-				selectedId={selectedId}
-				settingsSelected={selection?.type === "settings"}
-				isLoading={agents.isLoading}
-				onSelectAgent={(id) => setSelection({ type: "agent", id })}
-				onSelectSettings={() => setSelection({ type: "settings" })}
-				onCreateAgent={() => {
-					setSelection({ type: "create" });
-				}}
-			/>
-			<AgentDetailPane
-				agent={selectedId ? selected.data : undefined}
-				showSettings={selection?.type === "settings"}
-				showCreateAgent={selection?.type === "create"}
-				hasAgents={Boolean(agents.data?.length)}
-				isLoadingAgents={agents.isLoading}
-				onCreateAgent={() => setSelection({ type: "create" })}
-				onError={handleError}
-				onCloseSettings={() => setSelection(undefined)}
-				onCancelCreate={() => {
-					setSelection(agents.data?.[0] ? { type: "agent", id: agents.data[0].id } : undefined);
-				}}
-				onCreated={(agent) => setSelection({ type: "agent", id: agent.id })}
-				onDeleted={() => {
-					setSelection(undefined);
-					queryClient.removeQueries({ queryKey: ["agent", selectedId] });
-				}}
-			/>
-			<Toaster />
+		<I18nProvider language={settings.data?.language ?? "zh"}>
+			<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
+				<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
+				<AgentSidebar
+					agents={agents.data}
+					selectedId={selectedId}
+					settingsSelected={selection?.type === "settings"}
+					isLoading={agents.isLoading}
+					onSelectAgent={(id) => setSelection({ type: "agent", id })}
+					onSelectSettings={() => setSelection({ type: "settings" })}
+					onCreateAgent={() => {
+						setSelection({ type: "create" });
+					}}
+				/>
+				<AgentDetailPane
+					agent={selectedId ? selected.data : undefined}
+					showSettings={selection?.type === "settings"}
+					showCreateAgent={selection?.type === "create"}
+					hasAgents={Boolean(agents.data?.length)}
+					isLoadingAgents={agents.isLoading}
+					onCreateAgent={() => setSelection({ type: "create" })}
+					onError={handleError}
+					onCloseSettings={() => setSelection(undefined)}
+					onCancelCreate={() => {
+						setSelection(agents.data?.[0] ? { type: "agent", id: agents.data[0].id } : undefined);
+					}}
+					onCreated={(agent) => setSelection({ type: "agent", id: agent.id })}
+					onDeleted={() => {
+						setSelection(undefined);
+						queryClient.removeQueries({ queryKey: ["agent", selectedId] });
+					}}
+				/>
+				<Toaster />
+			</main>
+		</I18nProvider>
+	);
+}
+
+function MenuBarAgentList(): JSX.Element {
+	const agents = useQuery({
+		queryKey: ["menu-bar-agents"],
+		queryFn: () => window.pie.listAgents(),
+		refetchInterval: 3000,
+	});
+	const settings = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => window.pie.getSettings(),
+	});
+
+	useEffect(() => {
+		applyDesktopAppearance(settings.data?.colorScheme, settings.data?.appearanceGrayHue);
+		return watchSystemColorScheme(settings.data?.colorScheme, () => {
+			applyDesktopAppearance(settings.data?.colorScheme, settings.data?.appearanceGrayHue);
+		});
+	}, [settings.data?.appearanceGrayHue, settings.data?.colorScheme]);
+
+	return (
+		<I18nProvider language={settings.data?.language ?? "zh"}>
+			<MenuBarAgentListContent agents={agents.data} isLoading={agents.isLoading} />
+		</I18nProvider>
+	);
+}
+
+function MenuBarAgentListContent({ agents, isLoading }: { agents?: AgentSummary[]; isLoading: boolean }): JSX.Element {
+	const { t } = useI18n();
+	return (
+		<main className="flex h-full w-full overflow-hidden bg-transparent p-2 text-foreground">
+			<div className="pie-smooth-corner flex h-full w-full flex-col overflow-hidden rounded-[24px] border border-black/5 bg-white/95 shadow-[0_18px_44px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+				<div className="shrink-0 px-4 pb-2 pt-3">
+					<div className="text-sm font-semibold leading-5 text-foreground">{t("agents")}</div>
+					<div className="mt-0.5 text-xs leading-4 text-muted-foreground">
+						{agents?.length ? t("agentCount", { count: agents.length }) : t("agentList")}
+					</div>
+				</div>
+				<div className="max-h-[340px] flex-1 overflow-y-auto px-2 pb-2">
+					{isLoading ? (
+						<div className="px-2 py-8 text-center text-xs text-muted-foreground">{t("loading")}</div>
+					) : agents?.length ? (
+						<div className="flex flex-col gap-1">
+							{agents.map((agent) => (
+								<MenuBarAgentItem key={agent.id} agent={agent} />
+							))}
+						</div>
+					) : (
+						<div className="px-2 py-8 text-center text-xs text-muted-foreground">{t("noAgents")}</div>
+					)}
+				</div>
+			</div>
 		</main>
+	);
+}
+
+function MenuBarAgentItem({ agent }: { agent: AgentSummary }): JSX.Element {
+	const { language, t } = useI18n();
+	const lifecycle = agent.runtimeEnvironment?.lifecycle;
+	const lifecycleTone = runtimeLifecycleTone(lifecycle?.state);
+	const statusText = lifecycle ? runtimeLifecycleLabel(lifecycle.state, language) : statusLabel(agent.status, language);
+	const tone = agent.runtimeEnvironment ? lifecycleTone : statusTone(agent.status);
+	const channels = agent.channelKinds?.length ? agent.channelKinds.join("+") : t("noChannel");
+	const framework = agent.frameworkKind ?? t("agent");
+
+	return (
+		<button
+			type="button"
+			className="pie-smooth-corner flex h-[64px] w-full items-center gap-3 rounded-[18px] px-2.5 text-left transition hover:bg-[var(--slate-3)] active:scale-[0.99]"
+			onClick={() => void window.pie.openAgentFromMenuBar(agent.id)}
+		>
+			<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={38} />
+			<div className="min-w-0 flex-1">
+				<div className="truncate text-sm font-medium leading-5 text-foreground">{agent.name}</div>
+				<div className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
+					{framework} {t("on")} {channels}
+				</div>
+			</div>
+			<div className="flex shrink-0 items-center gap-1.5">
+				<span className={cn("h-2 w-2 rounded-full", tone)} />
+				<span className="max-w-[52px] truncate text-xs text-muted-foreground">{statusText}</span>
+			</div>
+		</button>
 	);
 }

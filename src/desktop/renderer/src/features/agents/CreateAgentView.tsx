@@ -15,9 +15,11 @@ import type {
 	DesktopCodexWebSearchMode,
 	DesktopChannelKind,
 	DesktopFeishuAppCredentials,
+	DesktopRuntimeDiagnostic,
 	DesktopThinkingLevel,
 	DesktopWechatCredentials,
 } from "../../../shared/types";
+import { HERMES_MODEL_OPTIONS, mergeModelOptions, providersFromModels } from "../../../../shared/model-catalog";
 import { AppIcon } from "../../components/shared/app-icon";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
@@ -25,13 +27,14 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Spinner } from "../../components/ui/spinner-1";
+import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { thinkingLevelOptions } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
 
 const channelOptions = [
-	{ value: "feishu", label: "飞书", enabled: true },
-	{ value: "wechat", label: "微信", enabled: true },
+	{ value: "feishu", labelKey: "feishu", enabled: true },
+	{ value: "wechat", labelKey: "wechat", enabled: true },
 	{ value: "telegram", label: "Telegram", enabled: true },
 	{ value: "discord", label: "Discord", enabled: true },
 	{ value: "slack", label: "Slack", enabled: true },
@@ -45,6 +48,7 @@ const frameworkOptions: Array<{ value: DesktopAgentFramework; label: string; ena
 	{ value: "pi", label: "Pi", enabled: true },
 	{ value: "codex", label: "Codex", enabled: true },
 	{ value: "ousia", label: "Ousia", enabled: true },
+	{ value: "hermes", label: "Hermes", enabled: true },
 ];
 
 const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: string }> = [
@@ -82,6 +86,13 @@ const frameworkModelConfig = {
 		showsCodexAccessMode: false,
 		showsCodexWebSearch: false,
 	},
+	hermes: {
+		usesCodexCli: false,
+		showsProvider: true,
+		showsApiKey: true,
+		showsCodexAccessMode: false,
+		showsCodexWebSearch: false,
+	},
 } satisfies Record<DesktopAgentFramework, {
 	usesCodexCli: boolean;
 	showsProvider: boolean;
@@ -99,6 +110,7 @@ export function CreateAgentView({
 	onCreated: (agent: AgentDetails) => void;
 	onError: (message: string) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const [session, setSession] = useState<AgentCreationSession | undefined>();
 	const [step, setStep] = useState<CreateAgentStep>("config");
 	const [stepHistory, setStepHistory] = useState<CreateAgentStep[]>([]);
@@ -109,10 +121,6 @@ export function CreateAgentView({
 	const [channels, setChannels] = useState<DesktopChannelKind[]>(["feishu"]);
 	const [slackBotToken, setSlackBotToken] = useState("");
 	const [slackAppToken, setSlackAppToken] = useState("");
-	const [slackSigningSecret, setSlackSigningSecret] = useState("");
-	const [slackTeamId, setSlackTeamId] = useState("");
-	const [slackAppId, setSlackAppId] = useState("");
-	const [slackBotUserId, setSlackBotUserId] = useState("");
 	const [discordBotToken, setDiscordBotToken] = useState("");
 	const [discordApplicationId, setDiscordApplicationId] = useState("");
 	const [discordGuildId, setDiscordGuildId] = useState("");
@@ -124,6 +132,7 @@ export function CreateAgentView({
 	const [status, setStatus] = useState("");
 	const [codexLoginStatus, setCodexLoginStatus] = useState("");
 	const [codexLoginUrl, setCodexLoginUrl] = useState("");
+	const [hermesInstallStatus, setHermesInstallStatus] = useState("");
 	const [framework, setFramework] = useState<DesktopAgentFramework>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
@@ -141,6 +150,13 @@ export function CreateAgentView({
 		queryKey: ["codex-diagnostic"],
 		queryFn: () => window.pie.checkCodexEnvironment(),
 		enabled: framework === "codex",
+		refetchOnWindowFocus: false,
+		retry: false,
+	});
+	const hermesDiagnostic = useQuery({
+		queryKey: ["hermes-diagnostic"],
+		queryFn: () => window.pie.checkHermesEnvironment(),
+		enabled: framework === "hermes",
 		refetchOnWindowFocus: false,
 		retry: false,
 	});
@@ -197,7 +213,7 @@ export function CreateAgentView({
 	const authenticateChannels = useMutation({
 		mutationFn: async () => {
 			if (!session) {
-				throw new Error("创建流程尚未初始化");
+				throw new Error(t("creationNotInitialized"));
 			}
 			let nextFeishu: DesktopFeishuAppCredentials | undefined;
 			let nextWechat: DesktopWechatCredentials | undefined;
@@ -227,7 +243,7 @@ export function CreateAgentView({
 					err.message.includes("二维码已失效"))
 			) {
 				setQrExpired(true);
-				setStatus("二维码已失效，请刷新二维码");
+				setStatus(t("qrExpiredRefresh"));
 				return;
 			}
 			onError(err.message);
@@ -236,25 +252,31 @@ export function CreateAgentView({
 	const complete = useMutation({
 		mutationFn: () => {
 			if (!session) {
-				throw new Error("创建流程尚未完成");
+				throw new Error(t("creationNotCompleted"));
 			}
 			if (!channels.length) {
-				throw new Error("请至少选择一个 IM 渠道");
+				throw new Error(t("selectOneChannel"));
 			}
 			if (channels.includes("feishu") && !feishu) {
-				throw new Error("飞书渠道尚未完成授权");
+				throw new Error(t("feishuAuthIncomplete"));
 			}
 			if (channels.includes("wechat") && !wechat) {
-				throw new Error("微信渠道尚未完成授权");
+				throw new Error(t("wechatAuthIncomplete"));
 			}
 			if (channels.includes("slack") && (!slackBotToken.trim() || !slackAppToken.trim())) {
-				throw new Error("Slack Bot Token 和 App Token 必填");
+				throw new Error(t("slackTokensRequired"));
 			}
 			if (channels.includes("discord") && !discordBotToken.trim()) {
-				throw new Error("Discord Bot Token 必填");
+				throw new Error(t("discordTokenRequired"));
 			}
 			if (channels.includes("telegram") && !telegramBotToken.trim()) {
-				throw new Error("Telegram Bot Token 必填");
+				throw new Error(t("telegramTokenRequired"));
+			}
+			if (framework === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
+				throw new Error(t("codexNeedInstalled"));
+			}
+			if (framework === "hermes" && !hermesDiagnostic.data?.ready) {
+				throw new Error(t("hermesNeedInstalled"));
 			}
 			return window.pie.completeAgentCreation({
 				sessionId: session.sessionId,
@@ -269,10 +291,6 @@ export function CreateAgentView({
 							slack: {
 								botToken: slackBotToken,
 								appToken: slackAppToken,
-								signingSecret: slackSigningSecret,
-								teamId: slackTeamId,
-								appId: slackAppId,
-								botUserId: slackBotUserId,
 							},
 						}
 					: {}),
@@ -336,14 +354,46 @@ export function CreateAgentView({
 	const openCodexLogin = useMutation({
 		mutationFn: () => {
 			if (!session) {
-				throw new Error("创建流程尚未初始化");
+				throw new Error(t("creationNotInitialized"));
 			}
-			setCodexLoginStatus("正在打开 Codex 登录...");
+			setCodexLoginStatus(t("codexOpeningLogin"));
 			return window.pie.openCodexLogin(session.sessionId);
 		},
 		onSuccess: async () => {
 			await codexDiagnostic.refetch();
-			setCodexLoginStatus("Codex 登录状态已更新");
+			setCodexLoginStatus(t("codexLoginUpdated"));
+		},
+		onError: (err: Error) => onError(err.message),
+	});
+	const installCodex = useMutation({
+		mutationFn: () => {
+			if (!session) {
+				throw new Error(t("creationNotInitialized"));
+			}
+			setCodexLoginStatus(t("codexInstalling"));
+			return window.pie.installCodex(session.sessionId);
+		},
+		onSuccess: async (diagnostic) => {
+			await codexDiagnostic.refetch();
+			if (diagnostic.installed && !diagnostic.authenticated) {
+				openCodexLogin.mutate();
+				return;
+			}
+			setCodexLoginStatus(diagnostic.authenticated ? t("codexLoginUpdated") : diagnostic.error || t("codexInstallDone"));
+		},
+		onError: (err: Error) => onError(err.message),
+	});
+	const installHermes = useMutation({
+		mutationFn: () => {
+			if (!session) {
+				throw new Error(t("creationNotInitialized"));
+			}
+			setHermesInstallStatus(t("hermesInstalling"));
+			return window.pie.installHermes(session.sessionId);
+		},
+		onSuccess: async (diagnostic) => {
+			await hermesDiagnostic.refetch();
+			setHermesInstallStatus(diagnostic.ready ? t("hermesInstallDone") : diagnostic.error || t("hermesInstallFirst"));
 		},
 		onError: (err: Error) => onError(err.message),
 	});
@@ -363,7 +413,7 @@ export function CreateAgentView({
 			if (event.sessionId !== session?.sessionId) {
 				return;
 			}
-			if (event.source === "codex-login") {
+			if (event.source === "codex-login" || event.source === "codex-install") {
 				if (event.message) {
 					setCodexLoginStatus(event.message);
 				}
@@ -372,6 +422,15 @@ export function CreateAgentView({
 				}
 				if (event.type === "done" || event.type === "error") {
 					void queryClient.invalidateQueries({ queryKey: ["codex-diagnostic"] });
+				}
+				return;
+			}
+			if (event.source === "hermes-install") {
+				if (event.message) {
+					setHermesInstallStatus(event.message);
+				}
+				if (event.type === "done" || event.type === "error") {
+					void queryClient.invalidateQueries({ queryKey: ["hermes-diagnostic"] });
 				}
 				return;
 			}
@@ -403,11 +462,15 @@ export function CreateAgentView({
 		return () => window.clearInterval(timer);
 	}, [qrExpiresAt]);
 
-	const modelsForProvider = session?.models.filter((item) => item.provider === provider) ?? [];
-	const providers = session?.providers.length ? session.providers : [provider];
 	const modelConfig = frameworkModelConfig[framework];
 	const usesCodexCli = modelConfig.usesCodexCli;
+	const activeModelOptions = framework === "hermes"
+		? mergeModelOptions(session?.models ?? [], HERMES_MODEL_OPTIONS)
+		: session?.models ?? [];
+	const modelsForProvider = activeModelOptions.filter((item) => item.provider === provider);
+	const providers = activeModelOptions.length ? providersFromModels(activeModelOptions) : [provider];
 	const codexModels = session?.codexModels ?? [];
+	const hermesDefaultModel = HERMES_MODEL_OPTIONS[0];
 	const selectedCodexModel = codexModels.find((item) => item.id === model);
 	const codexThinkingOptions = (selectedCodexModel?.supportedThinkingLevels.length
 		? selectedCodexModel.supportedThinkingLevels
@@ -420,7 +483,7 @@ export function CreateAgentView({
 	};
 	const updateProviderSelection = (nextProvider: string) => {
 		setProvider(nextProvider);
-		setModel(session?.models.find((item) => item.provider === nextProvider)?.id ?? "");
+		setModel(activeModelOptions.find((item) => item.provider === nextProvider)?.id ?? "");
 		void prefillProviderApiKey(nextProvider, session?.profileId, true);
 	};
 	const updateFrameworkSelection = (nextFramework: DesktopAgentFramework) => {
@@ -431,6 +494,18 @@ export function CreateAgentView({
 			setModel(defaultCodexModel?.id ?? "gpt-5.5");
 			setThinkingLevel(defaultCodexModel?.defaultThinkingLevel ?? defaultCodexModel?.supportedThinkingLevels[0] ?? "medium");
 			setApiKey("");
+			return;
+		}
+		if (nextFramework === "hermes") {
+			const hermesModels = mergeModelOptions(session?.models ?? [], HERMES_MODEL_OPTIONS);
+			const hermesProviders = providersFromModels(hermesModels);
+			const defaultProvider = hermesProviders.includes(hermesDefaultModel.provider)
+				? hermesDefaultModel.provider
+				: hermesProviders[0] ?? hermesDefaultModel.provider;
+			setProvider(defaultProvider);
+			setModel(hermesModels.find((item) => item.provider === defaultProvider)?.id ?? "");
+			setThinkingLevel("off");
+			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
 			return;
 		}
 		if (provider === "codex-cli") {
@@ -449,26 +524,26 @@ export function CreateAgentView({
 	const requiresIdentity = channels.includes("wechat") && !channels.some((channel) => channel === "feishu");
 	const requiresManualCredentials = channels.some((channel) => manualChannelKinds.includes(channel));
 	const authPrompt = channels.includes("wechat")
-		? "请使用微信扫码连接 bot"
-		: "请使用飞书或 Lark 扫码授权创建 bot";
+		? t("useWechatScan")
+		: t("useFeishuScan");
 	const visibleSteps = createAgentStepFlow({
 		requiresIdentity,
 		requiresQrAuth,
 		requiresManualCredentials,
 	});
 	const stepDescription = {
-		config: "选择框架和 IM 渠道",
-		identity: "设置微信里的名称和头像",
-		auth: "授权已选择的 IM 渠道",
-		credentials: "填写渠道连接凭证",
-		model: "配置模型和 API Key",
+		config: t("chooseFrameworkAndChannel"),
+		identity: t("setWechatNameAvatar"),
+		auth: t("authSelectedChannels"),
+		credentials: t("fillChannelCredentials"),
+		model: t("configureModelAndKey"),
 	}[step];
 	const stepTitle = {
-		config: "选择 Agent 类型",
-		identity: "设置 Agent 信息",
-		auth: "扫码授权",
-		credentials: "连接渠道",
-		model: "选择模型",
+		config: t("chooseAgentType"),
+		identity: t("setAgentInfo"),
+		auth: t("scanAuth"),
+		credentials: t("connectChannel"),
+		model: t("chooseModel"),
 	}[step];
 	const handleNext = () => {
 		if (step === "config") {
@@ -507,14 +582,14 @@ export function CreateAgentView({
 		|| !session
 		|| (step === "config" && !channels.length)
 		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
-		|| (step === "model" && complete.isPending);
+		|| (step === "model" && (complete.isPending || installCodex.isPending || installHermes.isPending));
 	const currentStepIndex = visibleSteps.indexOf(step);
 
 	return (
 		<div className="flex h-full flex-col overflow-hidden bg-white">
 			<header className="drag-region flex h-[72px] shrink-0 items-center justify-between gap-4 px-7 pt-3">
 				<div className="min-w-0">
-					<h1 className="text-xl font-semibold tracking-normal text-balance">创建 Agent</h1>
+					<h1 className="text-xl font-semibold tracking-normal text-balance">{t("createAgent")}</h1>
 					<p className="mt-1 text-sm text-muted-foreground text-pretty">{stepDescription}</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-4">
@@ -529,13 +604,13 @@ export function CreateAgentView({
 							/>
 						))}
 					</div>
-					<AceternityTooltip content="关闭创建" side="bottom">
+					<AceternityTooltip content={t("closeCreate")} side="bottom">
 						<Button
 							variant="unstyled"
 							size="inline"
 							className="no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
 							onClick={onCancel}
-							aria-label="关闭创建 Agent"
+							aria-label={t("closeCreate")}
 						>
 							<HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-5" />
 						</Button>
@@ -548,7 +623,7 @@ export function CreateAgentView({
 					<div className="w-full max-w-md">
 						{begin.isPending || !session ? (
 							<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-								<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> 正在初始化配置...
+								<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" /> {t("initializingConfig")}
 							</div>
 						) : (
 							<div className="space-y-6">
@@ -560,7 +635,7 @@ export function CreateAgentView({
 									</div>
 								) : step === "identity" ? (
 									<div className="space-y-6">
-										<Field label="Agent 名称">
+										<Field label={t("agentName")}>
 											<Input className={controlSurfaceClass} value={name} onChange={(event) => setName(event.target.value)} />
 										</Field>
 										<AvatarPicker
@@ -584,7 +659,7 @@ export function CreateAgentView({
 												)}
 												{qrExpired && (
 													<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/88 text-center backdrop-blur-[1px]">
-														<div className="text-xs font-medium text-foreground">二维码已失效</div>
+														<div className="text-xs font-medium text-foreground">{t("qrExpired")}</div>
 														<Button
 															variant="unstyled"
 															size="inline"
@@ -598,7 +673,7 @@ export function CreateAgentView({
 																authenticateChannels.mutate();
 															}}
 														>
-															刷新二维码
+															{t("refreshQr")}
 														</Button>
 													</div>
 												)}
@@ -611,10 +686,6 @@ export function CreateAgentView({
 											channels={channels}
 											slackBotToken={slackBotToken}
 											slackAppToken={slackAppToken}
-											slackSigningSecret={slackSigningSecret}
-											slackTeamId={slackTeamId}
-											slackAppId={slackAppId}
-											slackBotUserId={slackBotUserId}
 											discordBotToken={discordBotToken}
 											discordApplicationId={discordApplicationId}
 											discordGuildId={discordGuildId}
@@ -622,10 +693,6 @@ export function CreateAgentView({
 											telegramBotUsername={telegramBotUsername}
 											setSlackBotToken={setSlackBotToken}
 											setSlackAppToken={setSlackAppToken}
-											setSlackSigningSecret={setSlackSigningSecret}
-											setSlackTeamId={setSlackTeamId}
-											setSlackAppId={setSlackAppId}
-											setSlackBotUserId={setSlackBotUserId}
 											setDiscordBotToken={setDiscordBotToken}
 											setDiscordApplicationId={setDiscordApplicationId}
 											setDiscordGuildId={setDiscordGuildId}
@@ -638,7 +705,7 @@ export function CreateAgentView({
 										{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
 										<div className={cn("grid gap-4", modelConfig.showsProvider ? "grid-cols-2" : "grid-cols-1")}>
 											{modelConfig.showsProvider && (
-												<Field label="供应商">
+											<Field label={t("provider")}>
 													<ProviderSelect
 														value={provider}
 														providers={providers}
@@ -647,7 +714,7 @@ export function CreateAgentView({
 													/>
 												</Field>
 											)}
-											<Field label="模型">
+											<Field label={t("model")}>
 												{usesCodexCli && codexModels.length ? (
 													<Select value={model} onValueChange={updateCodexModelSelection}>
 														<SelectTrigger className={controlSurfaceClass}>
@@ -678,11 +745,11 @@ export function CreateAgentView({
 										{!usesCodexCli && (
 											<>
 												{modelConfig.showsApiKey && (
-													<Field label="API Key">
-														<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="留空则使用已有环境变量或稍后补充" />
-													</Field>
-												)}
-												<Field label="Thinking Level">
+												<Field label="API Key">
+													<Input className={controlSurfaceClass} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={t("apiKeyClearHint")} />
+												</Field>
+											)}
+											<Field label={t("thinkingLevel")}>
 													<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
 														<SelectTrigger className={controlSurfaceClass}>
 															<SelectValue />
@@ -703,10 +770,12 @@ export function CreateAgentView({
 													loginStatus={codexLoginStatus}
 													loginUrl={codexLoginUrl}
 													isOpeningLogin={openCodexLogin.isPending}
+													isInstalling={installCodex.isPending}
+													onInstall={() => installCodex.mutate()}
 													onOpenLogin={() => openCodexLogin.mutate()}
 													onRefresh={() => void codexDiagnostic.refetch()}
 												/>
-												<Field label="Thinking Level">
+												<Field label={t("thinkingLevel")}>
 													<Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as DesktopThinkingLevel)}>
 														<SelectTrigger className={controlSurfaceClass}>
 															<SelectValue />
@@ -719,14 +788,14 @@ export function CreateAgentView({
 												{(modelConfig.showsCodexAccessMode || modelConfig.showsCodexWebSearch) && (
 													<div className="grid grid-cols-2 gap-4">
 														{modelConfig.showsCodexAccessMode && (
-															<Field label="Access Mode">
+															<Field label={t("accessMode")}>
 																<div className={cn("flex h-9 items-center rounded-md px-3 text-sm font-medium text-foreground", controlSurfaceClass)}>
-																	Full Access
+																	{t("fullAccess")}
 																</div>
 															</Field>
 														)}
 														{modelConfig.showsCodexWebSearch && (
-															<Field label="Web Search">
+															<Field label={t("webSearch")}>
 																<Select value={codexWebSearchMode} onValueChange={(value) => setCodexWebSearchMode(value as DesktopCodexWebSearchMode)}>
 																	<SelectTrigger className={controlSurfaceClass}>
 																		<SelectValue />
@@ -741,6 +810,17 @@ export function CreateAgentView({
 												)}
 											</>
 										)}
+										{framework === "hermes" && (
+											<HermesDiagnosticPanel
+												diagnostic={hermesDiagnostic.data}
+												isLoading={hermesDiagnostic.isFetching}
+												error={hermesDiagnostic.error instanceof Error ? hermesDiagnostic.error.message : undefined}
+												installStatus={hermesInstallStatus}
+												isInstalling={installHermes.isPending}
+												onInstall={() => installHermes.mutate()}
+												onRefresh={() => void hermesDiagnostic.refetch()}
+											/>
+										)}
 									</div>
 								)}
 							</div>
@@ -752,7 +832,7 @@ export function CreateAgentView({
 			<footer className={cn("no-drag flex shrink-0 items-center border-t border-foreground/5 px-8 py-5", step === "config" ? "justify-end" : "justify-between")}>
 				{step !== "config" && (
 					<Button variant="secondary" onClick={goBack} disabled={complete.isPending}>
-						上一步
+						{t("previous")}
 					</Button>
 				)}
 				<div className="flex items-center gap-3">
@@ -761,12 +841,12 @@ export function CreateAgentView({
 							{complete.isPending ? (
 								<>
 									<Spinner size={18} color="currentColor" />
-									正在创建
+									{t("creating")}
 								</>
 							) : step === "model" ? (
-								"完成创建"
+								t("finishCreate")
 							) : (
-								"下一步"
+								t("next")
 							)}
 						</Button>
 					)}
@@ -831,13 +911,15 @@ function createOptimisticStartingAgent({
 		frameworkKind: framework,
 		channelKinds: channels,
 		modelLabel: model,
-		...(feishu ? { appId: feishu.appId, brand: feishu.brand, appSecret: feishu.appSecret } : {}),
+		...(feishu ? { appId: feishu.appId, brand: feishu.brand, feishuMessageOutputMode: "bubble" as const, appSecret: feishu.appSecret } : {}),
 		...(wechat ? { wechat } : {}),
 		model: {
 			provider,
 			model,
 			thinkingLevel,
 			outputToolCallsToIm: true,
+			outputToolCallImMaxLength: 60,
+			outputThinkingToIm: false,
 		},
 		runtimeEnvironment: {
 			homeDir: session.home,
@@ -858,6 +940,8 @@ function CodexDiagnosticPanel({
 	loginStatus,
 	loginUrl,
 	isOpeningLogin,
+	isInstalling,
+	onInstall,
 	onOpenLogin,
 	onRefresh,
 }: {
@@ -867,18 +951,21 @@ function CodexDiagnosticPanel({
 	loginStatus?: string;
 	loginUrl?: string;
 	isOpeningLogin: boolean;
+	isInstalling: boolean;
+	onInstall: () => void;
 	onOpenLogin: () => void;
 	onRefresh: () => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const status = error
-		? { label: "诊断失败", tone: "text-[var(--red-11)]", detail: error }
+		? { label: t("codexDiagnosticFailed"), tone: "text-[var(--red-11)]", detail: error }
 		: !diagnostic
-		? { label: isLoading ? "正在检测 Codex CLI" : "尚未检测", tone: "text-muted-foreground", detail: "需要已安装并登录 Codex CLI" }
+		? { label: isLoading ? t("codexChecking") : t("codexNotChecked"), tone: "text-muted-foreground", detail: t("codexNeedInstalled") }
 		: !diagnostic.installed
-			? { label: "未检测到 Codex CLI", tone: "text-[var(--red-11)]", detail: diagnostic.error || "请先安装 Codex CLI" }
+			? { label: t("codexMissing"), tone: "text-[var(--red-11)]", detail: diagnostic.error || t("codexInstallFirst") }
 			: diagnostic.authenticated
-				? { label: "Codex CLI 已就绪", tone: "text-[var(--lime-11)]", detail: diagnostic.version || "已检测到 Codex 登录态" }
-				: { label: "Codex CLI 未登录", tone: "text-[var(--amber-11)]", detail: diagnostic.error || "需要先登录 Codex" };
+				? { label: t("codexReady"), tone: "text-[var(--lime-11)]", detail: diagnostic.version || t("codexAuthenticated") }
+				: { label: t("codexLoginRequired"), tone: "text-[var(--amber-11)]", detail: diagnostic.error || t("codexNeedLogin") };
 
 	return (
 		<div className="pie-smooth-corner rounded-2xl bg-[var(--slate-2)] px-3 py-3">
@@ -893,7 +980,7 @@ function CodexDiagnosticPanel({
 							target="_blank"
 							rel="noreferrer"
 						>
-							打开登录链接
+							{t("openLoginLink")}
 						</a>
 					)}
 					{diagnostic?.executablePath && (
@@ -908,11 +995,75 @@ function CodexDiagnosticPanel({
 						onClick={onRefresh}
 						disabled={isLoading}
 					>
-						{isLoading ? "检测中" : "重新检测"}
+						{isLoading ? t("codexRefreshing") : t("codexRefresh")}
 					</Button>
-					{!diagnostic?.authenticated && (
+					{diagnostic && !diagnostic.installed && (
+						<Button onClick={onInstall} disabled={isInstalling}>
+							{isInstalling ? t("codexInstalling") : t("codexInstall")}
+						</Button>
+					)}
+					{diagnostic?.installed && !diagnostic.authenticated && (
 						<Button onClick={onOpenLogin} disabled={isOpeningLogin}>
-							{isOpeningLogin ? "打开中" : "前往登录"}
+							{isOpeningLogin ? t("codexOpening") : t("codexGoLogin")}
+						</Button>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function HermesDiagnosticPanel({
+	diagnostic,
+	isLoading,
+	error,
+	installStatus,
+	isInstalling,
+	onInstall,
+	onRefresh,
+}: {
+	diagnostic: DesktopRuntimeDiagnostic | undefined;
+	isLoading: boolean;
+	error?: string;
+	installStatus?: string;
+	isInstalling: boolean;
+	onInstall: () => void;
+	onRefresh: () => void;
+}): JSX.Element {
+	const { t } = useI18n();
+	const status = error
+		? { label: t("hermesDiagnosticFailed"), tone: "text-[var(--red-11)]", detail: error }
+		: !diagnostic
+		? { label: isLoading ? t("hermesChecking") : t("hermesNotChecked"), tone: "text-muted-foreground", detail: t("hermesNeedInstalled") }
+		: diagnostic.ready
+			? { label: t("hermesReady"), tone: "text-[var(--lime-11)]", detail: diagnostic.version || t("hermesInstalled") }
+			: diagnostic.installed
+				? { label: t("hermesUpgradeRequired"), tone: "text-[var(--amber-11)]", detail: diagnostic.error || diagnostic.version || t("hermesUpgradeFirst") }
+			: { label: t("hermesMissing"), tone: "text-[var(--red-11)]", detail: diagnostic.error || t("hermesInstallFirst") };
+
+	return (
+		<div className="pie-smooth-corner rounded-2xl bg-[var(--slate-2)] px-3 py-3">
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div className={cn("text-sm font-medium", status.tone)}>{status.label}</div>
+					<div className="mt-1 text-xs leading-5 text-muted-foreground">{installStatus || status.detail}</div>
+					{diagnostic?.executablePath && (
+						<div className="mt-1 truncate text-[11px] text-muted-foreground">{diagnostic.executablePath}</div>
+					)}
+				</div>
+				<div className="flex shrink-0 flex-col gap-2">
+					<Button
+						variant="secondary"
+						size="xs"
+						className="h-6 px-2.5 text-[11px] leading-4 font-medium text-[var(--slate-11)] hover:text-[var(--slate-12)]"
+						onClick={onRefresh}
+						disabled={isLoading || isInstalling}
+					>
+						{isLoading ? t("hermesRefreshing") : t("hermesRefresh")}
+					</Button>
+					{!diagnostic?.ready && (
+						<Button onClick={onInstall} disabled={isInstalling}>
+							{isInstalling ? t("hermesInstalling") : t("hermesInstall")}
 						</Button>
 					)}
 				</div>
@@ -928,9 +1079,10 @@ function FrameworkPicker({
 	selected: DesktopAgentFramework;
 	onSelect: (framework: DesktopAgentFramework) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	return (
-		<Field label="框架">
-			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="框架">
+		<Field label={t("framework")}>
+			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={t("framework")}>
 				{frameworkOptions.map((option) => {
 					const isSelected = selected === option.value;
 					return (
@@ -950,7 +1102,7 @@ function FrameworkPicker({
 							)}
 						>
 							<span className="line-clamp-2 min-w-0">{option.label}</span>
-							{!option.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">开发中</span>}
+							{!option.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">{t("inDevelopment")}</span>}
 						</button>
 					);
 				})}
@@ -966,8 +1118,9 @@ function ChannelPicker({
 	selected: DesktopChannelKind | undefined;
 	onSelect: (channel: DesktopChannelKind) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	return (
-		<Field label="IM 渠道">
+		<Field label={t("imChannel")}>
 			<div className="space-y-2">
 				<div className="grid grid-cols-3 gap-2">
 					{channelOptions.map((channel) => {
@@ -986,14 +1139,14 @@ function ChannelPicker({
 									channel.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 								)}
 							>
-								<span className="line-clamp-2 min-w-0">{channel.label}</span>
-								{!channel.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">开发中</span>}
+								<span className="line-clamp-2 min-w-0">{"labelKey" in channel ? t(channel.labelKey) : channel.label}</span>
+								{!channel.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">{t("inDevelopment")}</span>}
 							</button>
 						);
 					})}
 				</div>
 				<div className="px-1 text-[10px] leading-4 text-muted-foreground">
-					单 Agent 暂时只支持配置一个渠道，多渠道支持中
+					{t("singleChannelHint")}
 				</div>
 			</div>
 		</Field>
@@ -1004,10 +1157,6 @@ function ManualChannelCredentials(props: {
 	channels: DesktopChannelKind[];
 	slackBotToken: string;
 	slackAppToken: string;
-	slackSigningSecret: string;
-	slackTeamId: string;
-	slackAppId: string;
-	slackBotUserId: string;
 	discordBotToken: string;
 	discordApplicationId: string;
 	discordGuildId: string;
@@ -1015,10 +1164,6 @@ function ManualChannelCredentials(props: {
 	telegramBotUsername: string;
 	setSlackBotToken: (value: string) => void;
 	setSlackAppToken: (value: string) => void;
-	setSlackSigningSecret: (value: string) => void;
-	setSlackTeamId: (value: string) => void;
-	setSlackAppId: (value: string) => void;
-	setSlackBotUserId: (value: string) => void;
 	setDiscordBotToken: (value: string) => void;
 	setDiscordApplicationId: (value: string) => void;
 	setDiscordGuildId: (value: string) => void;
@@ -1035,17 +1180,6 @@ function ManualChannelCredentials(props: {
 					</Field>
 					<Field label="App Token">
 						<Input className={controlSurfaceClass} type="password" value={props.slackAppToken} onChange={(event) => props.setSlackAppToken(event.target.value)} placeholder="xapp-..." />
-					</Field>
-					<div className="grid grid-cols-2 gap-3">
-						<Field label="Team ID">
-							<Input className={controlSurfaceClass} value={props.slackTeamId} onChange={(event) => props.setSlackTeamId(event.target.value)} />
-						</Field>
-						<Field label="Bot User ID">
-							<Input className={controlSurfaceClass} value={props.slackBotUserId} onChange={(event) => props.setSlackBotUserId(event.target.value)} />
-						</Field>
-					</div>
-					<Field label="Signing Secret">
-						<Input className={controlSurfaceClass} type="password" value={props.slackSigningSecret} onChange={(event) => props.setSlackSigningSecret(event.target.value)} />
 					</Field>
 				</div>
 			) : null}
@@ -1081,6 +1215,7 @@ function ManualChannelCredentials(props: {
 }
 
 function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | undefined }): JSX.Element {
+	const { t } = useI18n();
 	const avatarUrl = feishu?.avatarUrl?.trim() ?? "";
 	const hasAvatar = Boolean(avatarUrl);
 	const [avatarState, setAvatarState] = useState<"idle" | "loading" | "loaded" | "error">(hasAvatar ? "loading" : "idle");
@@ -1117,10 +1252,10 @@ function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | u
 			</div>
 			<div className="min-w-0 text-left">
 				<div className="truncate text-sm font-medium text-foreground">
-					{feishu?.appName?.trim() || "未读取到开放平台应用名称"}
+					{feishu?.appName?.trim() || t("feishuNameMissing")}
 				</div>
 				<div className="mt-0.5 text-xs text-muted-foreground">
-					{hasAvatar ? "已读取开放平台头像" : "未读取到开放平台头像，创建后不会使用本地头像兜底"}
+					{hasAvatar ? t("feishuAvatarLoaded") : t("feishuAvatarMissing")}
 				</div>
 			</div>
 		</div>
@@ -1138,9 +1273,10 @@ function AvatarPicker({
 	selectedId: string;
 	onSelect: (id: string) => void;
 }): JSX.Element | null {
+	const { t } = useI18n();
 	if (isLoading) {
 		return (
-			<Field label="Agent 头像">
+			<Field label={t("agentAvatar")}>
 				<div className="grid grid-cols-8 gap-2">
 					{Array.from({ length: 8 }).map((_, index) => (
 						<div key={index} className="aspect-square animate-pulse rounded-full bg-muted" />
@@ -1153,7 +1289,7 @@ function AvatarPicker({
 		return null;
 	}
 	return (
-		<Field label="Agent 头像">
+		<Field label={t("agentAvatar")}>
 			<div className="grid grid-cols-8 gap-2">
 				{avatars.map((avatar) => {
 					const selected = avatar.id === selectedId;

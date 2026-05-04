@@ -27,13 +27,7 @@ export interface CronTrigger extends ScheduledTriggerWindow {
 	cron: string;
 }
 
-export interface WebhookTrigger {
-	type: "webhook";
-	path?: string;
-	secret?: string;
-}
-
-export type ExecTaskTrigger = IntervalTrigger | CronTrigger | WebhookTrigger;
+export type ExecTaskTrigger = IntervalTrigger | CronTrigger;
 
 export interface ExecRun {
 	type: "exec";
@@ -63,13 +57,9 @@ export interface CronExecTaskSpec extends BaseExecTaskSpec {
 	run: ExecRun;
 }
 
-export interface WebhookExecTaskSpec extends BaseExecTaskSpec {
-	trigger: WebhookTrigger;
-}
-
 export type ScheduledExecTaskSpec = IntervalExecTaskSpec | CronExecTaskSpec;
 
-export type ExecTaskSpec = ScheduledExecTaskSpec | WebhookExecTaskSpec;
+export type ExecTaskSpec = ScheduledExecTaskSpec;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -191,17 +181,6 @@ export function parseExecTaskSpec(raw: unknown): ExecTaskSpec {
 				...parseScheduledTriggerWindow(raw.trigger),
 			},
 			run,
-		};
-	}
-
-	if (raw.trigger.type === "webhook") {
-		return {
-			...base,
-			trigger: {
-				type: "webhook",
-				path: typeof raw.trigger.path === "string" ? raw.trigger.path : undefined,
-				secret: typeof raw.trigger.secret === "string" ? raw.trigger.secret : undefined,
-			},
 		};
 	}
 

@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Tray, dialog, ipcMain, nativeImage, powerSaveBlocker, screen, shell } from "electron";
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, totalmem } from "node:os";
+import { totalmem } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import {
 	deleteProfileRegistryEntry,
@@ -30,6 +30,7 @@ import {
 } from "../../core/config-store.js";
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
 import { appendAgentUsageEvent, pruneAgentUsageEvents, readAgentUsageEvents, summarizeAgentUsage } from "../../core/usage-stats.js";
+import { resolveSkillSources } from "../../agents/skills.js";
 import {
 	clearRuntimeProcessRecord,
 	isPidRunning,
@@ -55,6 +56,7 @@ import type {
 	DesktopCodexDiagnostic,
 	DesktopModelCatalog,
 	DesktopFeishuAppCredentials,
+	DesktopRuntimeDiagnostic,
 	DesktopWechatCredentials,
 	DesktopSettings,
 	DesktopSettingsDraft,
@@ -64,20 +66,27 @@ import type {
 import {
 	beginAgentCreation as beginCreationSession,
 	checkCodexEnvironmentForDesktop,
+	checkHermesEnvironmentForDesktop,
 	completeAgentCreation as completeCreationSession,
 	createFeishuAppForSession,
 	createWechatLoginForSession,
+	deriveHermesApiServerPort,
 	getProviderCredentialEnv,
+	installCodexForDesktop,
+	installHermesForDesktop,
+	loadHermesModelCatalog,
 	loadCodexModelCatalog,
 	loadModelCatalog,
 	loadModelOptions,
 	openCodexLoginForDesktop,
+	toHermesInferenceProvider,
 } from "./onboard-service.js";
 import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/framework.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
 import { createRuntimeEnvironment } from "../../runtime/environment.js";
-import { resolveBackendFramework } from "../../core/backend-framework.js";
+import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
+import type { AgentFrameworkRuntime } from "../../core/backend-framework.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
 const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
@@ -87,6 +96,10 @@ const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 let isQuitting = false;
 let didStopAgentsForQuit = false;
 const restoringAgentIds = new Set<string>();
+let mainWindow: BrowserWindow | undefined;
+let menuBarWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
+let keepAwakeBlockerId: number | undefined;
 
 function logUnhandledMainProcessError(kind: string, error: unknown): void {
 	console.error(`[desktop] ${kind}:`, error);
@@ -378,20 +391,6 @@ function readProfileEnv(homeDir: string): Record<string, string> {
 	return readAgentEnvFile(getAgentEnvFilePath(homeDir));
 }
 
-function getAgentTypeSkillDir(profile: AgentConfigStore["profile"]): { label: string; path: string } {
-	const kind = String(profile?.backend.kind ?? "pi");
-	if (kind === "codex") {
-		return { label: "Codex Skills", path: join(homedir(), ".codex", "skills") };
-	}
-	if (kind === "claude" || kind === "claude-code") {
-		return { label: "Claude 共享 Skills", path: join(homedir(), ".claude", "skills") };
-	}
-	if (kind === "ousia" || kind === "pi") {
-		return { label: "Pi Agent Skills", path: join(homedir(), ".pi", "skills") };
-	}
-	return { label: `${kind} 共享 Skills`, path: join(homedir(), `.${kind}`, "skills") };
-}
-
 function readSkillNames(path: string): string[] {
 	if (!existsSync(path)) {
 		return [];
@@ -595,7 +594,14 @@ function getConfiguredSystemPromptPath(profile: AgentConfigStore["profile"], env
 }
 
 function resolveSystemPromptSource(profile: AgentConfigStore["profile"], env: Record<string, string>): AgentSystemPromptSource {
-	const framework = resolveBackendFramework(profile?.backend.kind);
+	const framework: Pick<AgentFrameworkRuntime, "label" | "systemPrompt"> = (() => {
+		try {
+			return getAgentBackendDefinition(profile?.backend.kind ?? "pi").frameworkRuntime;
+		} catch {
+			const label = String(profile?.backend.kind ?? "backend");
+			return { label };
+		}
+	})();
 	if (!framework.systemPrompt) {
 		return {
 			label: "系统提示词",
@@ -704,6 +710,22 @@ function hasLiveRuntimeProcess(home: string): boolean {
 		return false;
 	}
 	return true;
+}
+
+function signalRuntimeProcess(pid: number, signal: NodeJS.Signals): void {
+	if (process.platform !== "win32") {
+		try {
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall back to the direct process. The runtime may not be a process-group leader.
+		}
+	}
+	try {
+		process.kill(pid, signal);
+	} catch {
+		// best effort
+	}
 }
 
 function runtimeLifecycleForProfile(id: string, home: string, desiredState: AgentDesiredState): RuntimeEnvironmentSummary["lifecycle"] {
@@ -818,6 +840,19 @@ function applyOpenAtLoginSetting(settings: DesktopSettings): void {
 	app.setLoginItemSettings({ openAtLogin: settings.openAtLogin });
 }
 
+function applyKeepAwakeSetting(settings: DesktopSettings): void {
+	if (settings.keepAwakeWhileOpen) {
+		if (keepAwakeBlockerId === undefined || !powerSaveBlocker.isStarted(keepAwakeBlockerId)) {
+			keepAwakeBlockerId = powerSaveBlocker.start("prevent-display-sleep");
+		}
+		return;
+	}
+	if (keepAwakeBlockerId !== undefined && powerSaveBlocker.isStarted(keepAwakeBlockerId)) {
+		powerSaveBlocker.stop(keepAwakeBlockerId);
+	}
+	keepAwakeBlockerId = undefined;
+}
+
 function pruneStoredRuntimeData(settings: DesktopSettings): void {
 	const runtimeLogDays = retentionToDays(settings.runtimeLogRetention);
 	const usageDays = retentionToDays(settings.usageEventRetention);
@@ -830,6 +865,7 @@ function pruneStoredRuntimeData(settings: DesktopSettings): void {
 async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<DesktopSettings> {
 	const settings = updateDesktopSettings(draft);
 	applyOpenAtLoginSetting(settings);
+	applyKeepAwakeSetting(settings);
 	pruneStoredRuntimeData(settings);
 	return settings;
 }
@@ -885,6 +921,7 @@ async function getAgent(id: string): Promise<AgentDetails> {
 	return {
 		...summary,
 		brand: channel?.brand,
+		feishuMessageOutputMode: channel?.messageOutputMode,
 		appSecret: env.FEISHU_APP_SECRET,
 		wechat: wechatChannel
 			? {
@@ -897,10 +934,6 @@ async function getAgent(id: string): Promise<AgentDetails> {
 			? {
 					botToken: env.SLACK_BOT_TOKEN ?? "",
 					appToken: env.SLACK_APP_TOKEN ?? "",
-					signingSecret: env.SLACK_SIGNING_SECRET ?? "",
-					teamId: slackChannel.teamId,
-					appId: slackChannel.appId,
-					botUserId: slackChannel.botUserId,
 				}
 			: undefined,
 		discord: discordChannel
@@ -963,7 +996,7 @@ async function getAgentResources(id: string): Promise<AgentResourceStats> {
 
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
-	const catalog = loadModelCatalog(agent.home);
+	const catalog = agent.frameworkKind === "hermes" ? loadHermesModelCatalog(agent.home) : loadModelCatalog(agent.home);
 	if (agent.model?.provider !== "codex-cli") {
 		return catalog;
 	}
@@ -1007,30 +1040,11 @@ async function findReusableProviderCredential(provider: string, excludeAgentId?:
 async function getAgentSkillSources(id: string): Promise<AgentSkillSource[]> {
 	const agent = await getAgent(id);
 	const profile = readProfileConfig(agent.home)?.profile;
-	const typeSource = getAgentTypeSkillDir(profile);
-	return [
-		describeSkillSource({
-			id: "profile",
-			kind: "profile",
-			label: `${agent.name.trim() || "Agent"} Skills`,
-			description: "只属于这个 Agent profile 的 Skills。",
-			path: join(agent.home, "skills"),
-		}),
-		describeSkillSource({
-			id: "agent-type",
-			kind: "agent-type",
-			label: typeSource.label,
-			description: "",
-			path: typeSource.path,
-		}),
-		describeSkillSource({
-			id: "universal",
-			kind: "universal",
-			label: "通用 Skills",
-			description: "",
-			path: join(homedir(), ".agents", "skills"),
-		}),
-	];
+	return resolveSkillSources({
+		profile,
+		profileHomeDir: agent.home,
+		profileLabel: agent.name,
+	}).map(describeSkillSource);
 }
 
 async function getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource> {
@@ -1144,6 +1158,36 @@ function hasNonEmptyDraftValue(...values: Array<string | undefined>): boolean {
 	return values.some((value) => typeof value === "string" && value.trim().length > 0);
 }
 
+function writeHermesModelConfig(homeDir: string, profileId: string, provider: string, model: string): Record<string, string> {
+	const hermesProvider = toHermesInferenceProvider(provider);
+	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
+	const hermesHome = join(homeDir, "hermes");
+	mkdirSync(hermesHome, { recursive: true });
+	writeFileSync(
+		join(hermesHome, "config.yaml"),
+		[
+			"model:",
+			`  provider: ${hermesProvider}`,
+			`  default: ${model}`,
+			"platforms:",
+			"  api_server:",
+			"    enabled: true",
+			"    host: 127.0.0.1",
+			`    port: ${hermesApiServerPort}`,
+			"",
+		].join("\n"),
+		"utf8",
+	);
+	return {
+		API_SERVER_ENABLED: "true",
+		API_SERVER_HOST: "127.0.0.1",
+		API_SERVER_PORT: String(hermesApiServerPort),
+		GATEWAY_ALLOW_ALL_USERS: "true",
+		HERMES_INFERENCE_PROVIDER: hermesProvider,
+		HERMES_INFERENCE_MODEL: model,
+	};
+}
+
 async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails> {
 	const agent = await getAgent(id);
 	const current = readProfileConfig(agent.home) ?? { version: 3 };
@@ -1154,23 +1198,24 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	const discordChannel = getPrimaryDiscordChannel(currentProfile);
 	const telegramChannel = getPrimaryTelegramChannel(currentProfile);
 	const model = getProfileModel(currentProfile) ?? {};
-	const hasFeishuDraft = draft.appId !== undefined || draft.appSecret !== undefined || draft.brand !== undefined;
+	const hasFeishuDraft =
+		draft.appId !== undefined ||
+		draft.appSecret !== undefined ||
+		draft.brand !== undefined ||
+		draft.feishuMessageOutputMode !== undefined;
 	const hasWechatDraft =
 		draft.wechatAccountId !== undefined ||
 		draft.wechatBaseUrl !== undefined ||
 		draft.wechatBotToken !== undefined;
 	const hasSlackDraft =
 		draft.slackBotToken !== undefined ||
-		draft.slackAppToken !== undefined ||
-		draft.slackSigningSecret !== undefined ||
-		draft.slackTeamId !== undefined ||
-		draft.slackAppId !== undefined ||
-		draft.slackBotUserId !== undefined;
+		draft.slackAppToken !== undefined;
 	const hasDiscordDraft =
 		draft.discordBotToken !== undefined ||
 		draft.discordApplicationId !== undefined ||
 		draft.discordGuildId !== undefined;
 	const hasTelegramDraft = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
+	const hasModelUpdate = draft.provider !== undefined || draft.model !== undefined || draft.thinkingLevel !== undefined;
 	const hasFeishuUpdate = feishuChannel
 		? hasFeishuDraft
 		: hasNonEmptyDraftValue(draft.appId, draft.appSecret);
@@ -1179,14 +1224,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		: hasNonEmptyDraftValue(draft.wechatAccountId, draft.wechatBotToken);
 	const hasSlackUpdate = slackChannel
 		? hasSlackDraft
-		: hasNonEmptyDraftValue(
-				draft.slackBotToken,
-				draft.slackAppToken,
-				draft.slackSigningSecret,
-				draft.slackTeamId,
-				draft.slackAppId,
-				draft.slackBotUserId,
-			);
+		: hasNonEmptyDraftValue(draft.slackBotToken, draft.slackAppToken);
 	const hasDiscordUpdate = discordChannel
 		? hasDiscordDraft
 		: hasNonEmptyDraftValue(draft.discordBotToken, draft.discordApplicationId, draft.discordGuildId);
@@ -1195,6 +1233,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		: hasNonEmptyDraftValue(draft.telegramBotToken, draft.telegramBotUsername);
 	const nextAppId = draft.appId ?? feishuChannel?.appId ?? "";
 	const nextBrand = draft.brand ?? feishuChannel?.brand ?? "feishu";
+	const nextFeishuMessageOutputMode = draft.feishuMessageOutputMode ?? feishuChannel?.messageOutputMode ?? "bubble";
 	const nextAppSecret = draft.appSecret ?? readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
 	if (hasFeishuUpdate) {
 		if (!nextAppId.trim() || !nextAppSecret.trim()) {
@@ -1238,6 +1277,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 			...(feishuChannel ?? { kind: "feishu" as const, id: "feishu", enabled: true }),
 			appId: nextAppId.trim(),
 			brand: nextBrand,
+			messageOutputMode: nextFeishuMessageOutputMode,
 		});
 	}
 	if (wechatChannel || hasWechatUpdate) {
@@ -1250,9 +1290,6 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	if (slackChannel || hasSlackUpdate) {
 		nextProfileWithChannel = upsertSlackChannel(nextProfileWithChannel, {
 			...(slackChannel ?? { kind: "slack" as const, id: "slack", enabled: true }),
-			teamId: draft.slackTeamId ?? slackChannel?.teamId,
-			appId: draft.slackAppId ?? slackChannel?.appId,
-			botUserId: draft.slackBotUserId ?? slackChannel?.botUserId,
 		});
 	}
 	if (discordChannel || hasDiscordUpdate) {
@@ -1274,6 +1311,8 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		model: draft.model ?? model.model,
 		thinkingLevel: draft.thinkingLevel ?? model.thinkingLevel,
 		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm ?? true,
+		outputToolCallImMaxLength: draft.outputToolCallImMaxLength ?? model.outputToolCallImMaxLength ?? 60,
+		outputThinkingToIm: draft.outputThinkingToIm ?? model.outputThinkingToIm ?? false,
 	});
 	writeProfileConfig(agent.home, {
 		...current,
@@ -1300,7 +1339,6 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		upsertAgentEnv({
 			...(draft.slackBotToken !== undefined ? { SLACK_BOT_TOKEN: draft.slackBotToken.trim() } : {}),
 			...(draft.slackAppToken !== undefined ? { SLACK_APP_TOKEN: draft.slackAppToken.trim() } : {}),
-			...(draft.slackSigningSecret !== undefined ? { SLACK_SIGNING_SECRET: draft.slackSigningSecret.trim() } : {}),
 		}, agent.home);
 	}
 	if (hasDiscordUpdate) {
@@ -1314,6 +1352,10 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		}, agent.home);
 	}
 	const nextProvider = draft.provider ?? model.provider;
+	const nextModel = draft.model ?? model.model;
+	if (hasModelUpdate && currentProfile?.backend.kind === "hermes" && nextProvider?.trim() && nextModel?.trim()) {
+		upsertAgentEnv(writeHermesModelConfig(agent.home, id, nextProvider.trim(), nextModel.trim()), agent.home);
+	}
 	const apiKeyEnv = nextProvider ? getProviderCredentialEnv(nextProvider) : undefined;
 	if (apiKeyEnv && draft.apiKey !== undefined) {
 		upsertAgentEnv({ [apiKeyEnv]: draft.apiKey.trim() }, agent.home);
@@ -1391,18 +1433,10 @@ async function stopRunningAgent(id: string): Promise<void> {
 				},
 				process: record,
 			});
-			try {
-				process.kill(record.pid, "SIGTERM");
-			} catch {
-				// best effort
-			}
+			signalRuntimeProcess(record.pid, "SIGTERM");
 			await new Promise((resolveStop) => setTimeout(resolveStop, 1500));
 			if (isPidRunning(record.pid)) {
-				try {
-					process.kill(record.pid, "SIGKILL");
-				} catch {
-					// best effort
-				}
+				signalRuntimeProcess(record.pid, "SIGKILL");
 			}
 		}
 		clearRuntimeProcessRecord(agent.home);
@@ -1420,6 +1454,53 @@ async function stopRunningAgent(id: string): Promise<void> {
 	}
 	await agentProcesses.stop(id, "paused");
 	updateProfileRegistryEntry(id, { desiredState: "paused" });
+}
+
+async function stopAgentsForQuit(): Promise<void> {
+	const agents = await listAgents();
+	await Promise.allSettled(
+		agents.map(async (agent) => {
+			if (agentProcesses.isRunning(agent.id)) {
+				await agentProcesses.stop(agent.id, "quit");
+				return;
+			}
+			const record = readRuntimeProcessRecord(agent.home);
+			if (!record || resolve(record.agentHome) !== resolve(agent.home) || !isPidRunning(record.pid)) {
+				clearRuntimeProcessRecord(agent.home);
+				return;
+			}
+			writeRuntimeStateRecord(agent.home, {
+				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+				lifecycle: {
+					state: "stopping",
+					updatedAt: new Date().toISOString(),
+					reason: "quit",
+				},
+				process: record,
+			});
+			signalRuntimeProcess(record.pid, "SIGTERM");
+			await new Promise((resolveStop) => setTimeout(resolveStop, 1500));
+			if (isPidRunning(record.pid)) {
+				signalRuntimeProcess(record.pid, "SIGKILL");
+			}
+			clearRuntimeProcessRecord(agent.home);
+			writeRuntimeStateRecord(agent.home, {
+				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+				lifecycle: {
+					state: "stopped",
+					updatedAt: new Date().toISOString(),
+					reason: "quit",
+				},
+			});
+			appendAgentUsageEvent(agent.home, {
+				type: "runtime",
+				runtimeEvent: "stop",
+				reason: "quit",
+			});
+		}),
+	);
 }
 
 function emitDeleteEvent(event: AgentDeleteEvent): void {
@@ -1494,7 +1575,50 @@ function emitOnboardEvent(event: AgentOnboardEvent): void {
 	}
 }
 
-function createWindow(): void {
+function loadRendererWindow(win: BrowserWindow, options?: { mode?: "menubar" }): void {
+	const appRoot = app.getAppPath();
+	const query = options?.mode ? `?mode=${options.mode}` : "";
+	if (process.env.ELECTRON_RENDERER_URL) {
+		void win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${query}`).catch((error) => {
+			console.error("[desktop] loadURL failed:", error);
+		});
+	} else {
+		void win.loadFile(join(appRoot, "out/renderer/index.html"), {
+			...(options?.mode ? { query: { mode: options.mode } } : {}),
+		}).catch((error) => {
+			console.error("[desktop] loadFile failed:", error);
+		});
+	}
+}
+
+function showMainWindow(agentId?: string): void {
+	if (!mainWindow || mainWindow.isDestroyed()) {
+		createWindow();
+	}
+	const win = mainWindow;
+	if (!win) {
+		return;
+	}
+	if (win.isMinimized()) {
+		win.restore();
+	}
+	win.show();
+	win.focus();
+	if (agentId) {
+		if (win.webContents.isLoading()) {
+			win.webContents.once("did-finish-load", () => {
+				win.webContents.send("agents:select", agentId);
+			});
+		} else {
+			win.webContents.send("agents:select", agentId);
+		}
+	}
+}
+
+function createWindow(): BrowserWindow {
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		return mainWindow;
+	}
 	const appRoot = app.getAppPath();
 	const preloadPath = join(appRoot, "out/preload/index.cjs");
 	const win = new BrowserWindow({
@@ -1534,29 +1658,116 @@ function createWindow(): void {
 		if (isQuitting) {
 			return;
 		}
-		const settings = readDesktopSettings();
-		if (settings.closeWindowBehavior === "hide") {
-			event.preventDefault();
-			win.hide();
-			return;
-		}
-		isQuitting = true;
+		event.preventDefault();
+		win.hide();
 	});
 
-	if (process.env.ELECTRON_RENDERER_URL) {
-		void win.loadURL(process.env.ELECTRON_RENDERER_URL).catch((error) => {
-			console.error("[desktop] loadURL failed:", error);
-		});
-	} else {
-		void win.loadFile(join(appRoot, "out/renderer/index.html")).catch((error) => {
-			console.error("[desktop] loadFile failed:", error);
-		});
+	win.on("closed", () => {
+		if (mainWindow === win) {
+			mainWindow = undefined;
+		}
+	});
+
+	mainWindow = win;
+	loadRendererWindow(win);
+	return win;
+}
+
+function createTrayIcon(): Electron.NativeImage {
+	const image = nativeImage.createFromDataURL(
+		"data:image/svg+xml;utf8," +
+			encodeURIComponent(
+				`<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+					<path fill="black" d="M9 1.6c4.1 0 7.4 3.3 7.4 7.4S13.1 16.4 9 16.4 1.6 13.1 1.6 9 4.9 1.6 9 1.6Zm0 2.2A5.2 5.2 0 1 0 9 14.2 5.2 5.2 0 0 0 9 3.8Zm0 2.3a2.9 2.9 0 1 1 0 5.8A2.9 2.9 0 0 1 9 6.1Z"/>
+				</svg>`,
+			),
+	);
+	image.setTemplateImage(true);
+	return image;
+}
+
+function positionMenuBarWindow(): void {
+	if (!tray || !menuBarWindow) {
+		return;
 	}
+	const trayBounds = tray.getBounds();
+	const display = screen.getDisplayNearestPoint({
+		x: Math.round(trayBounds.x + trayBounds.width / 2),
+		y: Math.round(trayBounds.y + trayBounds.height / 2),
+	});
+	const winBounds = menuBarWindow.getBounds();
+	const workArea = display.workArea;
+	const x = Math.round(Math.min(Math.max(trayBounds.x + trayBounds.width / 2 - winBounds.width / 2, workArea.x + 8), workArea.x + workArea.width - winBounds.width - 8));
+	const belowY = trayBounds.y + trayBounds.height + 8;
+	const aboveY = trayBounds.y - winBounds.height - 8;
+	const y = belowY + winBounds.height <= workArea.y + workArea.height ? belowY : Math.max(workArea.y + 8, aboveY);
+	menuBarWindow.setPosition(x, y, false);
+}
+
+function createMenuBarWindow(): BrowserWindow {
+	if (menuBarWindow && !menuBarWindow.isDestroyed()) {
+		return menuBarWindow;
+	}
+	const appRoot = app.getAppPath();
+	const preloadPath = join(appRoot, "out/preload/index.cjs");
+	const win = new BrowserWindow({
+		width: 320,
+		height: 420,
+		show: false,
+		frame: false,
+		resizable: false,
+		fullscreenable: false,
+		skipTaskbar: true,
+		transparent: true,
+		hasShadow: true,
+		backgroundColor: "#00000000",
+		alwaysOnTop: true,
+		webPreferences: {
+			preload: preloadPath,
+			contextIsolation: true,
+			nodeIntegration: false,
+		},
+	});
+	win.on("blur", () => {
+		if (!win.webContents.isDevToolsOpened()) {
+			win.hide();
+		}
+	});
+	win.on("closed", () => {
+		if (menuBarWindow === win) {
+			menuBarWindow = undefined;
+		}
+	});
+	menuBarWindow = win;
+	loadRendererWindow(win, { mode: "menubar" });
+	return win;
+}
+
+function toggleMenuBarWindow(): void {
+	const win = createMenuBarWindow();
+	if (win.isVisible()) {
+		win.hide();
+		return;
+	}
+	positionMenuBarWindow();
+	win.show();
+	win.focus();
+}
+
+function createTray(): void {
+	if (tray) {
+		return;
+	}
+	tray = new Tray(createTrayIcon());
+	tray.setToolTip("Pie");
+	tray.on("click", toggleMenuBarWindow);
+	tray.on("right-click", toggleMenuBarWindow);
 }
 
 app.whenReady().then(() => {
 	const settings = readDesktopSettings();
 	applyOpenAtLoginSetting(settings);
+	applyKeepAwakeSetting(settings);
 	pruneStoredRuntimeData(settings);
 	ipcMain.handle("settings:get", async () => readDesktopSettings());
 	ipcMain.handle("settings:update", async (_event, draft: DesktopSettingsDraft) => {
@@ -1607,11 +1818,35 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:codex-install", async (_event, sessionId: string): Promise<DesktopCodexDiagnostic> => {
+		try {
+			return await installCodexForDesktop(sessionId, emitOnboardEvent);
+		} catch (error) {
+			console.error("[ipc] agents:codex-install failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:codex-login", async (_event, sessionId: string): Promise<DesktopCodexDiagnostic> => {
 		try {
 			return await openCodexLoginForDesktop(sessionId, emitOnboardEvent, (url) => shell.openExternal(url));
 		} catch (error) {
 			console.error("[ipc] agents:codex-login failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:hermes-diagnostic", async (): Promise<DesktopRuntimeDiagnostic> => {
+		try {
+			return await checkHermesEnvironmentForDesktop();
+		} catch (error) {
+			console.error("[ipc] agents:hermes-diagnostic failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:hermes-install", async (_event, sessionId: string): Promise<DesktopRuntimeDiagnostic> => {
+		try {
+			return await installHermesForDesktop(sessionId, emitOnboardEvent);
+		} catch (error) {
+			console.error("[ipc] agents:hermes-install failed:", error);
 			throw error;
 		}
 	});
@@ -1809,6 +2044,11 @@ app.whenReady().then(() => {
 	ipcMain.handle("agents:logs", async (_event, id: string) => {
 		return getAgentLogs(id);
 	});
+	ipcMain.handle("menu-bar:open-agent", async (_event, id: string) => {
+		menuBarWindow?.hide();
+		showMainWindow(id);
+	});
+	createTray();
 	createWindow();
 	void restoreDesiredRunningAgents().catch((error) => {
 		console.error("[desktop] failed to restore auto-start agents:", error);
@@ -1816,22 +2056,21 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-	if (readDesktopSettings().closeWindowBehavior === "quit" || process.platform !== "darwin") {
+	if (process.platform !== "darwin") {
 		app.quit();
 	}
 });
 
 app.on("activate", () => {
-	if (BrowserWindow.getAllWindows().length === 0) {
-		createWindow();
-	}
+	showMainWindow();
 });
 
 app.on("before-quit", (event) => {
 	isQuitting = true;
+	applyKeepAwakeSetting({ ...readDesktopSettings(), keepAwakeWhileOpen: false });
 	if (readDesktopSettings().quitTerminatesAgents && !didStopAgentsForQuit) {
 		event.preventDefault();
-		void agentProcesses.stopAll("quit").finally(() => {
+		void stopAgentsForQuit().finally(() => {
 			didStopAgentsForQuit = true;
 			app.quit();
 		});

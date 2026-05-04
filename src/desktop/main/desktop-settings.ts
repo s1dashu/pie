@@ -1,21 +1,23 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDefaultPieRootDir } from "../../core/profile-registry.js";
-import type { DesktopSettings, DesktopSettingsDraft, DesktopLogRetention } from "../shared/types.js";
+import type { DesktopColorScheme, DesktopSettings, DesktopSettingsDraft, DesktopLogRetention } from "../shared/types.js";
 
 const SETTINGS_FILE = "desktop-settings.json";
 
 const DEFAULT_SETTINGS: DesktopSettings = {
 	language: "zh",
-	closeWindowBehavior: "hide",
+	colorScheme: "system",
 	quitTerminatesAgents: true,
 	restoreRunningAgentsOnLaunch: true,
 	openAtLogin: false,
+	keepAwakeWhileOpen: false,
 	runtimeLogRetention: "30d",
 	usageEventRetention: "90d",
 };
 
 const LOG_RETENTIONS = new Set<DesktopLogRetention>(["7d", "30d", "90d", "forever"]);
+const COLOR_SCHEMES = new Set<DesktopColorScheme>(["system", "light", "dark"]);
 
 export function getDesktopSettingsPath(rootDir: string = getDefaultPieRootDir()): string {
 	return join(rootDir, SETTINGS_FILE);
@@ -62,13 +64,17 @@ export function updateDesktopSettings(draft: DesktopSettingsDraft, rootDir: stri
 function normalizeDesktopSettings(raw: Partial<DesktopSettings>): DesktopSettings {
 	return {
 		language: raw.language === "en" ? "en" : "zh",
-		closeWindowBehavior: raw.closeWindowBehavior === "quit" ? "quit" : "hide",
+		colorScheme: isColorScheme(raw.colorScheme) ? raw.colorScheme : DEFAULT_SETTINGS.colorScheme,
 		quitTerminatesAgents: typeof raw.quitTerminatesAgents === "boolean" ? raw.quitTerminatesAgents : DEFAULT_SETTINGS.quitTerminatesAgents,
 		restoreRunningAgentsOnLaunch:
 			typeof raw.restoreRunningAgentsOnLaunch === "boolean"
 				? raw.restoreRunningAgentsOnLaunch
 				: DEFAULT_SETTINGS.restoreRunningAgentsOnLaunch,
 		openAtLogin: typeof raw.openAtLogin === "boolean" ? raw.openAtLogin : DEFAULT_SETTINGS.openAtLogin,
+		keepAwakeWhileOpen:
+			typeof raw.keepAwakeWhileOpen === "boolean"
+				? raw.keepAwakeWhileOpen
+				: DEFAULT_SETTINGS.keepAwakeWhileOpen,
 		runtimeLogRetention: isLogRetention(raw.runtimeLogRetention) ? raw.runtimeLogRetention : DEFAULT_SETTINGS.runtimeLogRetention,
 		usageEventRetention: isLogRetention(raw.usageEventRetention) ? raw.usageEventRetention : DEFAULT_SETTINGS.usageEventRetention,
 		appearanceGrayHue: normalizeHue(raw.appearanceGrayHue),
@@ -77,6 +83,10 @@ function normalizeDesktopSettings(raw: Partial<DesktopSettings>): DesktopSetting
 
 function isLogRetention(value: unknown): value is DesktopLogRetention {
 	return typeof value === "string" && LOG_RETENTIONS.has(value as DesktopLogRetention);
+}
+
+function isColorScheme(value: unknown): value is DesktopColorScheme {
+	return typeof value === "string" && COLOR_SCHEMES.has(value as DesktopColorScheme);
 }
 
 function normalizeHue(value: unknown): number | undefined {

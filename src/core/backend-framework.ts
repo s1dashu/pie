@@ -1,5 +1,6 @@
 import type { AgentBackendKind } from "./config-store.js";
 import { OUSIA_FRAMEWORK } from "../frameworks/ousia/framework.js";
+import { HERMES_FRAMEWORK } from "../frameworks/hermes/framework.js";
 import type { AgentRuntimeEnvironment } from "../runtime/environment.js";
 import type { AgentTurnInput, AgentTurnOutput, PieChannelKind } from "../runtime/types.js";
 
@@ -12,7 +13,7 @@ export interface FrameworkTaskEngineProcessManagerOptions {
 }
 
 export interface FrameworkTaskEngineProcessManager {
-	start(): void;
+	start(): void | Promise<void>;
 	stop(): void;
 }
 
@@ -29,7 +30,7 @@ export interface FrameworkTurnGatewayServer {
 	stop(): Promise<void>;
 }
 
-export interface BackendFrameworkDefinition {
+export interface AgentFrameworkRuntime {
 	kind: AgentBackendKind;
 	label: string;
 	systemPrompt?: {
@@ -43,22 +44,25 @@ export interface BackendFrameworkDefinition {
 	createTurnGatewayServer?: (options: FrameworkTurnGatewayOptions) => FrameworkTurnGatewayServer;
 }
 
-const PI_FRAMEWORK: BackendFrameworkDefinition = {
+const PI_FRAMEWORK: AgentFrameworkRuntime = {
 	kind: "pi",
 	label: "Pi Coding Agent",
 };
 
-const CODEX_FRAMEWORK: BackendFrameworkDefinition = {
+const CODEX_FRAMEWORK: AgentFrameworkRuntime = {
 	kind: "codex",
 	label: "Codex",
 };
 
-export function resolveBackendFramework(kind: AgentBackendKind | undefined): BackendFrameworkDefinition {
+export function resolveAgentFrameworkRuntime(kind: AgentBackendKind | undefined): AgentFrameworkRuntime {
 	if (kind === "ousia") {
 		return OUSIA_FRAMEWORK;
 	}
 	if (kind === "codex") {
 		return CODEX_FRAMEWORK;
+	}
+	if (kind === "hermes") {
+		return HERMES_FRAMEWORK;
 	}
 	return PI_FRAMEWORK;
 }

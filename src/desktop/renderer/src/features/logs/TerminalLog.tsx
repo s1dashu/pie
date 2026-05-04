@@ -2,12 +2,61 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentDetails, AgentLogEntry } from "../../../shared/types";
 import { cn } from "../../lib/utils";
 
-export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
+const LOG_AUTO_FOLLOW_RESUME_MS = 2000;
+
+export function TerminalLog({ agent, tone = "light" }: { agent: AgentDetails; tone?: "light" | "dark" }): JSX.Element {
 	const [logs, setLogs] = useState<AgentLogEntry[]>([]);
 	const terminalRef = useRef<HTMLDivElement | null>(null);
+	const pendingEntriesRef = useRef<AgentLogEntry[]>([]);
+	const flushFrameRef = useRef<number | null>(null);
+	const autoFollowRef = useRef(true);
+	const scrollResumeTimerRef = useRef<number | null>(null);
+	const programmaticScrollRef = useRef(false);
+
+	const scrollToBottom = () => {
+		const node = terminalRef.current;
+		if (!node) {
+			return;
+		}
+		programmaticScrollRef.current = true;
+		node.scrollTop = node.scrollHeight;
+		window.requestAnimationFrame(() => {
+			programmaticScrollRef.current = false;
+		});
+	};
+
+	const pauseAutoFollowForUserScroll = () => {
+		if (programmaticScrollRef.current) {
+			return;
+		}
+		autoFollowRef.current = false;
+		if (scrollResumeTimerRef.current !== null) {
+			window.clearTimeout(scrollResumeTimerRef.current);
+		}
+		scrollResumeTimerRef.current = window.setTimeout(() => {
+			scrollResumeTimerRef.current = null;
+			autoFollowRef.current = true;
+			scrollToBottom();
+		}, LOG_AUTO_FOLLOW_RESUME_MS);
+	};
 
 	useEffect(() => {
 		let cancelled = false;
+		const flushPendingEntries = () => {
+			flushFrameRef.current = null;
+			const pendingEntries = pendingEntriesRef.current;
+			pendingEntriesRef.current = [];
+			if (!pendingEntries.length) {
+				return;
+			}
+			setLogs((current) => mergeAgentLogs(current, pendingEntries));
+		};
+		const scheduleFlush = () => {
+			if (flushFrameRef.current !== null) {
+				return;
+			}
+			flushFrameRef.current = window.requestAnimationFrame(flushPendingEntries);
+		};
 		window.pie.getAgentLogs(agent.id).then((entries) => {
 			if (!cancelled) {
 				setLogs(entries);
@@ -21,32 +70,41 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			if (entry.agentId !== agent.id) {
 				return;
 			}
-			setLogs((current) => {
-				const entryKey = agentLogEntryKey(entry);
-				const existingIndex = current.findIndex((line) => agentLogEntryKey(line) === entryKey);
-				if (existingIndex !== -1) {
-					const next = [...current];
-					next[existingIndex] = entry;
-					return next;
-				}
-				return [...current, entry].sort(compareAgentLogEntries).slice(-1000);
-			});
+			pendingEntriesRef.current.push(entry);
+			scheduleFlush();
 		});
 		return () => {
 			cancelled = true;
+			pendingEntriesRef.current = [];
+			if (flushFrameRef.current !== null) {
+				window.cancelAnimationFrame(flushFrameRef.current);
+				flushFrameRef.current = null;
+			}
 			unsubscribe();
 		};
 	}, [agent.id]);
 
-	useLayoutEffect(() => {
-		if (terminalRef.current) {
-			const node = terminalRef.current;
-			node.scrollTop = node.scrollHeight;
-			const frame = window.requestAnimationFrame(() => {
-				node.scrollTop = node.scrollHeight;
-			});
-			return () => window.cancelAnimationFrame(frame);
+	useEffect(() => {
+		autoFollowRef.current = true;
+		if (scrollResumeTimerRef.current !== null) {
+			window.clearTimeout(scrollResumeTimerRef.current);
+			scrollResumeTimerRef.current = null;
 		}
+		return () => {
+			if (scrollResumeTimerRef.current !== null) {
+				window.clearTimeout(scrollResumeTimerRef.current);
+				scrollResumeTimerRef.current = null;
+			}
+		};
+	}, [agent.id]);
+
+	useLayoutEffect(() => {
+		if (!autoFollowRef.current) {
+			return;
+		}
+		scrollToBottom();
+		const frame = window.requestAnimationFrame(scrollToBottom);
+		return () => window.cancelAnimationFrame(frame);
 	}, [logs]);
 
 	const lines = logs.length
@@ -60,19 +118,33 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 			}];
 
 	return (
-		<div ref={(node) => { terminalRef.current = node; }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 font-mono text-[12px] leading-[16px] text-[var(--slate-12)] [scrollbar-gutter:stable]">
+		<div
+			ref={(node) => { terminalRef.current = node; }}
+			onScroll={pauseAutoFollowForUserScroll}
+			onWheel={pauseAutoFollowForUserScroll}
+			onTouchMove={pauseAutoFollowForUserScroll}
+			onPointerDown={pauseAutoFollowForUserScroll}
+			className={cn(
+					"min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 pt-0 font-mono text-[12px] leading-[16px] [scrollbar-gutter:stable]",
+				tone === "dark" ? "text-slate-100" : "text-[var(--slate-12)]",
+			)}
+		>
 			{lines.map((line) => (
 				<div key={line.id} className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
 					<span className={cn(
 						"text-right font-medium",
-						line.stream === "stderr" ? "text-[var(--red-11)]" : line.stream === "system" ? "text-[var(--slate-10)]" : "text-[var(--lime-11)]",
+						tone === "dark"
+							? line.stream === "stderr" ? "text-red-300" : line.stream === "system" ? "text-slate-500" : "text-lime-300"
+							: line.stream === "stderr" ? "text-[var(--red-11)]" : line.stream === "system" ? "text-[var(--slate-10)]" : "text-[var(--lime-11)]",
 					)}>
 						{line.stream === "stderr" ? "err" : line.stream === "system" ? "sys" : "out"}
 					</span>
-					<span className="font-normal text-[var(--slate-9)] tabular-nums">{new Date(line.timestamp).toLocaleTimeString()}</span>
+					<span className={cn("font-normal tabular-nums", tone === "dark" ? "text-slate-500" : "text-[var(--slate-9)]")}>{new Date(line.timestamp).toLocaleTimeString()}</span>
 					<span className={cn(
 						"min-w-0 whitespace-pre-wrap break-words text-pretty",
-						line.stream === "stderr" ? "text-[var(--red-12)]" : line.stream === "system" ? "text-[var(--slate-11)]" : "text-[var(--slate-12)]",
+						tone === "dark"
+							? line.stream === "stderr" ? "text-red-200" : line.stream === "system" ? "text-slate-400" : "text-slate-100"
+							: line.stream === "stderr" ? "text-[var(--red-12)]" : line.stream === "system" ? "text-[var(--slate-11)]" : "text-[var(--slate-12)]",
 					)}>
 						{line.text}
 					</span>
@@ -84,6 +156,17 @@ export function TerminalLog({ agent }: { agent: AgentDetails }): JSX.Element {
 
 function agentLogEntryKey(entry: AgentLogEntry): string {
 	return `${entry.agentId}:${entry.id}:${entry.timestamp}`;
+}
+
+function mergeAgentLogs(current: AgentLogEntry[], entries: AgentLogEntry[]): AgentLogEntry[] {
+	const byKey = new Map<string, AgentLogEntry>();
+	for (const line of current) {
+		byKey.set(agentLogEntryKey(line), line);
+	}
+	for (const entry of entries) {
+		byKey.set(agentLogEntryKey(entry), entry);
+	}
+	return [...byKey.values()].sort(compareAgentLogEntries).slice(-1000);
 }
 
 function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {

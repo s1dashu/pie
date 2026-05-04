@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pruneJsonlFile } from "./agent-logs.js";
 
-export type AgentUsageEventType = "message" | "action" | "runtime";
+export type AgentUsageEventType = "message" | "action" | "runtime" | "latency" | "turn" | "token_usage";
 
 export interface AgentUsageEvent {
 	timestamp: string;
@@ -18,6 +18,7 @@ export interface AgentUsageEvent {
 	actionName?: string;
 	status?: "success" | "error";
 	runtimeEvent?: "start" | "stop";
+	ttfsMs?: number;
 	reason?: string;
 }
 
@@ -26,6 +27,7 @@ export interface UsageBucket {
 	outgoingMessages: number;
 	actions: number;
 	failedActions: number;
+	turns: number;
 	tokens: number;
 	inputTokens: number;
 	outputTokens: number;
@@ -43,6 +45,7 @@ export interface AgentUsageStats {
 	total: UsageBucket;
 	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
+	averageTtfsMs?: number;
 	runningSince?: string;
 	updatedAt: string;
 }
@@ -55,6 +58,7 @@ function createBucket(): UsageBucket {
 		outgoingMessages: 0,
 		actions: 0,
 		failedActions: 0,
+		turns: 0,
 		tokens: 0,
 		inputTokens: 0,
 		outputTokens: 0,
@@ -126,6 +130,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 	const byDate = new Map<string, UsageBucket>();
 	const estimatedTokensByDate = new Map<string, number>();
 	const actualTokensByDate = new Map<string, number>();
+	const ttfsSamplesMs: number[] = [];
 	let currentRunActualTokens = 0;
 	let currentRunEstimatedTokens = 0;
 	let activeRuntimeStart: number | undefined;
@@ -158,9 +163,9 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 	}
 
 	for (const event of [...events].sort((left, right) => left.timestamp.localeCompare(right.timestamp))) {
-		const bucket = bucketFor(event.timestamp);
 		const inCurrentRun = isInCurrentRun(event.timestamp);
 		if (event.type === "message") {
+			const bucket = bucketFor(event.timestamp);
 			if (event.direction === "incoming") {
 				total.incomingMessages += 1;
 				bucket.incomingMessages += 1;
@@ -206,7 +211,36 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 			}
 			continue;
 		}
+		if (event.type === "token_usage") {
+			const bucket = bucketFor(event.timestamp);
+			const key = dateKey(event.timestamp);
+			const actualTokens = typeof event.actualTokens === "number" && Number.isFinite(event.actualTokens) ? event.actualTokens : undefined;
+			if (actualTokens !== undefined) {
+				actualTokensByDate.set(key, (actualTokensByDate.get(key) ?? 0) + actualTokens);
+				const inputTokens = typeof event.inputTokens === "number" && Number.isFinite(event.inputTokens) ? event.inputTokens : 0;
+				const outputTokens = typeof event.outputTokens === "number" && Number.isFinite(event.outputTokens) ? event.outputTokens : 0;
+				const cacheReadTokens = typeof event.cacheReadTokens === "number" && Number.isFinite(event.cacheReadTokens) ? event.cacheReadTokens : 0;
+				const cacheWriteTokens = typeof event.cacheWriteTokens === "number" && Number.isFinite(event.cacheWriteTokens) ? event.cacheWriteTokens : 0;
+				bucket.inputTokens += inputTokens;
+				bucket.outputTokens += outputTokens;
+				bucket.cacheReadTokens += cacheReadTokens;
+				bucket.cacheWriteTokens += cacheWriteTokens;
+				total.inputTokens += inputTokens;
+				total.outputTokens += outputTokens;
+				total.cacheReadTokens += cacheReadTokens;
+				total.cacheWriteTokens += cacheWriteTokens;
+				if (inCurrentRun) {
+					currentRunActualTokens += actualTokens;
+					currentRun.inputTokens += inputTokens;
+					currentRun.outputTokens += outputTokens;
+					currentRun.cacheReadTokens += cacheReadTokens;
+					currentRun.cacheWriteTokens += cacheWriteTokens;
+				}
+			}
+			continue;
+		}
 		if (event.type === "action") {
+			const bucket = bucketFor(event.timestamp);
 			total.actions += 1;
 			bucket.actions += 1;
 			if (inCurrentRun) {
@@ -218,6 +252,15 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 				if (inCurrentRun) {
 					currentRun.failedActions += 1;
 				}
+			}
+			continue;
+		}
+		if (event.type === "turn") {
+			const bucket = bucketFor(event.timestamp);
+			total.turns += 1;
+			bucket.turns += 1;
+			if (inCurrentRun) {
+				currentRun.turns += 1;
 			}
 			continue;
 		}
@@ -233,6 +276,12 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 				activeRuntimeStart = undefined;
 			}
 		}
+		if (event.type === "latency") {
+			const ttfsMs = typeof event.ttfsMs === "number" && Number.isFinite(event.ttfsMs) && event.ttfsMs >= 0 ? event.ttfsMs : undefined;
+			if (ttfsMs !== undefined) {
+				ttfsSamplesMs.push(ttfsMs);
+			}
+		}
 	}
 
 	if (options?.runningSince !== undefined) {
@@ -246,7 +295,12 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 		bucket.tokens = actualTokensByDate.get(key) ?? estimatedTokensByDate.get(key) ?? 0;
 		total.tokens += bucket.tokens;
 	}
+	total.turns = [...byDate.values()].reduce((sum, bucket) => sum + bucket.turns, 0);
 	currentRun.tokens = currentRunActualTokens || currentRunEstimatedTokens;
+	const recentTtfsSamplesMs = ttfsSamplesMs.slice(-3);
+	const averageTtfsMs = recentTtfsSamplesMs.length
+		? recentTtfsSamplesMs.reduce((sum, value) => sum + value, 0) / recentTtfsSamplesMs.length
+		: undefined;
 
 	return {
 		today: byDate.get(todayKey) ?? createBucket(),
@@ -256,6 +310,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 			.sort(([left], [right]) => left.localeCompare(right))
 			.slice(-14)
 			.map(([date, bucket]) => ({ date, ...bucket })),
+		averageTtfsMs,
 		runningSince: options?.runningSince !== undefined ? new Date(options.runningSince).toISOString() : undefined,
 		updatedAt: new Date(now).toISOString(),
 	};

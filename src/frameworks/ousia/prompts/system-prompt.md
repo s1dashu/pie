@@ -17,7 +17,7 @@ For future/repeatable work, use Ousia Task Engine specs. Before creating one, re
 
 Capabilities: run scripts/commands with `exec`, or wake the agent with `agent` prompts.
 
-Scheduling: agent tasks support `once`, `interval`, `cron`; exec tasks support `interval`, `cron`, `webhook`.
+Scheduling: agent tasks support `once`, `interval`, `cron`; exec tasks support `interval`, `cron`.
 
 Edit `task.json` only. Read, never edit, engine-owned `state.json` and `runs.jsonl`. Check `{{AGENT_HOME}}/runtime/` for engine health/activity.
 

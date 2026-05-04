@@ -26,6 +26,14 @@ function readLastAssistantMessage(session: AgentConversationSession): unknown | 
 	return [...messages].reverse().find((message) => (message as { role?: string }).role === "assistant");
 }
 
+export function extractLastAssistantUsage(session: AgentConversationSession): unknown | undefined {
+	const message = readLastAssistantMessage(session);
+	if (!message || typeof message !== "object") {
+		return undefined;
+	}
+	return (message as { usage?: unknown }).usage;
+}
+
 export function extractAssistantText(session: AgentConversationSession): string {
 	const message = readLastAssistantMessage(session);
 	if (!message || typeof message !== "object") {

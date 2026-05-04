@@ -1,21 +1,21 @@
 import { basename } from "node:path";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import chalk from "chalk";
-import { LarkClient, sendTextLark, type LarkConfig, type LarkMessageEvent } from "./platform/index.js";
+import type { AgentSessionEvent } from "../../agents/session-runtime.js";
+import type { FeishuMessageOutputMode } from "../../core/message-style.js";
+import type { ToolCallImMaxLength } from "../common/tool-call-im.js";
+import { LarkClient, sendCardLark, sendTextLark, type LarkConfig, type LarkMessageEvent } from "./platform/index.js";
 
-export type SessionEvent = Parameters<AgentSession["subscribe"]>[0] extends (event: infer TEvent) => void
-	? TEvent
-	: never;
+export type SessionEvent = AgentSessionEvent;
 
 const WORKING_REACTION = "Get";
 const MAX_MESSAGE_EDITS = 20;
 const STREAM_UPDATE_DEBOUNCE_MS = 400;
-const TOOL_CALL_IM_MAX = 100;
-const DEFAULT_TOOL_IM_EMOJI = "🖥️";
+const DEFAULT_TOOL_IM_EMOJI = "💻";
 
 interface AssistantSegment {
 	kind: "assistant" | "thinking";
 	content: string;
+	thinkingPrefix?: string;
 	messageId?: string;
 	messagePrefix: string;
 	messageEditCount: number;
@@ -24,6 +24,7 @@ interface AssistantSegment {
 
 interface ToolRunImBlock {
 	content: string;
+	thinkingPrefix?: string;
 	messageId?: string;
 	messagePrefix: string;
 	messageEditCount: number;
@@ -34,8 +35,16 @@ function truncate(text: string, max = 600): string {
 	return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function capToolImLine(line: string): string {
-	return truncate(line, TOOL_CALL_IM_MAX);
+function capToolImLine(line: string, maxLength: ToolCallImMaxLength): string {
+	return maxLength === "none" ? line : truncate(line, maxLength);
+}
+
+function stripInlineCodeForIm(text: string): string {
+	const trimmed = text.trim();
+	if (trimmed.startsWith("`") && trimmed.endsWith("`") && trimmed.length > 1) {
+		return trimmed.slice(1, -1).trim();
+	}
+	return trimmed;
 }
 
 export function isSyntheticTaskEvent(event: LarkMessageEvent): boolean {
@@ -65,46 +74,52 @@ function imBasename(pathStr: string): string {
 }
 
 function firstStringFieldForIm(rec: Record<string, unknown>): string {
+	for (const key of ["command", "preview", "label", "path", "pattern"]) {
+		const v = rec[key];
+		if (typeof v === "string" && v.trim()) {
+			return stripInlineCodeForIm(v).replace(/\s+/g, " ");
+		}
+	}
 	for (const v of Object.values(rec)) {
 		if (typeof v === "string" && v.trim()) {
-			return v.trim().replace(/\s+/g, " ");
+			return stripInlineCodeForIm(v).replace(/\s+/g, " ");
 		}
 	}
 	return "";
 }
 
-function formatToolImLine(toolName: string, args: unknown): string {
+function formatToolImLine(toolName: string, args: unknown, maxLength: ToolCallImMaxLength): string {
 	const emoji = toolCallImEmoji(toolName);
 	const base = toolName.replace(/\s+error$/i, "").trim().toLowerCase();
 	const rec = args !== null && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
 
-	if (base === "bash") {
-		const cmd = typeof rec.command === "string" ? rec.command.trim().replace(/\s+/g, " ") : "";
-		return capToolImLine(`${emoji} bash ${cmd || "(no command)"}`);
+	if (base === "bash" || base === "shell" || base === "exec") {
+		const cmd = firstStringFieldForIm(rec);
+		return capToolImLine(`${emoji} ${cmd || "(no command)"}`, maxLength);
 	}
 	if (base === "read" || base === "write" || base === "edit") {
 		const pathStr = typeof rec.path === "string" ? rec.path : "";
-		return capToolImLine(`${emoji} ${base} ${imBasename(pathStr || "(no path)")}`);
+		return capToolImLine(`${emoji} ${base} ${imBasename(pathStr || "(no path)")}`, maxLength);
 	}
 	if (base === "grep") {
 		const pat = typeof rec.pattern === "string" ? rec.pattern.trim().replace(/\s+/g, " ") : "";
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
 		const tail = pathStr ? ` ${imBasename(pathStr)}` : "";
-		return capToolImLine(`${emoji} grep ${pat || "?"}${tail}`);
+		return capToolImLine(`${emoji} grep ${pat || "?"}${tail}`, maxLength);
 	}
 	if (base === "find") {
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
 		const pat = typeof rec.pattern === "string" ? rec.pattern.trim() : "";
 		const head = pathStr ? imBasename(pathStr) : ".";
-		return capToolImLine(`${emoji} find ${pat ? `${head} ${pat.replace(/\s+/g, " ")}` : head}`);
+		return capToolImLine(`${emoji} find ${pat ? `${head} ${pat.replace(/\s+/g, " ")}` : head}`, maxLength);
 	}
 	if (base === "ls") {
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
-		return capToolImLine(`${emoji} ls ${pathStr ? imBasename(pathStr) : "."}`);
+		return capToolImLine(`${emoji} ls ${pathStr ? imBasename(pathStr) : "."}`, maxLength);
 	}
 
 	const hint = firstStringFieldForIm(rec);
-	return capToolImLine(hint ? `${emoji} ${base} ${hint}` : `${emoji} ${toolName.replace(/\s+error$/i, "").trim()}`);
+	return capToolImLine(hint ? `${emoji} ${hint}` : `${emoji} ${toolName.replace(/\s+error$/i, "").trim()}`, maxLength);
 }
 
 function formatToolImErrorSummary(result: unknown): string {
@@ -138,15 +153,15 @@ function formatToolImErrorSummary(result: unknown): string {
 	return String(result).replace(/\s+/g, " ");
 }
 
-function formatToolImErrorLine(toolName: string, result: unknown): string {
+function formatToolImErrorLine(toolName: string, result: unknown, maxLength: ToolCallImMaxLength): string {
 	const emoji = toolCallImEmoji(`${toolName} error`);
 	const msg = formatToolImErrorSummary(result);
-	return capToolImLine(msg ? `${emoji} ${toolName} error ${msg}` : `${emoji} ${toolName} error`);
+	return capToolImLine(msg ? `${emoji} ${toolName} error ${msg}` : `${emoji} ${toolName} error`, maxLength);
 }
 
-function toQuotedMarkdown(label: string, body: string): string {
+function toQuotedMarkdown(body: string): string {
 	const lines = body.trim() ? body.split("\n").map((line) => `> ${line}`) : [];
-	return [`> ${label}`, ...lines].join("\n");
+	return lines.join("\n");
 }
 
 function getContinuationText(fullText: string, shownPrefix: string): string {
@@ -210,7 +225,55 @@ export async function sendPlainReply(config: LarkConfig, event: LarkMessageEvent
 	});
 }
 
-async function updateReplyText(config: LarkConfig, messageId: string, text: string): Promise<void> {
+function buildMarkdownCard(text: string): Record<string, unknown> {
+	return {
+		config: {
+			update_multi: true,
+			wide_screen_mode: true,
+		},
+		elements: [
+			{
+				tag: "div",
+				text: {
+					tag: "lark_md",
+					content: text,
+				},
+			},
+		],
+	};
+}
+
+async function sendStyledReply(
+	config: LarkConfig,
+	event: LarkMessageEvent,
+	text: string,
+	mode: FeishuMessageOutputMode,
+) {
+	if (mode === "card") {
+		return sendCardLark({
+			config,
+			to: event.message.chat_id,
+			card: buildMarkdownCard(text),
+		});
+	}
+	return sendPlainReply(config, event, text);
+}
+
+async function updateStyledReply(
+	config: LarkConfig,
+	messageId: string,
+	text: string,
+	mode: FeishuMessageOutputMode,
+): Promise<void> {
+	if (mode === "card") {
+		await LarkClient.fromConfig(config).sdk.im.v1.message.patch({
+			path: { message_id: messageId },
+			data: {
+				content: JSON.stringify(buildMarkdownCard(text)),
+			},
+		});
+		return;
+	}
 	await LarkClient.fromConfig(config).sdk.im.message.update({
 		path: { message_id: messageId },
 		data: {
@@ -249,6 +312,7 @@ export class LarkProgressReporter {
 	private reactionId?: string;
 	private activeSegment?: AssistantSegment;
 	private toolRunImBlock?: ToolRunImBlock;
+	private pendingThinkingContent = "";
 	private flushTimer?: ReturnType<typeof setTimeout>;
 	private pending: Promise<void> = Promise.resolve();
 	private visibleResponseStarted = false;
@@ -257,6 +321,9 @@ export class LarkProgressReporter {
 		private readonly event: LarkMessageEvent,
 		private readonly config: LarkConfig,
 		private readonly outputToolCallsToIm: boolean,
+		private readonly outputToolCallImMaxLength: ToolCallImMaxLength,
+		private readonly outputThinkingToIm: boolean,
+		private readonly messageOutputMode: FeishuMessageOutputMode,
 	) {}
 
 	async markReceived(): Promise<void> {
@@ -275,57 +342,46 @@ export class LarkProgressReporter {
 
 	onSessionEvent = (event: SessionEvent): void => {
 		switch (event.type) {
-			case "message_start": {
-				const message = event.message as { role?: string };
-				if (message.role === "assistant") {
-					this.finalizeActiveSegment();
-				}
-				break;
-			}
-			case "message_update": {
-				const assistantEvent = event.assistantMessageEvent as { type?: string; delta?: string; content?: string } | undefined;
-				switch (assistantEvent?.type) {
-					case "thinking_start":
-						this.startSegment("thinking");
-						break;
-					case "thinking_delta":
-						if (assistantEvent.delta) {
-							this.appendToSegment("thinking", assistantEvent.delta);
-						}
-						break;
-					case "thinking_end":
-						if (assistantEvent.content) {
-							this.finishSegment("thinking", assistantEvent.content);
-						}
-						break;
-					case "text_start":
-						this.startSegment("assistant");
-						break;
-					case "text_delta":
-						if (assistantEvent.delta) {
-							this.appendToSegment("assistant", assistantEvent.delta);
-						}
-						break;
-					case "text_end":
-						if (assistantEvent.content) {
-							this.finishSegment("assistant", assistantEvent.content);
-						}
-						break;
-				}
-				break;
-			}
-			case "message_end":
+			case "turn_started": {
 				this.finalizeActiveSegment();
 				break;
-			case "tool_execution_start":
-				if (this.outputToolCallsToIm) {
-					this.finalizeActiveSegment();
-					this.appendToolRunLine(formatToolImLine(event.toolName, event.args));
+			}
+			case "thinking_delta":
+				if (this.outputThinkingToIm && event.delta) {
+					this.appendThinking(event.delta);
 				}
 				break;
-			case "tool_execution_end":
+			case "thinking_finished":
+				if (this.outputThinkingToIm && event.thinking) {
+					this.finishThinking(event.thinking);
+				}
+				break;
+			case "text_start":
+				this.startSegment("assistant");
+				break;
+			case "text_delta":
+				if (event.delta) {
+					this.appendToSegment("assistant", event.delta);
+				}
+				break;
+			case "text_finished":
+				if (event.text) {
+					this.finishSegment("assistant", event.text);
+				}
+				break;
+			case "turn_finished":
+				this.finalizeActiveSegment();
+				this.finalizePendingThinking();
+				break;
+			case "tool_call_started":
+				if (this.outputToolCallsToIm) {
+					this.finalizeActiveSegment();
+					this.appendToolRunLine(formatToolImLine(event.name, event.args, this.outputToolCallImMaxLength));
+				}
+				break;
+			case "tool_call_finished":
 				if (this.outputToolCallsToIm && event.isError) {
-					this.appendToolRunLine(formatToolImErrorLine(event.toolName, event.result));
+					this.appendToolRunLine(formatToolImErrorLine(event.name, event.result, this.outputToolCallImMaxLength));
 				}
 				break;
 		}
@@ -365,11 +421,11 @@ export class LarkProgressReporter {
 		await this.clearReaction();
 	}
 
-	private startSegment(kind: AssistantSegment["kind"]): void {
-		if (this.activeSegment?.kind === kind) {
-			return;
-		}
-		this.finalizeActiveSegment();
+		private startSegment(kind: AssistantSegment["kind"]): void {
+			if (this.activeSegment?.kind === kind) {
+				return;
+			}
+			this.finalizeActiveSegment();
 		if (kind === "assistant") {
 			const orphanedToolBlock = this.toolRunImBlock;
 			this.toolRunImBlock = undefined;
@@ -377,14 +433,29 @@ export class LarkProgressReporter {
 				this.enqueue(() => this.pushToolRunBlock(orphanedToolBlock));
 			}
 		}
-		this.activeSegment = {
-			kind,
-			content: "",
-			messagePrefix: "",
-			messageEditCount: 0,
-			lastRendered: "",
-		};
-	}
+			this.activeSegment = {
+				kind,
+				content: "",
+				thinkingPrefix: kind === "assistant" && this.outputThinkingToIm ? this.consumePendingThinking() : undefined,
+				messagePrefix: "",
+				messageEditCount: 0,
+				lastRendered: "",
+			};
+		}
+
+		private appendThinking(delta: string): void {
+			this.pendingThinkingContent += delta;
+		}
+
+		private finishThinking(content: string): void {
+			this.pendingThinkingContent = content;
+		}
+
+		private consumePendingThinking(): string | undefined {
+			const thinking = this.pendingThinkingContent.trim();
+			this.pendingThinkingContent = "";
+			return thinking || undefined;
+		}
 
 	private appendToSegment(kind: AssistantSegment["kind"], delta: string): void {
 		if (!this.activeSegment || this.activeSegment.kind !== kind) {
@@ -418,12 +489,13 @@ export class LarkProgressReporter {
 		}, STREAM_UPDATE_DEBOUNCE_MS);
 	}
 
-	private renderSegment(segment: AssistantSegment): string {
-		if (segment.kind === "thinking") {
-			return toQuotedMarkdown("Thinking", truncate(segment.content.trim(), 3000));
+		private renderSegment(segment: AssistantSegment): string {
+			const parts = [
+				segment.thinkingPrefix ? toQuotedMarkdown(truncate(segment.thinkingPrefix, 3000)) : "",
+				segment.kind === "thinking" ? toQuotedMarkdown(truncate(segment.content.trim(), 3000)) : segment.content.trim(),
+			].filter(Boolean);
+			return parts.join("\n");
 		}
-		return segment.content.trim();
-	}
 
 	private flushActiveSegment(): void {
 		const segment = this.activeSegment;
@@ -433,20 +505,41 @@ export class LarkProgressReporter {
 		this.enqueue(() => this.pushSegment(segment));
 	}
 
-	private finalizeActiveSegment(): void {
-		if (this.flushTimer) {
-			clearTimeout(this.flushTimer);
-			this.flushTimer = undefined;
-		}
-		const segment = this.activeSegment;
-		this.activeSegment = undefined;
-		if (!segment || !segment.content.trim()) {
-			return;
+		private finalizeActiveSegment(): void {
+			if (this.flushTimer) {
+				clearTimeout(this.flushTimer);
+				this.flushTimer = undefined;
+			}
+			const segment = this.activeSegment;
+			this.activeSegment = undefined;
+			if (!segment || !segment.content.trim()) {
+				return;
 		}
 		this.enqueue(async () => {
-			await this.pushSegment(segment);
-		});
-	}
+				await this.pushSegment(segment);
+			});
+		}
+
+		private finalizePendingThinking(): void {
+			if (!this.outputThinkingToIm) {
+				this.pendingThinkingContent = "";
+				return;
+			}
+			const thinking = this.consumePendingThinking();
+			if (!thinking) {
+				return;
+			}
+			const segment: AssistantSegment = {
+				kind: "thinking",
+				content: thinking,
+				messagePrefix: "",
+				messageEditCount: 0,
+				lastRendered: "",
+			};
+			this.enqueue(async () => {
+				await this.pushSegment(segment);
+			});
+		}
 
 	private async pushSegment(segment: AssistantSegment): Promise<void> {
 		const rendered = this.renderSegment(segment).trim();
@@ -464,7 +557,7 @@ export class LarkProgressReporter {
 		}
 		if (segment.messageId) {
 			try {
-				await updateReplyText(this.config, segment.messageId, currentChunk);
+				await updateStyledReply(this.config, segment.messageId, currentChunk, this.messageOutputMode);
 				segment.messageEditCount += 1;
 			} catch (error) {
 				if (!isMessageEditLimitError(error)) {
@@ -478,7 +571,7 @@ export class LarkProgressReporter {
 			}
 		}
 		if (!segment.messageId && currentChunk) {
-			const result = await sendPlainReply(this.config, this.event, currentChunk);
+			const result = await sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
 			if (result.messageId) {
 				segment.messageId = result.messageId;
 				segment.messagePrefix = rendered.slice(0, rendered.length - currentChunk.length);
@@ -489,21 +582,25 @@ export class LarkProgressReporter {
 	}
 
 	private appendToolRunLine(line: string): void {
-		if (!this.toolRunImBlock) {
-			this.toolRunImBlock = {
-				content: "",
-				messagePrefix: "",
-				messageEditCount: 0,
-				lastRendered: "",
+			if (!this.toolRunImBlock) {
+				this.toolRunImBlock = {
+					content: "",
+					thinkingPrefix: this.outputThinkingToIm ? this.consumePendingThinking() : undefined,
+					messagePrefix: "",
+					messageEditCount: 0,
+					lastRendered: "",
 			};
 		}
-		this.toolRunImBlock.content += (this.toolRunImBlock.content ? "\n\n" : "") + line;
+		this.toolRunImBlock.content += (this.toolRunImBlock.content ? "\n" : "") + line;
 		const block = this.toolRunImBlock;
 		this.enqueue(() => this.pushToolRunBlock(block));
 	}
 
 	private async pushToolRunBlock(block: ToolRunImBlock): Promise<void> {
-		const rendered = block.content.trim();
+		const rendered = [
+			block.thinkingPrefix ? toQuotedMarkdown(truncate(block.thinkingPrefix, 3000)) : "",
+			block.content.trim(),
+		].filter(Boolean).join("\n");
 		if (!rendered || rendered === block.lastRendered) {
 			return;
 		}
@@ -518,7 +615,7 @@ export class LarkProgressReporter {
 		}
 		if (block.messageId) {
 			try {
-				await updateReplyText(this.config, block.messageId, currentChunk);
+				await updateStyledReply(this.config, block.messageId, currentChunk, this.messageOutputMode);
 				block.messageEditCount += 1;
 			} catch (error) {
 				if (!isMessageEditLimitError(error)) {
@@ -532,7 +629,7 @@ export class LarkProgressReporter {
 			}
 		}
 		if (!block.messageId && currentChunk) {
-			const result = await sendPlainReply(this.config, this.event, currentChunk);
+			const result = await sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
 			if (result.messageId) {
 				block.messageId = result.messageId;
 				block.messagePrefix = rendered.slice(0, rendered.length - currentChunk.length);

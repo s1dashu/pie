@@ -18,7 +18,6 @@ export interface TaskEngineContext {
 	eventLogPath: string;
 	statePath: string;
 	engineLockDir: string;
-	webhookPort: number;
 	gatewayPort: number;
 	gatewaySecret?: string;
 }
@@ -48,7 +47,6 @@ export function createTaskEngineContext(env: NodeJS.ProcessEnv = process.env): T
 		eventLogPath: join(runtimeDir, "task-engine-events.jsonl"),
 		statePath: join(runtimeDir, "task-engine-state.json"),
 		engineLockDir: join(runtimeDir, "task-engine.lock"),
-		webhookPort: readPort(env.PIE_WORKFLOW_WEBHOOK_PORT, 8765),
 		gatewayPort: readPort(env.PIE_GATEWAY_PORT, 8766),
 		gatewaySecret: env.PIE_GATEWAY_SECRET?.trim() || undefined,
 	};

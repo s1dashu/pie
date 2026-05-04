@@ -91,7 +91,7 @@ export class AgentProcessManager {
 	private readonly runningAgents = new Map<string, ChildProcess>();
 	private readonly agentLogs = new Map<string, AgentLogEntry[]>();
 	private readonly agentLogBuffers = new Map<string, { stdout: string; stderr: string }>();
-	private readonly activeAgentReplyLogs = new Map<string, AgentLogEntry>();
+	private readonly activeAgentStreamLogs = new Map<string, { prefix: string; entry: AgentLogEntry }>();
 	private readonly agentStartedAt = new Map<string, number>();
 	private readonly agentLifecycles = new Map<string, RuntimeEnvironmentLifecycle>();
 	private readonly agentEnvironments = new Map<string, AgentRuntimeEnvironment>();
@@ -145,9 +145,8 @@ export class AgentProcessManager {
 		};
 		this.agentEnvironments.set(agentId, environment);
 		ensureRuntimeEnvironment(environment);
-		const [gatewayPort, webhookPort] = await getDistinctAvailableLocalPorts(2);
-		this.appendAgentLog(agentId, "system", `starting bot: ${command.execPath} ${command.argv.join(" ")}`);
-		this.appendAgentLog(agentId, "system", `runtime workdir: ${environment.workDir}`);
+		const [gatewayPort] = await getDistinctAvailableLocalPorts(1);
+		this.appendAgentLog(agentId, "system", "starting bot");
 		const readyPromise = this.createReadyPromise(agentId);
 		const child = spawn(command.execPath, command.argv, {
 			cwd: environment.workDir,
@@ -157,7 +156,6 @@ export class AgentProcessManager {
 				...process.env,
 				PIE_AGENT_HOME: home,
 				PIE_GATEWAY_PORT: String(gatewayPort),
-				PIE_WORKFLOW_WEBHOOK_PORT: String(webhookPort),
 				PIE_DESKTOP_LOGS: "1",
 			},
 		});
@@ -168,7 +166,6 @@ export class AgentProcessManager {
 				startedAt: new Date().toISOString(),
 				command: [command.execPath, ...command.argv],
 				gatewayPort,
-				webhookPort,
 			};
 			this.agentProcessRecords.set(agentId, processRecord);
 			writeRuntimeProcessRecord(home, processRecord);
@@ -316,13 +313,15 @@ export class AgentProcessManager {
 		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => text.includes(marker))) {
 			this.markAgentReady(agentId);
 		}
-		if (stream === "stdout" && text.startsWith("Agent: ")) {
-			this.appendAgentReplyDelta(agentId, text.slice("Agent: ".length));
-			return;
+		if (stream === "stdout") {
+			for (const prefix of ["Agent: ", "> Thinking "]) {
+				if (text.startsWith(prefix)) {
+					this.appendAgentStreamDelta(agentId, prefix, text.slice(prefix.length));
+					return;
+				}
+			}
 		}
-		if (stream !== "stdout" || !text.startsWith("Agent:")) {
-			this.activeAgentReplyLogs.delete(agentId);
-		}
+		this.activeAgentStreamLogs.delete(agentId);
 		const entry: AgentLogEntry = {
 			id: this.nextLogId++,
 			agentId,
@@ -334,11 +333,11 @@ export class AgentProcessManager {
 		this.emitAgentLog(entry);
 	}
 
-	private appendAgentReplyDelta(agentId: string, delta: string): void {
-		const activeEntry = this.activeAgentReplyLogs.get(agentId);
-		if (activeEntry) {
-			activeEntry.text += `\n${delta}`;
-			this.emitAgentLog({ ...activeEntry, updated: true });
+	private appendAgentStreamDelta(agentId: string, prefix: string, delta: string): void {
+		const activeLog = this.activeAgentStreamLogs.get(agentId);
+		if (activeLog?.prefix === prefix) {
+			activeLog.entry.text += delta;
+			this.emitAgentLog({ ...activeLog.entry, updated: true });
 			return;
 		}
 
@@ -346,11 +345,11 @@ export class AgentProcessManager {
 			id: this.nextLogId++,
 			agentId,
 			stream: "stdout",
-			text: `Agent: ${delta}`,
+			text: `${prefix}${delta}`,
 			timestamp: new Date().toISOString(),
 		};
 		this.pushLogEntry(agentId, entry);
-		this.activeAgentReplyLogs.set(agentId, entry);
+		this.activeAgentStreamLogs.set(agentId, { prefix, entry });
 		this.emitAgentLog(entry);
 	}
 

@@ -3,9 +3,132 @@ import type { Model } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { AgentBackendKind } from "../core/config-store.js";
 
-export type AgentSessionEvent = Parameters<AgentSession["subscribe"]>[0] extends (event: infer TEvent) => void
+export type PiAgentSessionEvent = Parameters<AgentSession["subscribe"]>[0] extends (event: infer TEvent) => void
 	? TEvent
 	: never;
+
+export type AgentRoundStatus = "success" | "error" | "aborted";
+
+export type AgentSessionEvent =
+	| {
+			type: "round_started";
+			roundId: string;
+	  }
+	  | {
+			type: "round_finished";
+			roundId: string;
+			status: AgentRoundStatus;
+			finalText?: string;
+			usage?: unknown;
+	  }
+	| {
+			type: "token_usage";
+			roundId?: string;
+			turnId?: string;
+			usage: unknown;
+	  }
+	| {
+			type: "turn_started";
+			roundId: string;
+			turnId: string;
+			index?: number;
+	  }
+	| {
+			type: "turn_finished";
+			roundId: string;
+			turnId: string;
+			status: AgentRoundStatus;
+	  }
+	| {
+			type: "text_start";
+			roundId: string;
+			turnId: string;
+			textId: string;
+	  }
+	| {
+			type: "text_delta";
+			roundId: string;
+			turnId: string;
+			textId: string;
+			delta: string;
+	  }
+	| {
+			type: "text_finished";
+			roundId: string;
+			turnId: string;
+			textId: string;
+			text: string;
+	  }
+	| {
+			type: "thinking_start";
+			roundId: string;
+			turnId: string;
+			thinkingId: string;
+	  }
+	| {
+			type: "thinking_delta";
+			roundId: string;
+			turnId: string;
+			thinkingId: string;
+			delta: string;
+	  }
+	| {
+			type: "thinking_finished";
+			roundId: string;
+			turnId: string;
+			thinkingId: string;
+			thinking: string;
+	  }
+	| {
+			type: "tool_call_started";
+			roundId: string;
+			turnId: string;
+			toolCallId: string;
+			name: string;
+			args?: unknown;
+	  }
+	| {
+			type: "tool_call_updated";
+			roundId: string;
+			turnId: string;
+			toolCallId: string;
+			name: string;
+			args?: unknown;
+			partialResult?: unknown;
+	  }
+	| {
+			type: "tool_call_finished";
+			roundId: string;
+			turnId: string;
+			toolCallId: string;
+			name: string;
+			result?: unknown;
+			isError: boolean;
+	  }
+	| {
+			type: "compaction_start";
+			reason?: string;
+	  }
+	| {
+			type: "compaction_end";
+			reason?: string;
+			aborted?: boolean;
+			willRetry?: boolean;
+			errorMessage?: string;
+	  }
+	| {
+			type: "auto_retry_start";
+			attempt?: number;
+			maxAttempts?: number;
+			delayMs?: number;
+			errorMessage?: string;
+	  }
+	| {
+			type: "auto_retry_end";
+			success?: boolean;
+			attempt?: number;
+			finalError?: string;
+	  };
 
 export interface AgentSessionCapabilities {
 	supportsSteering: boolean;
@@ -15,11 +138,21 @@ export interface AgentSessionCapabilities {
 	supportsToolEvents: boolean;
 }
 
+export interface AgentRoundInput {
+	text: string;
+}
+
+export type AgentRoundInputLike = string | AgentRoundInput;
+
+export function getAgentRoundInputText(input: AgentRoundInputLike): string {
+	return typeof input === "string" ? input : input.text;
+}
+
 export interface AgentConversationSession {
 	readonly isStreaming: boolean;
 	readonly capabilities: AgentSessionCapabilities;
 	readonly state?: { messages: unknown[] };
-	prompt(text: string): Promise<void>;
+	prompt(input: AgentRoundInputLike): Promise<void>;
 	abort(): Promise<void>;
 	steer?(text: string): Promise<void>;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;

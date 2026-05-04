@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
-import { join } from "node:path";
 import process from "node:process";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import chalk from "chalk";
-import { AGENT_HOME_SUBDIRS } from "../../core/agent-home-layout.js";
 import {
 	createAgentSessionPool,
 	extractAssistantText,
@@ -30,10 +28,6 @@ import { loadConfig, type FeishuBotConfig } from "./config.js";
 import { type LarkMessageEvent, LarkClient } from "./platform/index.js";
 import { sendPlainReply } from "./progress-reporter.js";
 
-function truncate(text: string, max = 600): string {
-	return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
 function formatBackendLabel(kind: FeishuBotConfig["backendKind"]): string {
 	if (kind === "ousia") {
 		return "Ousia";
@@ -41,21 +35,14 @@ function formatBackendLabel(kind: FeishuBotConfig["backendKind"]): string {
 	if (kind === "codex") {
 		return "Codex";
 	}
+	if (kind === "hermes") {
+		return "Hermes";
+	}
 	return "Pi Coding Agent";
 }
 
 function formatRuntimeTitle(kind: FeishuBotConfig["backendKind"]): string {
 	return `${formatBackendLabel(kind)} Feishu channel ready`;
-}
-
-function formatDefaultPromptLabel(kind: FeishuBotConfig["backendKind"]): string {
-	if (kind === "codex") {
-		return "Codex default";
-	}
-	if (kind === "ousia") {
-		return "Ousia default";
-	}
-	return "Pi Coding Agent default";
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -142,22 +129,14 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
-		const promptPreview = this.config.assistantSystemPrompt
-			? truncate(this.config.assistantSystemPrompt.replace(/\s+/g, " "), 120)
-			: formatDefaultPromptLabel(this.config.backendKind);
-		const layoutRoots = AGENT_HOME_SUBDIRS.map((name) => join(this.config.homeDir, name)).join(", ");
 		const lines = [
 			chalk.bold(formatRuntimeTitle(this.config.backendKind)),
-			chalk.gray(`framework  ${formatBackendLabel(this.config.backendKind)}`),
-			chalk.gray(`mode       ${this.config.runMode}`),
-			chalk.gray(`home       ${this.config.homeDir}`),
-			chalk.gray(`layout     ${layoutRoots}`),
-			chalk.gray(`sessions   ${sessionMode} (${join(this.config.homeDir, "sessions")})`),
+			chalk.gray(`channel    Feishu`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
-			chalk.gray(`prompt     ${this.config.assistantSystemPromptPath ?? formatDefaultPromptLabel(this.config.backendKind)}`),
-			chalk.gray(`preview    ${promptPreview}`),
+			chalk.gray(`message    ${this.config.messageOutputMode}`),
+			chalk.gray(`sessions   ${sessionMode}`),
 			chalk.gray(`debug      ${this.config.debug ? "on" : "off"}`),
 			chalk.gray(`verbose    ${this.config.verboseLogs ? "on" : "off"}`),
 			chalk.gray("status     waiting for Feishu events..."),

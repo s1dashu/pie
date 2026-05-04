@@ -1,8 +1,10 @@
-import { SessionPool as PiSessionPool } from "../../channels/feishu/session.js";
+import { SessionPool as PiSessionPool } from "./pi/session.js";
+import { getAgentRoundInputText } from "../types.js";
 import type {
 	AgentBackendAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
+	AgentRoundInputLike,
 	AgentSessionCapabilities,
 	AgentSessionRuntimeOptions,
 } from "../types.js";
@@ -16,11 +18,25 @@ const PI_CAPABILITIES: AgentSessionCapabilities = {
 };
 
 function withCapabilities(session: AgentConversationSession): AgentConversationSession {
-	return Object.defineProperty(session, "capabilities", {
-		value: PI_CAPABILITIES,
-		configurable: true,
-		enumerable: false,
-	});
+	return {
+		get isStreaming() {
+			return session.isStreaming;
+		},
+		capabilities: PI_CAPABILITIES,
+		get state() {
+			return session.state;
+		},
+		prompt(input: AgentRoundInputLike) {
+			return session.prompt(getAgentRoundInputText(input));
+		},
+		abort() {
+			return session.abort();
+		},
+		...(session.steer ? { steer: (text: string) => session.steer?.(text) ?? Promise.resolve() } : {}),
+		subscribe(listener) {
+			return session.subscribe(listener);
+		},
+	};
 }
 
 class PiAdapterSessionPool implements AgentConversationSessionPool {

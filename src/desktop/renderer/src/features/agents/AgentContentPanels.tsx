@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type * as React from "react";
 import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone, RestartCircleBoldDuotone } from "solar-icon-set";
-import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
+import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopFeishuMessageOutputMode, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { AppIcon } from "../../components/shared/app-icon";
@@ -10,11 +10,11 @@ import { UsageMetric } from "../../components/shared/metrics";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { TerminalLog } from "../logs/TerminalLog";
 import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLevelOptions, type AgentTab } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
-import { UsageTrend } from "./UsageTrend";
 
 export interface ResourceChartHistory {
 	updatedAt?: string;
@@ -30,8 +30,6 @@ export function AgentContentPanels({
 	resourceHistory,
 	draft,
 	channelDraft,
-	modelSaveMessage,
-	channelSaveMessage,
 	providerOptions,
 	modelOptions,
 	allModelOptions,
@@ -42,18 +40,14 @@ export function AgentContentPanels({
 	skillSources,
 	isLoadingSkillSources,
 	openingSkillSourceId,
-	isSavingModel,
-	isSavingChannel,
 	isSyncingFeishu,
 	isReauthorizingWechat,
 	onUpdateField,
 	onUpdateProviderSelection,
-	onSaveModel,
 	onOpenSystemPrompt,
 	onOpenSkillSource,
 	onOpenSkillFolder,
 	onUpdateChannelField,
-	onSaveChannel,
 	onSyncFeishu,
 	onReauthorizeWechat,
 }: {
@@ -64,8 +58,6 @@ export function AgentContentPanels({
 	resourceHistory: ResourceChartHistory;
 	draft: AgentDraft;
 	channelDraft: AgentDraft;
-	modelSaveMessage?: string;
-	channelSaveMessage?: string;
 	providerOptions: string[];
 	modelOptions: DesktopModelOption[];
 	allModelOptions: DesktopModelOption[];
@@ -76,24 +68,20 @@ export function AgentContentPanels({
 	skillSources: AgentSkillSource[];
 	isLoadingSkillSources: boolean;
 	openingSkillSourceId?: string;
-	isSavingModel: boolean;
-	isSavingChannel: boolean;
 	isSyncingFeishu: boolean;
 	isReauthorizingWechat: boolean;
 	onUpdateField: (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => void;
 	onUpdateProviderSelection: (provider: string) => void;
-	onSaveModel: () => void;
 	onOpenSystemPrompt: () => void;
 	onOpenSkillSource: (sourceId: string) => void;
 	onOpenSkillFolder: (sourceId: string, skillName: string) => void;
-	onUpdateChannelField: (field: keyof AgentDraft, value: string | boolean) => void;
-	onSaveChannel: () => void;
+	onUpdateChannelField: (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => void;
 	onSyncFeishu: () => void;
 	onReauthorizeWechat: () => void;
 }): JSX.Element {
+	const { language, t } = useI18n();
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
 	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
-	const cacheStats = getCacheStats(usage);
 	const hasFeishuChannel = Boolean(agent.channelKinds?.includes("feishu") || agent.appId);
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
 	const hasSlackChannel = Boolean(agent.channelKinds?.includes("slack") || agent.slack);
@@ -110,49 +98,75 @@ export function AgentContentPanels({
 	const showsSystemPrompt = agent.frameworkKind === "ousia";
 
 	return (
-		<div className={activeTab === "overview" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-3" : ""}>
+		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
 			{activeTab === "overview" ? (
-				<>
-					<div className="grid grid-cols-4 gap-4">
+				<div className="mx-auto max-w-6xl space-y-4">
+					<div className="grid grid-cols-4 gap-4 max-[760px]:gap-3 max-[560px]:grid-cols-2">
 						<UsageMetric
-							label="消息数"
-							value={formatCount(totalMessages)}
-							hint={`${formatCount(usage.total.incomingMessages)} / ${formatCount(usage.total.outgoingMessages)}`}
+							label={t("messageCount")}
+							value={formatCount(totalMessages, language)}
+							hint={t("turnCount", { count: formatCount(usage.total.turns, language) })}
 						/>
 						<UsageMetric
-							label="工具调用次数"
-							value={formatCount(usage.total.actions)}
-							hint={`失败 ${formatCount(usage.total.failedActions)}`}
-						/>
-						<UsageMetric
-							label="Token 消耗"
-							value={formatTokenCount(usage.total.tokens)}
+							label={t("tokenUsage")}
+							value={formatTokenCountCompact(usage.total.tokens)}
 							hint={`${formatTokenCount(usage.total.inputTokens)} / ${formatTokenCount(usage.total.outputTokens)}`}
 						/>
 						<UsageMetric
-							label="运行时长"
+							label={t("runDuration")}
 							value={formatDuration(usage.total.runDurationMs)}
-							hint={`本次运行 ${formatDuration(usage.currentRun.runDurationMs)}`}
+							hint={t("currentRun", { duration: formatDuration(usage.currentRun.runDurationMs) })}
+						/>
+						<UsageMetric
+							label={t("averageTtfs")}
+							value={formatTtfs(usage.averageTtfsMs)}
+							hint={t("ttfsDefinition")}
 						/>
 					</div>
-					<div className="pie-smooth-corner flex min-h-0 flex-1 flex-col overflow-hidden rounded-[42px] bg-[var(--slate-2)] pb-4 pt-5">
-						<div className="flex items-center justify-between px-4 pb-2">
-							<SectionTitle title="运行日志" />
-						</div>
-						<TerminalLog agent={agent} />
+					<div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
+						<ResourceChartCard
+							className="min-w-0 bg-[var(--slate-2)]"
+							title={t("memory")}
+							value={formatBytes(resources?.memoryBytes ?? 0)}
+							hint={t("recentUsageCurve")}
+							tone="slate"
+							points={resourceHistory.memory}
+							chartKind="bars"
+						/>
+						<ResourceChartCard
+							className="min-w-0 bg-[var(--slate-2)]"
+							title="CPU"
+							value={formatPercent(resources?.cpuPercent ?? 0)}
+							hint={t("mainProcessUsage")}
+							tone="slate"
+							points={resourceHistory.cpu}
+							chartKind="line"
+						/>
+						<StorageDetailCard
+							resources={resources}
+							className="col-span-2 max-[620px]:col-span-1"
+							contentClassName="max-w-[28rem]"
+						/>
 					</div>
-				</>
+				</div>
+			) : activeTab === "logs" ? (
+				<div className="pie-smooth-corner flex min-h-0 flex-1 flex-col overflow-hidden rounded-[42px] bg-slate-950 pb-3 pt-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+					<div className="flex items-center justify-between px-4 pb-2.5">
+						<SectionTitle title={t("runtimeLogs")} className="[&_div:first-child]:text-slate-100" />
+					</div>
+					<TerminalLog agent={agent} tone="dark" />
+				</div>
 			) : activeTab === "model" ? (
 				<div className="mx-auto max-w-5xl space-y-4">
-					<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-						<SectionTitle title="模型配置" />
+					<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
+						<SectionTitle title={t("modelConfig")} />
 						<div className={cn("grid gap-4", usesCodexCli ? "grid-cols-1" : "grid-cols-2")}>
 							{!usesCodexCli ? (
 								<Field label="Provider">
 									<ProviderSelect
 										value={draft.provider ?? ""}
 										providers={providerOptions}
-										placeholder={isModelCatalogLoading ? "Loading providers..." : "Select provider"}
+										placeholder={isModelCatalogLoading ? t("loadingProviders") : t("selectProvider")}
 										onValueChange={onUpdateProviderSelection}
 									/>
 								</Field>
@@ -164,7 +178,7 @@ export function AgentContentPanels({
 									disabled={!modelOptions.length}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder={isModelCatalogLoading ? "Loading models..." : "Select model"} />
+										<SelectValue placeholder={isModelCatalogLoading ? t("loadingModels") : t("selectModel")} />
 									</SelectTrigger>
 									<SelectContent>
 										{modelOptions.map((item) => (
@@ -176,7 +190,7 @@ export function AgentContentPanels({
 								</Select>
 							</Field>
 						</div>
-						<Field label="Thinking Level">
+						<Field label={t("thinkingLevel")}>
 							<Select
 								value={draft.thinkingLevel ?? "off"}
 								onValueChange={(value) => onUpdateField("thinkingLevel", value as DesktopThinkingLevel)}
@@ -194,7 +208,7 @@ export function AgentContentPanels({
 								<SecretInput
 									value={draft.apiKey ?? ""}
 									onChange={(event) => onUpdateField("apiKey", event.target.value)}
-									placeholder="留空保存会清除当前 provider 的 API Key"
+									placeholder={t("apiKeyClearHint")}
 								/>
 							</Field>
 						) : null}
@@ -207,28 +221,16 @@ export function AgentContentPanels({
 							onOpen={onOpenSystemPrompt}
 						/>
 					) : null}
-					<div className="pie-smooth-corner sticky bottom-1 z-20 flex items-center justify-between gap-3 rounded-[24px] bg-white px-4 py-3 shadow-[0_3px_10px_rgba(15,23,42,0.08)]">
-						<div className="text-xs text-muted-foreground text-pretty">
-							{modelSaveMessage ?? "保存后 Agent 将自动重启"}
-						</div>
-						<Button
-							className="shrink-0"
-							disabled={isSavingModel}
-							onClick={onSaveModel}
-						>
-							{isSavingModel ? "验证中..." : "保存"}
-						</Button>
-					</div>
 				</div>
 			) : activeTab === "skills" ? (
-				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] px-6 py-7">
+				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] px-5 py-5">
 					<div className="flex items-start justify-between gap-4 px-1">
-						<SectionTitle title="Skills 管理" description="按目录来源管理 Skills" />
+						<SectionTitle title={t("skillsManagement")} description={t("skillsManagementDesc")} />
 					</div>
-					<div className="mt-7 grid gap-4">
+					<div className="mt-5 grid gap-4">
 						{isLoadingSkillSources ? (
-							<div className="pie-smooth-corner rounded-[36px] bg-white p-8 text-center text-sm text-muted-foreground">
-								正在读取 Skills 目录...
+							<div className="pie-smooth-corner rounded-[36px] bg-white p-6 text-center text-sm text-muted-foreground">
+								{t("readingSkills")}
 							</div>
 						) : (
 							visibleSkillSources.map((source) => (
@@ -246,10 +248,10 @@ export function AgentContentPanels({
 			) : activeTab === "channels" ? (
 				<div className="mx-auto max-w-5xl space-y-4">
 					{hasFeishuChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
 							<div className="flex items-start justify-between gap-4">
-								<SectionTitle title="飞书" description="保存前验证 App ID 和 Secret" />
-								<AceternityTooltip content="获取飞书应用头像和名称">
+								<SectionTitle title={t("feishu")} description={t("validateFeishu")} />
+								<AceternityTooltip content={t("syncFeishuProfile")}>
 									<Button
 										type="button"
 										variant="secondary"
@@ -259,7 +261,7 @@ export function AgentContentPanels({
 										onClick={onSyncFeishu}
 									>
 										<AppIcon IconComponent={RestartCircleBoldDuotone} className={cn("size-4", isSyncingFeishu ? "animate-spin" : "")} />
-										<span>{isSyncingFeishu ? "获取中" : "获取"}</span>
+										<span>{isSyncingFeishu ? t("fetching") : t("fetch")}</span>
 									</Button>
 								</AceternityTooltip>
 							</div>
@@ -271,7 +273,7 @@ export function AgentContentPanels({
 									<SecretInput value={channelDraft.appSecret ?? ""} onChange={(event) => onUpdateChannelField("appSecret", event.target.value)} />
 								</Field>
 							</div>
-							<Field label="区域">
+							<Field label={t("region")}>
 								<Select
 									value={channelDraft.brand ?? "feishu"}
 									onValueChange={(value) => onUpdateChannelField("brand", value)}
@@ -287,10 +289,10 @@ export function AgentContentPanels({
 						</div>
 					) : null}
 					{hasWechatChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
 							<div className="flex items-start justify-between gap-4">
-								<SectionTitle title="微信" description="Token 只保存到该 Agent 的 .env" />
-								<AceternityTooltip content="重新扫码授权微信">
+								<SectionTitle title={t("wechat")} description={t("wechatTokenDesc")} />
+								<AceternityTooltip content={t("reauthorizeWechatTooltip")}>
 									<Button
 										type="button"
 										variant="secondary"
@@ -299,7 +301,7 @@ export function AgentContentPanels({
 										disabled={isReauthorizingWechat}
 										onClick={onReauthorizeWechat}
 									>
-										<span>重新授权</span>
+										<span>{t("reauthorizeWechat")}</span>
 									</Button>
 								</AceternityTooltip>
 							</div>
@@ -315,14 +317,14 @@ export function AgentContentPanels({
 								<SecretInput
 									value={channelDraft.wechatBotToken ?? ""}
 									onChange={(event) => onUpdateChannelField("wechatBotToken", event.target.value)}
-									placeholder="留空保存会清除当前微信 Bot Token"
+									placeholder={t("wechatTokenClearHint")}
 								/>
 							</Field>
 						</div>
 					) : null}
 					{hasSlackChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Slack" description="Socket Mode 需要 Bot Token 和 App Token" />
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title="Slack" description={t("slackDesc")} />
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="Bot Token">
 									<SecretInput value={channelDraft.slackBotToken ?? ""} onChange={(event) => onUpdateChannelField("slackBotToken", event.target.value)} />
@@ -331,25 +333,11 @@ export function AgentContentPanels({
 									<SecretInput value={channelDraft.slackAppToken ?? ""} onChange={(event) => onUpdateChannelField("slackAppToken", event.target.value)} />
 								</Field>
 							</div>
-							<div className="grid grid-cols-3 gap-4">
-								<Field label="Team ID">
-									<Input value={channelDraft.slackTeamId ?? ""} onChange={(event) => onUpdateChannelField("slackTeamId", event.target.value)} />
-								</Field>
-								<Field label="App ID">
-									<Input value={channelDraft.slackAppId ?? ""} onChange={(event) => onUpdateChannelField("slackAppId", event.target.value)} />
-								</Field>
-								<Field label="Bot User ID">
-									<Input value={channelDraft.slackBotUserId ?? ""} onChange={(event) => onUpdateChannelField("slackBotUserId", event.target.value)} />
-								</Field>
-							</div>
-							<Field label="Signing Secret">
-								<SecretInput value={channelDraft.slackSigningSecret ?? ""} onChange={(event) => onUpdateChannelField("slackSigningSecret", event.target.value)} />
-							</Field>
 						</div>
 					) : null}
 					{hasDiscordChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Discord" description="需要 Bot Token 和 Message Content Intent" />
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title="Discord" description={t("discordDesc")} />
 							<Field label="Bot Token">
 								<SecretInput value={channelDraft.discordBotToken ?? ""} onChange={(event) => onUpdateChannelField("discordBotToken", event.target.value)} />
 							</Field>
@@ -364,8 +352,8 @@ export function AgentContentPanels({
 						</div>
 					) : null}
 					{hasTelegramChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="Telegram" description="从 BotFather 获取 Bot Token" />
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title="Telegram" description={t("telegramDesc")} />
 							<Field label="Bot Token">
 								<SecretInput value={channelDraft.telegramBotToken ?? ""} onChange={(event) => onUpdateChannelField("telegramBotToken", event.target.value)} />
 							</Field>
@@ -375,8 +363,27 @@ export function AgentContentPanels({
 						</div>
 					) : null}
 					{channelKinds.length ? (
-						<div className="pie-smooth-corner space-y-3 rounded-[42px] bg-[var(--slate-2)] p-5">
-							<SectionTitle title="IM 消息样式" description="控制 IM 消息呈现" />
+						<div className="pie-smooth-corner space-y-3 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title={t("imMessageStyle")} description={t("imMessageStyleDesc")} />
+							{hasFeishuChannel ? (
+								<Field label={t("feishuMessageOutputMode")}>
+									<Select
+										value={channelDraft.feishuMessageOutputMode ?? "bubble"}
+										onValueChange={(value) => onUpdateChannelField("feishuMessageOutputMode", value as DesktopFeishuMessageOutputMode)}
+									>
+										<SelectTrigger>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="bubble">{t("feishuMessageOutputBubble")}</SelectItem>
+											<SelectItem value="card">{t("feishuMessageOutputCard")}</SelectItem>
+										</SelectContent>
+									</Select>
+									<div className="mt-1 text-xs leading-5 text-muted-foreground text-pretty">
+										{t("feishuMessageOutputModeDesc")}
+									</div>
+								</Field>
+							) : null}
 							<label className="flex cursor-pointer items-start gap-3 py-2.5">
 								<Checkbox
 									checked={channelDraft.outputToolCallsToIm ?? true}
@@ -384,88 +391,46 @@ export function AgentContentPanels({
 									className="mt-0.5"
 								/>
 								<span className="min-w-0 flex-1">
-									<span className="block text-sm font-medium leading-snug text-foreground text-balance">在 IM 中显示工具调用</span>
-									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">同步工具名和执行状态</span>
+									<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("showToolCallsInIm")}</span>
+									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("showToolCallsInImDesc")}</span>
 								</span>
 							</label>
+							<label className="flex cursor-pointer items-start gap-3 py-2.5">
+								<Checkbox
+									checked={channelDraft.outputThinkingToIm ?? false}
+									onCheckedChange={(checked) => onUpdateChannelField("outputThinkingToIm", checked)}
+									className="mt-0.5"
+								/>
+								<span className="min-w-0 flex-1">
+									<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("showThinkingInIm")}</span>
+									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("showThinkingInImDesc")}</span>
+								</span>
+							</label>
+							<Field label={t("toolCallTruncation")}>
+								<Select
+									value={String(channelDraft.outputToolCallImMaxLength ?? 60)}
+									onValueChange={(value) => onUpdateChannelField("outputToolCallImMaxLength", value === "none" ? "none" : Number(value) as 60 | 100 | 200)}
+								>
+									<SelectTrigger>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="60">{t("toolCallTruncation60")}</SelectItem>
+										<SelectItem value="100">{t("toolCallTruncation100")}</SelectItem>
+										<SelectItem value="200">{t("toolCallTruncation200")}</SelectItem>
+										<SelectItem value="none">{t("toolCallTruncationNone")}</SelectItem>
+									</SelectContent>
+								</Select>
+							</Field>
 						</div>
 					) : null}
 					{!channelKinds.length ? (
-						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-8 text-center text-sm text-muted-foreground">
-							该 Agent 还没有启用的 IM 渠道
+						<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-4 py-6 text-center text-sm text-muted-foreground">
+							{t("noImChannels")}
 						</div>
 					) : null}
-					<div className="pie-smooth-corner sticky bottom-1 z-20 flex items-center justify-between gap-3 rounded-[24px] bg-white px-4 py-3 shadow-[0_3px_10px_rgba(15,23,42,0.08)]">
-						<div className="text-xs text-muted-foreground text-pretty">
-							{channelSaveMessage ?? "保存后 Agent 将自动重启"}
-						</div>
-						<Button
-							className="shrink-0"
-							disabled={isSavingChannel}
-							onClick={onSaveChannel}
-						>
-							{isSavingChannel ? "验证中..." : "保存"}
-						</Button>
-					</div>
 				</div>
-			) : (
-				<div className="mx-auto max-w-6xl space-y-4">
-					<div className="grid grid-cols-4 gap-4">
-						<UsageMetric
-							label="缓存命中率"
-							value={formatPercent(cacheStats.hitRate)}
-							hint={`${formatTokenCount(cacheStats.read)} / ${formatTokenCount(cacheStats.denom)}`}
-						/>
-						<UsageMetric
-							label="输入 Token"
-							value={formatTokenCount(cacheStats.totalInput)}
-							hint="含缓存"
-						/>
-						<UsageMetric
-							label="缓存 Token"
-							value={formatTokenCount(cacheStats.read)}
-							hint="缓存读取"
-						/>
-						<UsageMetric
-							label="输出 Token"
-							value={formatTokenCount(cacheStats.output)}
-							hint="模型输出"
-						/>
-					</div>
-					<div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2">
-						<ResourceChartCard
-							className="min-w-0 bg-[var(--slate-2)]"
-							title="内存"
-							value={formatBytes(resources?.memoryBytes ?? 0)}
-							hint="近期占用曲线"
-							tone="slate"
-							points={resourceHistory.memory}
-						/>
-						<ResourceChartCard
-							className="min-w-0 bg-[var(--slate-2)]"
-							title="CPU"
-							value={formatPercent(resources?.cpuPercent ?? 0)}
-							hint="主进程占用"
-							tone="slate"
-							points={resourceHistory.cpu}
-						/>
-					</div>
-					<div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2">
-						<StorageDetailCard resources={resources} />
-						<div className="pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4">
-							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-								<div className="min-w-0">
-									<SectionTitle title="近一周 Token 用量" description="每日消耗列表" />
-								</div>
-								<div className="shrink-0 text-xs text-muted-foreground tabular-nums sm:pt-0.5 sm:text-right">
-									更新于 {new Date(usage.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-								</div>
-							</div>
-							<UsageTrend usage={usage} />
-						</div>
-					</div>
-				</div>
-			)}
+			) : null}
 		</div>
 	);
 }
@@ -481,15 +446,16 @@ function SystemPromptCard({
 	isOpening: boolean;
 	onOpen: () => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	return (
-		<div className="pie-smooth-corner group/system-prompt relative rounded-[42px] bg-[var(--slate-2)] p-5">
+		<div className="pie-smooth-corner group/system-prompt relative rounded-[42px] bg-[var(--slate-2)] p-4">
 			<div className="pr-9">
-				<SectionTitle title="系统提示词" />
+				<SectionTitle title={t("systemPrompt")} />
 				<div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
 					{source?.path || source?.description || "Loading..."}
 				</div>
 			</div>
-			<AceternityTooltip content="打开系统提示词文件" className="absolute right-5 top-4">
+			<AceternityTooltip content={t("openSystemPrompt")} className="absolute right-4 top-3.5">
 				<Button
 					variant="unstyled"
 					size="inline"
@@ -501,9 +467,9 @@ function SystemPromptCard({
 					<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
 				</Button>
 			</AceternityTooltip>
-			<div className="pie-smooth-corner mt-4 max-h-56 overflow-auto rounded-[28px] bg-white px-4 py-3">
+			<div className="pie-smooth-corner mt-3.5 max-h-56 overflow-auto rounded-[28px] bg-white px-3.5 py-2.5">
 				<pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground">
-					{isLoading ? "正在读取系统提示词..." : source?.exists ? source.content : "未找到系统提示词文件"}
+					{isLoading ? t("readingSystemPrompt") : source?.exists ? source.content : t("systemPromptMissing")}
 				</pre>
 			</div>
 		</div>
@@ -523,7 +489,7 @@ function SectionTitle({
 		<div className={cn("min-w-0", className)}>
 			<div className="truncate text-base font-semibold leading-snug text-foreground text-balance">{title}</div>
 			{description ? (
-				<div className="mt-0.5 min-w-0 text-pretty text-sm leading-snug text-muted-foreground">{description}</div>
+				<div className="mt-1 min-w-0 text-pretty text-xs leading-5 text-muted-foreground">{description}</div>
 			) : null}
 		</div>
 	);
@@ -539,6 +505,7 @@ function SecretInput({
 	placeholder?: string;
 }): JSX.Element {
 	const [visible, setVisible] = useState(false);
+	const { t } = useI18n();
 	return (
 		<div className="group/secret-input relative">
 			<Input
@@ -554,7 +521,7 @@ function SecretInput({
 				size="inline"
 				className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-[var(--slate-10)] opacity-0 transition-none hover:text-[var(--slate-12)] active:!translate-y-[-50%] focus:opacity-100 group-hover/secret-input:opacity-100 group-focus-within/secret-input:opacity-100"
 				onClick={() => setVisible((current) => !current)}
-				aria-label={visible ? "隐藏密钥" : "显示密钥"}
+				aria-label={visible ? t("hideSecret") : t("showSecret")}
 			>
 				<AppIcon IconComponent={visible ? EyeClosedBold : EyeBold} className="size-5" />
 			</Button>
@@ -568,118 +535,133 @@ function ResourceChartCard({
 	hint,
 	tone,
 	points,
+	chartKind,
 	className,
-	}: {
-		title: string;
-		value: string;
-		hint?: string;
-		tone: "slate";
-		points: number[];
-		className?: string;
-	}): JSX.Element {
-		const stroke = "var(--slate-8)";
-		const maxValue = useMemo(() => Math.max(1, ...points), [points]);
+}: {
+	title: string;
+	value: string;
+	hint?: string;
+	tone: "slate";
+	points: number[];
+	chartKind?: "bars" | "line";
+	className?: string;
+}): JSX.Element {
+	const stroke = "var(--slate-8)";
+	const maxValue = useMemo(() => Math.max(1, ...points), [points]);
+	const linePath = useMemo(() => createSmoothedChartPath(points, maxValue), [maxValue, points]);
 
 	return (
-		<div className={cn("pie-smooth-corner flex min-h-[8.5rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-4", className)}>
-			<div className="flex items-start justify-between gap-3">
+		<div className={cn("pie-smooth-corner flex min-h-[8.5rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-3.5", className)}>
+			<div className="flex flex-col gap-2 min-[980px]:flex-row min-[980px]:items-start min-[980px]:justify-between min-[980px]:gap-3">
 				<SectionTitle title={title} className="min-w-0" />
-				<div className="shrink-0 text-right text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</div>
+				<div className="shrink-0 text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-right min-[980px]:text-2xl">{value}</div>
 			</div>
 			{hint ? (
 				<p className="mt-1 min-w-0 truncate text-xs leading-none text-muted-foreground">{hint}</p>
 			) : null}
-			<div className="relative mt-2 h-[72px]">
-				<div className="absolute inset-0 flex items-end gap-px pb-0.5">
-					{points.length ? points.map((point, index) => (
-						<div
-							key={`${index}-${point}`}
-							className="min-w-0 flex-1 rounded-t-[3px]"
-							style={{
-								height: `${point > 0 ? Math.max(4, (point / maxValue) * 100) : 2}%`,
-								backgroundColor: stroke,
-								opacity: 0.28 + (point / maxValue) * 0.52,
-							}}
-						/>
-					)) : (
-						<div className="h-0.5 w-full rounded-full bg-[var(--slate-a4)]" />
-					)}
-				</div>
-				<div className="absolute inset-x-0 bottom-[27%] border-t border-dashed border-[var(--slate-a4)]" />
+			<div className="relative mt-2 min-h-[72px] flex-1">
+				{chartKind === "line" ? (
+					<svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true">
+						{linePath ? (
+							<path d={linePath} fill="none" stroke={stroke} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.2" opacity="0.72" vectorEffect="non-scaling-stroke" />
+						) : (
+							<path d="M 0 62 L 100 62" fill="none" stroke="var(--slate-a4)" strokeLinecap="round" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+						)}
+					</svg>
+				) : (
+					<div className="absolute inset-0 flex items-end gap-px pb-0.5">
+						{points.length ? points.map((point, index) => (
+							<div
+								key={`${index}-${point}`}
+								className="min-w-0 flex-1 rounded-t-[3px]"
+								style={{
+									height: `${point > 0 ? Math.max(4, (point / maxValue) * 100) : 2}%`,
+									backgroundColor: stroke,
+									opacity: 0.28 + (point / maxValue) * 0.52,
+								}}
+							/>
+						)) : (
+							<div className="h-0.5 w-full rounded-full bg-[var(--slate-a4)]" />
+						)}
+					</div>
+				)}
 			</div>
 		</div>
 	);
+}
+
+function createSmoothedChartPath(points: number[], maxValue: number): string {
+	if (points.length === 0) {
+		return "";
+	}
+
+	const width = 100;
+	const height = 64;
+	const bottomPadding = 2;
+	const topPadding = 3;
+	const drawableHeight = height - topPadding - bottomPadding;
+	const coordinates = points.map((point, index) => {
+		const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
+		const normalized = Math.min(1, Math.max(0, point / maxValue));
+		const y = topPadding + (1 - normalized) * drawableHeight;
+
+		return { x, y };
+	});
+
+	if (coordinates.length === 1) {
+		const { x, y } = coordinates[0];
+
+		return `M ${x - 2} ${y} L ${x + 2} ${y}`;
+	}
+
+	return coordinates.reduce((path, point, index) => {
+		if (index === 0) {
+			return `M ${point.x} ${point.y}`;
+		}
+
+		const previous = coordinates[index - 1];
+		const controlX = (previous.x + point.x) / 2;
+
+		return `${path} C ${controlX} ${previous.y}, ${controlX} ${point.y}, ${point.x} ${point.y}`;
+	}, "");
 }
 
 const PROFILE_STORAGE_BAR_CAP_BYTES = 500 * 1024 * 1024;
 
-function StorageDetailCard({ resources }: { resources?: AgentResourceStats }): JSX.Element {
+function StorageDetailCard({
+	resources,
+	className,
+	contentClassName,
+}: {
+	resources?: AgentResourceStats;
+	className?: string;
+	contentClassName?: string;
+}): JSX.Element {
+	const { t } = useI18n();
 	const storageBytes = resources?.storageBytes ?? 0;
-	const diskAvailableBytes = resources?.diskAvailableBytes;
-	const diskTotalBytes = resources?.diskTotalBytes;
 	const rawBarPercent = (storageBytes / PROFILE_STORAGE_BAR_CAP_BYTES) * 100;
 	const barWidthPercent = storageBytes <= 0 ? 0 : Math.min(100, Math.max(2, rawBarPercent));
 
 	return (
-		<div className="pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4">
-			<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+		<div className={cn("pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4", className)}>
+			<div className={cn("min-w-0", contentClassName)}>
 				<div className="min-w-0">
-					<SectionTitle title="存储空间" description="Agent 占用的存储空间" />
+					<SectionTitle title={t("storage")} description={t("storageDesc")} />
 				</div>
-				<div className="shrink-0 text-2xl font-bold tracking-tight text-foreground tabular-nums">
+				<div className="mt-5 text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-2xl">
 					{formatBytes(storageBytes)}
 				</div>
-			</div>
-			<div className="pie-smooth-corner mt-3 space-y-3 rounded-[24px] py-3">
-				<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
-					<div
-						className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
-						style={{ width: `${barWidthPercent}%` }}
-					/>
-				</div>
-				<div className="grid gap-2 text-xs">
-					<StorageDetailRow label="Profile 占用" value={formatBytes(storageBytes)} />
-					<StorageDetailRow label="磁盘可用" value={diskAvailableBytes === undefined ? "未知" : formatBytes(diskAvailableBytes)} />
-					<StorageDetailRow label="磁盘容量" value={diskTotalBytes === undefined ? "未知" : formatBytes(diskTotalBytes)} />
+				<div className="mt-5">
+					<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
+						<div
+							className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
+							style={{ width: `${barWidthPercent}%` }}
+						/>
+					</div>
 				</div>
 			</div>
 		</div>
 	);
-}
-
-function StorageDetailRow({ label, value }: { label: string; value: string }): JSX.Element {
-	return (
-		<div className="flex items-center justify-between gap-4">
-			<span className="min-w-0 truncate text-muted-foreground">{label}</span>
-			<span className="shrink-0 text-right text-foreground tabular-nums">{value}</span>
-		</div>
-	);
-}
-
-function getCacheStats(usage: AgentUsageStats): {
-	hitRate: number;
-	read: number;
-	write: number;
-	input: number;
-	totalInput: number;
-	output: number;
-	denom: number;
-} {
-	const read = usage.total.cacheReadTokens;
-	const write = usage.total.cacheWriteTokens;
-	const input = usage.total.inputTokens;
-	const totalInput = input + read + write;
-	const output = usage.total.outputTokens;
-	const denom = totalInput;
-	return {
-		hitRate: denom > 0 ? (read / denom) * 100 : 0,
-		read,
-		write,
-		input,
-		totalInput,
-		output,
-		denom,
-	};
 }
 
 function formatBytes(bytes: number): string {
@@ -694,6 +676,30 @@ function formatBytes(bytes: number): string {
 		unitIndex += 1;
 	}
 	return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatTokenCountCompact(value: number): string {
+	const abs = Math.abs(value);
+	if (abs >= 1_000_000) {
+		return `${Math.round(value / 1_000_000)}M`;
+	}
+	if (abs >= 1_000) {
+		return `${Math.round(value / 1_000)}K`;
+	}
+	return formatCount(value);
+}
+
+function formatTtfs(value: number | undefined): string {
+	if (value === undefined || !Number.isFinite(value)) {
+		return "--";
+	}
+	if (value < 1000) {
+		return `${Math.round(value)}ms`;
+	}
+	if (value < 10_000) {
+		return `${(value / 1000).toFixed(1)}s`;
+	}
+	return `${Math.round(value / 1000)}s`;
 }
 
 function formatPercent(value: number): string {
@@ -722,10 +728,11 @@ function SkillSourceRow({
 	onOpen: () => void;
 	onOpenSkill: (skillName: string) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	const preview = source.skills.slice(0, 8);
 	const desc = source.description.trim();
 	return (
-		<div className="pie-smooth-corner group/skill-source relative flex min-h-[148px] flex-col rounded-[32px] bg-white px-5 py-4 pr-16 shadow-[0_1px_0_rgba(15,23,42,0.03)]">
+		<div className="pie-smooth-corner group/skill-source relative flex min-h-[148px] flex-col rounded-[32px] bg-white px-4 py-3.5 pr-14 shadow-[0_1px_0_rgba(15,23,42,0.03)]">
 			<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 				<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2">
 					<div className="text-[15px] font-semibold leading-6 text-foreground text-balance">{source.label}</div>
@@ -733,7 +740,7 @@ function SkillSourceRow({
 						"rounded-full px-2.5 py-1 text-xs font-semibold leading-none tabular-nums",
 						source.exists ? "bg-[var(--lime-3)] text-[var(--lime-11)]" : "bg-[var(--slate-3)] text-muted-foreground",
 					)}>
-						{source.exists ? `${source.skillCount} 个` : "未创建"}
+						{source.exists ? t("skillCount", { count: source.skillCount }) : t("notCreated")}
 					</div>
 				</div>
 				{desc ? (
@@ -748,7 +755,7 @@ function SkillSourceRow({
 								type="button"
 								className="min-w-0 max-w-full truncate rounded-full bg-[var(--slate-2)] px-3 py-1.5 text-sm leading-5 text-muted-foreground transition-[background-color,color,scale] hover:bg-[var(--slate-3)] hover:text-foreground active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
 								onClick={() => onOpenSkill(skill)}
-								title={`打开 ${skill}`}
+								title={t("openSkill", { name: skill })}
 							>
 								{skill}
 							</button>
@@ -760,20 +767,20 @@ function SkillSourceRow({
 						) : null}
 						{source.exists && source.skills.length === 0 ? (
 							<span className="rounded-full bg-[var(--slate-2)] px-3 py-1.5 text-sm leading-5 text-muted-foreground">
-								暂无 Skills
+								{t("noSkills")}
 							</span>
 						) : null}
 					</div>
 				</div>
 			</div>
-			<AceternityTooltip content="打开 Skills 文件夹" className="absolute right-5 top-4">
+			<AceternityTooltip content={t("openSkillsFolder")} className="absolute right-4 top-3.5">
 				<Button
 					variant="unstyled"
 					size="inline"
 					className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--slate-2)] text-[var(--slate-10)] transition-[background-color,color,scale] hover:bg-[var(--slate-3)] hover:text-[var(--slate-12)] active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
 					onClick={onOpen}
 					disabled={isOpening}
-					aria-label="Open Skills Folder"
+					aria-label={t("openSkillsFolder")}
 				>
 					<AppIcon IconComponent={FolderOpenBoldDuotone} className="size-7" />
 				</Button>

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { resolveBackendFramework, type BackendFrameworkDefinition } from "../core/backend-framework.js";
+import { getAgentBackendDefinition, type AgentBackendDefinition } from "../agents/backend-registry.js";
 import { ensureAgentHomeLayout } from "../core/agent-home-layout.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../core/agent-home.js";
 import { getStoredProfile, loadConfigStore, type ChannelKind } from "../core/config-store.js";
@@ -43,7 +43,7 @@ interface RuntimePlan {
 	homeDir: string;
 	environment: AgentRuntimeEnvironment;
 	lifecycle: RuntimeEnvironmentLifecycle;
-	framework: BackendFrameworkDefinition;
+	backend: AgentBackendDefinition;
 	channelRuntimes: ChannelRuntime[];
 }
 
@@ -81,7 +81,8 @@ function createRuntimePlan(): RuntimePlan {
 	const environment = createRuntimeEnvironment({ homeDir, profile, lifecycle });
 	ensureRuntimeEnvironment(environment);
 	ensureAgentHomeLayout(homeDir);
-	const framework = resolveBackendFramework(profile?.backend.kind);
+	const backend = getAgentBackendDefinition(profile?.backend.kind ?? "pi");
+	const framework = backend.frameworkRuntime;
 	framework.ensureAgentHomeLayout?.(homeDir);
 	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
 	const channelKinds: ChannelKind[] = enabledChannels.length
@@ -91,12 +92,13 @@ function createRuntimePlan(): RuntimePlan {
 	if (!channelRuntimes.length) {
 		throw new Error("No enabled channel runtime is available for this profile.");
 	}
-	return { homeDir, environment, lifecycle, framework, channelRuntimes };
+	return { homeDir, environment, lifecycle, backend, channelRuntimes };
 }
 
 export async function runPie(): Promise<number> {
 	const plan = createRuntimePlan();
-	const { homeDir, environment, lifecycle, framework, channelRuntimes } = plan;
+	const { homeDir, environment, lifecycle, backend, channelRuntimes } = plan;
+	const framework = backend.frameworkRuntime;
 	process.chdir(environment.workDir);
 	const primaryRuntime = channelRuntimes[0]!;
 	const persistLifecycle = (): void => {
@@ -130,6 +132,13 @@ export async function runPie(): Promise<number> {
 				gatewaySecret,
 			})
 		: undefined;
+	const backendService = backend.createManagedServiceManager
+		? backend.createManagedServiceManager({
+				homeDir,
+				environment,
+				config: getStoredProfile(loadConfigStore())?.backend.config,
+			})
+		: undefined;
 	const turnGateway = framework.createTurnGatewayServer
 		? framework.createTurnGatewayServer({
 				homeDir,
@@ -145,6 +154,7 @@ export async function runPie(): Promise<number> {
 			runtime.setShutdownExitCode?.(code);
 		}
 		taskEngine?.stop();
+		backendService?.stop();
 		void turnGateway?.stop();
 		for (const runtime of channelRuntimes) {
 			void runtime.stop();
@@ -157,7 +167,8 @@ export async function runPie(): Promise<number> {
 	lifecycle.mark("starting");
 	persistLifecycle();
 	await turnGateway?.start();
-	taskEngine?.start();
+	await backendService?.start();
+	await taskEngine?.start();
 
 	let failure: unknown;
 	try {
@@ -181,6 +192,7 @@ export async function runPie(): Promise<number> {
 		process.off("SIGINT", onSigint);
 		process.off("SIGTERM", onSigterm);
 		taskEngine?.stop();
+		backendService?.stop();
 		await turnGateway?.stop();
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
 		if (!failure) {

@@ -1,9 +1,16 @@
 import { basename } from "node:path";
+import { DEFAULT_IM_MESSAGE_STYLE, type ToolCallImMaxLength } from "../../core/message-style.js";
 
-const TOOL_CALL_IM_MAX = 100;
+export type { ToolCallImMaxLength } from "../../core/message-style.js";
+
+export const DEFAULT_TOOL_CALL_IM_MAX_LENGTH = DEFAULT_IM_MESSAGE_STYLE.outputToolCallImMaxLength;
 const DEFAULT_TOOL_IM_EMOJI = "🖥️";
 
-function truncate(text: string, max = TOOL_CALL_IM_MAX): string {
+function truncate(text: string, maxLength: ToolCallImMaxLength = DEFAULT_TOOL_CALL_IM_MAX_LENGTH): string {
+	if (maxLength === "none") {
+		return text;
+	}
+	const max = maxLength;
 	return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
@@ -38,38 +45,38 @@ function firstStringFieldForIm(rec: Record<string, unknown>): string {
 	return "";
 }
 
-export function formatToolImLine(toolName: string, args: unknown): string {
+export function formatToolImLine(toolName: string, args: unknown, maxLength: ToolCallImMaxLength = DEFAULT_TOOL_CALL_IM_MAX_LENGTH): string {
 	const emoji = toolCallImEmoji(toolName);
 	const base = toolName.replace(/\s+error$/i, "").trim().toLowerCase();
 	const rec = args !== null && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
 
 	if (base === "bash") {
 		const cmd = typeof rec.command === "string" ? rec.command.trim().replace(/\s+/g, " ") : "";
-		return truncate(`${emoji} bash ${cmd || "(no command)"}`);
+		return truncate(`${emoji} bash ${cmd || "(no command)"}`, maxLength);
 	}
 	if (base === "read" || base === "write" || base === "edit") {
 		const pathStr = typeof rec.path === "string" ? rec.path : "";
-		return truncate(`${emoji} ${base} ${imBasename(pathStr || "(no path)")}`);
+		return truncate(`${emoji} ${base} ${imBasename(pathStr || "(no path)")}`, maxLength);
 	}
 	if (base === "grep") {
 		const pattern = typeof rec.pattern === "string" ? rec.pattern.trim().replace(/\s+/g, " ") : "";
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
 		const tail = pathStr ? ` ${imBasename(pathStr)}` : "";
-		return truncate(`${emoji} grep ${pattern || "?"}${tail}`);
+		return truncate(`${emoji} grep ${pattern || "?"}${tail}`, maxLength);
 	}
 	if (base === "find") {
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
 		const pattern = typeof rec.pattern === "string" ? rec.pattern.trim() : "";
 		const head = pathStr ? imBasename(pathStr) : ".";
-		return truncate(`${emoji} find ${pattern ? `${head} ${pattern.replace(/\s+/g, " ")}` : head}`);
+		return truncate(`${emoji} find ${pattern ? `${head} ${pattern.replace(/\s+/g, " ")}` : head}`, maxLength);
 	}
 	if (base === "ls") {
 		const pathStr = typeof rec.path === "string" ? rec.path.trim() : "";
-		return truncate(`${emoji} ls ${pathStr ? imBasename(pathStr) : "."}`);
+		return truncate(`${emoji} ls ${pathStr ? imBasename(pathStr) : "."}`, maxLength);
 	}
 
 	const hint = firstStringFieldForIm(rec);
-	return truncate(hint ? `${emoji} ${base} ${hint}` : `${emoji} ${toolName.replace(/\s+error$/i, "").trim()}`);
+	return truncate(hint ? `${emoji} ${base} ${hint}` : `${emoji} ${toolName.replace(/\s+error$/i, "").trim()}`, maxLength);
 }
 
 function formatToolImErrorSummary(result: unknown): string {
@@ -103,8 +110,8 @@ function formatToolImErrorSummary(result: unknown): string {
 	return String(result).replace(/\s+/g, " ");
 }
 
-export function formatToolImErrorLine(toolName: string, result: unknown): string {
+export function formatToolImErrorLine(toolName: string, result: unknown, maxLength: ToolCallImMaxLength = DEFAULT_TOOL_CALL_IM_MAX_LENGTH): string {
 	const emoji = toolCallImEmoji(`${toolName} error`);
 	const summary = formatToolImErrorSummary(result);
-	return truncate(summary ? `${emoji} ${toolName} error ${summary}` : `${emoji} ${toolName} error`);
+	return truncate(summary ? `${emoji} ${toolName} error ${summary}` : `${emoji} ${toolName} error`, maxLength);
 }

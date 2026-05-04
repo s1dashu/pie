@@ -3,6 +3,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -44,8 +45,10 @@ import type {
 	DesktopCodexDiagnostic,
 	DesktopCodexModelOption,
 	DesktopModelOption,
+	DesktopRuntimeDiagnostic,
 	DesktopWechatCredentials,
 } from "../shared/types.js";
+import { HERMES_MODEL_OPTIONS, mergeModelOptions, providersFromModels } from "../shared/model-catalog.js";
 
 type EmitOnboardEvent = (event: AgentOnboardEvent) => void;
 
@@ -79,6 +82,11 @@ const PROVIDER_CREDENTIAL_ENV: Record<string, string> = {
 	"amazon-bedrock": "AWS_BEARER_TOKEN_BEDROCK",
 };
 
+const HERMES_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
+const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex";
+const CODEX_INSTALL_WITH_NODE_COMMAND = "brew install node && npm install -g @openai/codex";
+const MIN_HERMES_GOOD_DISPLAY_VERSION = "0.12.0";
+
 const DEFAULT_BOT_NAMES = [
 	"Mia",
 	"Ava",
@@ -100,6 +108,117 @@ const DEFAULT_BOT_NAMES = [
 
 function pickDefaultBotName(): string {
 	return DEFAULT_BOT_NAMES[Math.floor(Math.random() * DEFAULT_BOT_NAMES.length)] ?? "Mia";
+}
+
+function shellPath(): string {
+	return process.env.SHELL?.trim() || "/bin/zsh";
+}
+
+function stripAnsi(text: string): string {
+	return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function runLoginShellCommand(command: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		let stdout = "";
+		let stderr = "";
+		const child = spawn(shellPath(), ["-lc", command], {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
+		});
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf8");
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString("utf8");
+		});
+		child.on("error", (error) => {
+			stderr += error.message;
+		});
+		child.on("close", (code) => resolve({ code, stdout, stderr }));
+	});
+}
+
+function parseSemver(text: string): [number, number, number] | undefined {
+	const match = text.match(/\bv?(\d+)\.(\d+)\.(\d+)\b/);
+	if (!match) {
+		return undefined;
+	}
+	return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(left: [number, number, number], right: [number, number, number]): number {
+	for (let index = 0; index < 3; index += 1) {
+		const diff = left[index] - right[index];
+		if (diff !== 0) {
+			return diff;
+		}
+	}
+	return 0;
+}
+
+function isHermesVersionSupported(versionText: string): boolean {
+	const version = parseSemver(versionText);
+	const minimum = parseSemver(MIN_HERMES_GOOD_DISPLAY_VERSION);
+	return Boolean(version && minimum && compareSemver(version, minimum) >= 0);
+}
+
+function runInstallCommand(options: {
+	sessionId: string;
+	source: NonNullable<AgentOnboardEvent["source"]>;
+	command: string;
+	emit: EmitOnboardEvent;
+	startMessage: string;
+	doneMessage: string;
+}): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let output = "";
+		options.emit({ sessionId: options.sessionId, type: "status", source: options.source, message: options.startMessage });
+		const child = spawn(shellPath(), ["-lc", options.command], {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
+		});
+		const handleOutput = (chunk: Buffer) => {
+			const text = stripAnsi(chunk.toString("utf8"));
+			output += text;
+			const line = text.trim().split(/\r?\n/).filter(Boolean).at(-1);
+			if (line) {
+				options.emit({ sessionId: options.sessionId, type: "status", source: options.source, message: line.slice(0, 300) });
+			}
+		};
+		child.stdout.on("data", handleOutput);
+		child.stderr.on("data", handleOutput);
+		child.on("error", reject);
+		child.on("close", (code) => {
+			if (code === 0) {
+				options.emit({ sessionId: options.sessionId, type: "done", source: options.source, message: options.doneMessage });
+				resolve();
+				return;
+			}
+			const message = output.trim().split(/\r?\n/).filter(Boolean).slice(-8).join("\n") || `${options.command} exited with code ${String(code)}`;
+			options.emit({ sessionId: options.sessionId, type: "error", source: options.source, message });
+			reject(new Error(message));
+		});
+	});
+}
+
+export function deriveHermesApiServerPort(profileId: string): number {
+	let hash = 0;
+	for (const char of profileId) {
+		hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+	}
+	return 18_000 + (hash % 20_000);
+}
+
+export function toHermesInferenceProvider(provider: string): string {
+	const normalized = provider.trim();
+	const map: Record<string, string> = {
+		google: "gemini",
+		zai: "zai",
+		"kimi-coding": "kimi-coding",
+		"kimi-coding-cn": "kimi-coding-cn",
+	};
+	return map[normalized] ?? normalized;
 }
 
 export function getProviderCredentialEnv(provider: string): string | undefined {
@@ -125,8 +244,13 @@ export function loadModelOptions(homeDir: string): DesktopModelOption[] {
 
 export function loadModelCatalog(homeDir: string): Pick<AgentCreationSession, "models" | "providers"> {
 	const models = loadModelOptions(homeDir);
-	const providers = [...new Set(models.map((model) => model.provider))].sort((left, right) => left.localeCompare(right));
+	const providers = providersFromModels(models);
 	return { models, providers };
+}
+
+export function loadHermesModelCatalog(homeDir: string): Pick<AgentCreationSession, "models" | "providers"> {
+	const models = mergeModelOptions(loadModelOptions(homeDir), HERMES_MODEL_OPTIONS);
+	return { models, providers: providersFromModels(models) };
 }
 
 const FALLBACK_CODEX_MODELS: DesktopCodexModelOption[] = [
@@ -270,6 +394,108 @@ export async function checkCodexEnvironmentForDesktop(): Promise<DesktopCodexDia
 			error: diagnostic.authenticated ? undefined : diagnostic.error || (error instanceof Error ? error.message : String(error)),
 		};
 	}
+}
+
+export async function installCodexForDesktop(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+): Promise<DesktopCodexDiagnostic> {
+	const npmCheck = await runLoginShellCommand("command -v npm");
+	let command = CODEX_INSTALL_COMMAND;
+	if (npmCheck.code !== 0) {
+		const brewCheck = await runLoginShellCommand("command -v brew");
+		if (brewCheck.code !== 0) {
+			const diagnostic: DesktopCodexDiagnostic = {
+				installed: false,
+				authenticated: false,
+				error: "未检测到 npm 或 Homebrew，无法自动安装 Codex CLI。请先安装 Node.js/npm。",
+				loginCommand: ["codex", "login"],
+			};
+			emit({ sessionId, type: "error", source: "codex-install", message: diagnostic.error });
+			return diagnostic;
+		}
+		command = CODEX_INSTALL_WITH_NODE_COMMAND;
+	}
+	await runInstallCommand({
+		sessionId,
+		source: "codex-install",
+		command,
+		emit,
+		startMessage: "正在安装 Codex CLI...",
+		doneMessage: "Codex CLI 已安装。",
+	});
+	return checkCodexEnvironmentForDesktop();
+}
+
+export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntimeDiagnostic> {
+	const found = await runLoginShellCommand("command -v hermes");
+	const executablePath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
+	if (found.code !== 0 || !executablePath) {
+		return {
+			installed: false,
+			ready: false,
+			error: "hermes command not found in login shell PATH",
+			installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
+		};
+	}
+	const version = await runLoginShellCommand("hermes --version");
+	const versionText = stripAnsi(version.stdout || version.stderr).trim();
+	if (version.code === 0 && !isHermesVersionSupported(versionText)) {
+		return {
+			installed: true,
+			ready: false,
+			executablePath,
+			version: versionText,
+			error: `Hermes ${MIN_HERMES_GOOD_DISPLAY_VERSION}+ required for structured Pie display. Run hermes update.`,
+			installCommand: ["bash", "-lc", "hermes update"],
+		};
+	}
+	return {
+		installed: version.code === 0,
+		ready: version.code === 0,
+		executablePath,
+		version: versionText,
+		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "Hermes CLI exists but did not run successfully.",
+		installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
+	};
+}
+
+export async function installHermesForDesktop(
+	sessionId: string,
+	emit: EmitOnboardEvent,
+): Promise<DesktopRuntimeDiagnostic> {
+	const existing = await checkHermesEnvironmentForDesktop();
+	if (existing.installed && !existing.ready) {
+		await runInstallCommand({
+			sessionId,
+			source: "hermes-install",
+			command: "hermes update",
+			emit,
+			startMessage: `正在升级 Hermes 到 ${MIN_HERMES_GOOD_DISPLAY_VERSION}+...`,
+			doneMessage: "Hermes 已升级。",
+		});
+		return checkHermesEnvironmentForDesktop();
+	}
+	const curlCheck = await runLoginShellCommand("command -v curl");
+	if (curlCheck.code !== 0) {
+		const diagnostic: DesktopRuntimeDiagnostic = {
+			installed: false,
+			ready: false,
+			error: "未检测到 curl，无法运行 Hermes 官方安装脚本。",
+			installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
+		};
+		emit({ sessionId, type: "error", source: "hermes-install", message: diagnostic.error });
+		return diagnostic;
+	}
+	await runInstallCommand({
+		sessionId,
+		source: "hermes-install",
+		command: HERMES_INSTALL_COMMAND,
+		emit,
+		startMessage: "正在运行 Hermes 官方安装器...",
+		doneMessage: "Hermes 已安装。",
+	});
+	return checkHermesEnvironmentForDesktop();
 }
 
 let codexLoginPromise: Promise<DesktopCodexDiagnostic> | undefined;
@@ -527,6 +753,7 @@ export async function createWechatLoginForSession(
 export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const profileId = draft.sessionId;
 	const homeDir = getProfileHomeDir(profileId);
+	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
 	const channels = Array.from(new Set(draft.channels)).filter(
 		(channel) =>
 			channel === "feishu" ||
@@ -563,11 +790,16 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	const exModel = getProfileModel(ex);
 
 	const codexModels = draft.framework === "codex" ? loadCodexModelCatalog() : [];
-	const provider = draft.framework === "codex" ? "codex-cli" : draft.provider.trim();
+	const provider =
+		draft.framework === "codex"
+			? "codex-cli"
+			: draft.provider.trim();
 	const requestedModel = draft.model.trim();
 	const model =
 		draft.framework === "codex"
 			? codexModels.find((item) => item.id === requestedModel)?.id ?? codexModels[0]?.id ?? "gpt-5.5"
+			: draft.framework === "hermes"
+				? requestedModel
 			: requestedModel;
 	const apiKey = draft.apiKey?.trim();
 	if (provider === "pie-openai-proxy") {
@@ -593,6 +825,17 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 							webSearchMode: draft.codexWebSearchMode ?? "cached",
 						},
 					}
+				: draft.framework === "hermes"
+					? {
+								config: {
+									endpoint: `http://127.0.0.1:${hermesApiServerPort}`,
+									runPath: "/v1/runs",
+									healthPath: "/health",
+									command: "hermes",
+								args: ["gateway", "run", "--replace"],
+								managed: true,
+							},
+						}
 				: {}),
 			model: {
 				provider,
@@ -602,6 +845,8 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 				debug: exModel?.debug ?? false,
 				resumeSessions: draft.framework === "ousia",
 				outputToolCallsToIm: true,
+				outputToolCallImMaxLength: 60,
+				outputThinkingToIm: false,
 			},
 		},
 		channels: [
@@ -612,6 +857,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 						enabled: true,
 						appId: draft.feishu.appId.trim(),
 						brand: draft.feishu.brand,
+						messageOutputMode: "bubble" as const,
 					}]
 				: []),
 			...(channels.includes("wechat")
@@ -628,9 +874,6 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 						kind: "slack" as const,
 						id: "slack",
 						enabled: true,
-						teamId: draft.slack?.teamId?.trim() || undefined,
-						appId: draft.slack?.appId?.trim() || undefined,
-						botUserId: draft.slack?.botUserId?.trim() || undefined,
 					}]
 				: []),
 			...(channels.includes("discord")
@@ -661,15 +904,39 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 	if (channels.includes("slack") && draft.slack) {
 		savedEnv.SLACK_BOT_TOKEN = draft.slack.botToken.trim();
 		savedEnv.SLACK_APP_TOKEN = draft.slack.appToken.trim();
-		if (draft.slack.signingSecret?.trim()) {
-			savedEnv.SLACK_SIGNING_SECRET = draft.slack.signingSecret.trim();
-		}
 	}
 	if (channels.includes("discord") && draft.discord) {
 		savedEnv.DISCORD_BOT_TOKEN = draft.discord.botToken.trim();
 	}
 	if (channels.includes("telegram") && draft.telegram) {
 		savedEnv.TELEGRAM_BOT_TOKEN = draft.telegram.botToken.trim();
+	}
+	if (draft.framework === "hermes") {
+		const hermesProvider = toHermesInferenceProvider(provider);
+		savedEnv.API_SERVER_ENABLED = "true";
+		savedEnv.API_SERVER_HOST = "127.0.0.1";
+		savedEnv.API_SERVER_PORT = String(hermesApiServerPort);
+		savedEnv.API_SERVER_KEY = randomBytes(32).toString("hex");
+		savedEnv.GATEWAY_ALLOW_ALL_USERS = "true";
+		savedEnv.HERMES_INFERENCE_PROVIDER = hermesProvider;
+		savedEnv.HERMES_INFERENCE_MODEL = model;
+		const hermesHome = join(homeDir, "hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(
+			join(hermesHome, "config.yaml"),
+			[
+				"model:",
+				`  provider: ${hermesProvider}`,
+				`  default: ${model}`,
+				"platforms:",
+				"  api_server:",
+				"    enabled: true",
+				"    host: 127.0.0.1",
+				`    port: ${hermesApiServerPort}`,
+				"",
+			].join("\n"),
+			"utf8",
+		);
 	}
 	const envKey = getProviderCredentialEnv(provider);
 	if (envKey && apiKey) {

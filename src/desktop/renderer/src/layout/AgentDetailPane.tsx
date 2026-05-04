@@ -7,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { AgentDetailView } from "../features/agents/AgentDetailView";
 import { CreateAgentView } from "../features/agents/CreateAgentView";
 import { GlobalSettingsView } from "../features/settings/GlobalSettingsView";
+import { useI18n } from "../lib/i18n";
 
 const detailPaneMotion = {
 	initial: { opacity: 0, scale: 1.01, filter: "blur(5px)" },
@@ -42,6 +43,7 @@ export function AgentDetailPane({
 	onCreated: (agent: AgentDetails) => void;
 	onDeleted: () => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	return (
 		<div className="agent-detail-corner relative z-10 ml-1 flex flex-1 flex-col overflow-hidden bg-white shadow-[0_4px_24px_rgba(0,0,0,0.04)]">
 			<div className="relative min-h-0 flex-1 overflow-hidden bg-white">
@@ -67,11 +69,11 @@ export function AgentDetailPane({
 							<div className="no-drag flex flex-col items-center">
 								<AppIcon IconComponent={SmileCircleBoldDuotone} className="mb-4 h-12 w-12 text-[var(--lime-10)]" />
 								<p className="text-sm font-medium text-foreground">
-									{isLoadingAgents ? "正在加载 Agent..." : hasAgents ? "选择一个 Agent" : "尚未创建 Agent"}
+									{isLoadingAgents ? t("loadingAgents") : hasAgents ? t("selectAgent") : t("noAgents")}
 								</p>
 								{!isLoadingAgents && !hasAgents && (
 									<Button className="mt-5 h-9 rounded-4xl px-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]" onClick={onCreateAgent}>
-										新建 Agent
+										{t("newAgent")}
 									</Button>
 								)}
 							</div>

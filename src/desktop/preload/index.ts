@@ -5,13 +5,17 @@ const api: PieDesktopApi = {
 	getSettings: () => ipcRenderer.invoke("settings:get"),
 	updateSettings: (draft: DesktopSettingsDraft) => ipcRenderer.invoke("settings:update", draft),
 	listAgents: () => ipcRenderer.invoke("agents:list"),
+	openAgentFromMenuBar: (id: string) => ipcRenderer.invoke("menu-bar:open-agent", id),
 	listBotAvatars: () => ipcRenderer.invoke("bot-avatars:list"),
 	downloadBotAvatar: (id: string) => ipcRenderer.invoke("bot-avatars:download", id),
 	uploadAgentAvatar: (id: string, upload: AgentAvatarUpload) => ipcRenderer.invoke("agents:avatar-upload", id, upload),
 	downloadAgentAvatar: (id: string) => ipcRenderer.invoke("agents:avatar-download", id),
 	beginAgentCreation: () => ipcRenderer.invoke("agents:create-begin"),
 	checkCodexEnvironment: () => ipcRenderer.invoke("agents:codex-diagnostic"),
+	installCodex: (sessionId: string) => ipcRenderer.invoke("agents:codex-install", sessionId),
 	openCodexLogin: (sessionId: string) => ipcRenderer.invoke("agents:codex-login", sessionId),
+	checkHermesEnvironment: () => ipcRenderer.invoke("agents:hermes-diagnostic"),
+	installHermes: (sessionId: string) => ipcRenderer.invoke("agents:hermes-install", sessionId),
 	createFeishuApp: (sessionId: string) => ipcRenderer.invoke("agents:create-feishu-app", sessionId),
 	createWechatLogin: (sessionId: string) => ipcRenderer.invoke("agents:create-wechat-login", sessionId),
 	syncFeishuAppProfile: (id: string) => ipcRenderer.invoke("agents:sync-feishu-app-profile", id),
@@ -49,6 +53,11 @@ const api: PieDesktopApi = {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentDeleteEvent) => callback(payload);
 		ipcRenderer.on("agents:delete-event", listener);
 		return () => ipcRenderer.removeListener("agents:delete-event", listener);
+	},
+	onSelectAgent: (callback: (agentId: string) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: string) => callback(payload);
+		ipcRenderer.on("agents:select", listener);
+		return () => ipcRenderer.removeListener("agents:select", listener);
 	},
 };
 

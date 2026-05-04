@@ -905,6 +905,8 @@ export async function runOnboard(argv: string[]): Promise<void> {
 
 	const resumeSessions = true;
 	const outputToolCallsToIm = false;
+	const outputToolCallImMaxLength = 60;
+	const outputThinkingToIm = false;
 
 	const credEnv = PROVIDER_CREDENTIAL_ENV[provider];
 	const existingProviderKey =
@@ -961,6 +963,7 @@ export async function runOnboard(argv: string[]): Promise<void> {
 			enabled: exCh?.enabled ?? true,
 			appId: feishuApp.appId,
 			brand: feishuApp.brand,
+			messageOutputMode: exCh?.messageOutputMode ?? "bubble",
 			...(feishuApp.encryptKey ? { encryptKey: feishuApp.encryptKey } : {}),
 			...(feishuApp.verificationToken ? { verificationToken: feishuApp.verificationToken } : {}),
 		},
@@ -972,6 +975,8 @@ export async function runOnboard(argv: string[]): Promise<void> {
 			debug: exModel?.debug ?? false,
 			resumeSessions,
 			outputToolCallsToIm,
+			outputToolCallImMaxLength,
+			outputThinkingToIm,
 		},
 	});
 
