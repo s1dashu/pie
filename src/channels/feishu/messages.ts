@@ -28,10 +28,11 @@ export function sanitizePathSegment(value: string): string {
 
 export function getConversationKey(event: LarkMessageEvent): string {
 	const threadId = event.message.thread_id?.trim();
+	const chatId = event.message.chat_id?.trim();
 	if (threadId) {
-		return `${event.message.chat_id}:${threadId}`;
+		return chatId ? `${chatId}:${threadId}` : threadId;
 	}
-	return event.message.chat_id;
+	return chatId || event.message.message_id;
 }
 
 export function wasSentByBot(event: LarkMessageEvent, botOpenId: string | undefined): boolean {

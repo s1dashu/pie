@@ -14,7 +14,6 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 
 - 根目录 `pie` 是客户端产品 runtime：desktop、CLI/onboard、channel adapters、profile/config/agent home 管理。
 - 当前主要开发对象是桌面端；CLI/onboard、channel adapters 等能力服务于桌面端的 Agent 客户端体验。
-- `pi-feishu/` 是独立子包，定位为纯 Feishu/Lark channel package；不要把根目录产品能力写进子包文档。
 - 当前完成度较高的 channel 仍是 `feishu`；`wechat` 已有扫码登录、轮询和收发消息实现，但仍按早期集成处理；`slack/discord/telegram` 已有 adapter 和手动凭证入口，但首发前不要描述为稳定支持。
 - 当前真正稳定运行的 backend/framework 是 Pi / `pi-coding-agent`，默认创建新 Agent 时选择 Pi。Ousia 是独立 framework：复用 `pi-coding-agent` session，但拥有自己的 Ousia system prompt、tools 配置、Task Engine 和 `/agent/turn` gateway。Codex、Hermes 已有 Pie 侧 adapter 雏形；Hermes 还可由 Pie 代管本地 gateway service，但仍按早期接入处理；Openclaw 只是架构预留。
 - Task Engine 的 scheduled task、runtime heartbeat 仍偏原型；不要描述为稳定产品能力。
@@ -145,7 +144,6 @@ Codex 的 permission/plan approval 后续应接入 IM 交互。Codex app-server 
 
 - 根目录：`npm install`、`npm run check`、`npm run start`、`npm run build`
 - Desktop：`npm run desktop:dev`、`npm run desktop:build`
-- pi-feishu 子包：`cd pi-feishu && npm install && npm run check`
 
 修改代码后至少跑 `npm run check`。涉及构建入口、desktop、runtime 时也跑对应 build。
 

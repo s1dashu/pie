@@ -113,9 +113,7 @@ async function deliverAgentTask(params: {
 				...(ctx.gatewaySecret
 					? {
 							"x-pie-runtime-secret": ctx.gatewaySecret,
-							"x-pi-feishu-secret": ctx.gatewaySecret,
 							"x-pie-secret": ctx.gatewaySecret,
-							"x-momo-secret": ctx.gatewaySecret,
 						}
 					: {}),
 			},

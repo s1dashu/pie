@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentDetails, AgentLogEntry } from "../../../shared/types";
 import { cn } from "../../lib/utils";
 
@@ -130,43 +130,60 @@ export function TerminalLog({ agent, tone = "light" }: { agent: AgentDetails; to
 			)}
 		>
 			{lines.map((line) => (
-				<div key={line.id} className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
-					<span className={cn(
-						"text-right font-medium",
-						tone === "dark"
-							? line.stream === "stderr" ? "text-red-300" : line.stream === "system" ? "text-slate-500" : "text-lime-300"
-							: line.stream === "stderr" ? "text-[var(--red-11)]" : line.stream === "system" ? "text-[var(--slate-10)]" : "text-[var(--lime-11)]",
-					)}>
-						{line.stream === "stderr" ? "err" : line.stream === "system" ? "sys" : "out"}
-					</span>
-					<span className={cn("font-normal tabular-nums", tone === "dark" ? "text-slate-500" : "text-[var(--slate-9)]")}>{new Date(line.timestamp).toLocaleTimeString()}</span>
-					<span className={cn(
-						"min-w-0 whitespace-pre-wrap break-words text-pretty",
-						tone === "dark"
-							? line.stream === "stderr" ? "text-red-200" : line.stream === "system" ? "text-slate-400" : "text-slate-100"
-							: line.stream === "stderr" ? "text-[var(--red-12)]" : line.stream === "system" ? "text-[var(--slate-11)]" : "text-[var(--slate-12)]",
-					)}>
-						{line.text}
-					</span>
-				</div>
+				<LogLine key={line.id} line={line} tone={tone} />
 			))}
 		</div>
 	);
 }
+
+const LogLine = memo(function LogLine({ line, tone }: { line: AgentLogEntry; tone: "light" | "dark" }): JSX.Element {
+	return (
+		<div className="grid grid-cols-[3ch_9ch_minmax(0,1fr)] gap-x-2">
+			<span className={cn(
+				"text-right font-medium",
+				tone === "dark"
+					? line.stream === "stderr" ? "text-red-300" : line.stream === "system" ? "text-slate-500" : "text-lime-300"
+					: line.stream === "stderr" ? "text-[var(--red-11)]" : line.stream === "system" ? "text-[var(--slate-10)]" : "text-[var(--lime-11)]",
+			)}>
+				{line.stream === "stderr" ? "err" : line.stream === "system" ? "sys" : "out"}
+			</span>
+			<span className={cn("font-normal tabular-nums", tone === "dark" ? "text-slate-500" : "text-[var(--slate-9)]")}>{new Date(line.timestamp).toLocaleTimeString()}</span>
+			<span className={cn(
+				"min-w-0 whitespace-pre-wrap break-words text-pretty",
+				tone === "dark"
+					? line.stream === "stderr" ? "text-red-200" : line.stream === "system" ? "text-slate-400" : "text-slate-100"
+					: line.stream === "stderr" ? "text-[var(--red-12)]" : line.stream === "system" ? "text-[var(--slate-11)]" : "text-[var(--slate-12)]",
+			)}>
+				{line.text}
+			</span>
+		</div>
+	);
+});
 
 function agentLogEntryKey(entry: AgentLogEntry): string {
 	return `${entry.agentId}:${entry.id}:${entry.timestamp}`;
 }
 
 function mergeAgentLogs(current: AgentLogEntry[], entries: AgentLogEntry[]): AgentLogEntry[] {
-	const byKey = new Map<string, AgentLogEntry>();
-	for (const line of current) {
-		byKey.set(agentLogEntryKey(line), line);
+	const merged = current.slice();
+	const indexByKey = new Map<string, number>();
+	for (let index = 0; index < merged.length; index += 1) {
+		indexByKey.set(agentLogEntryKey(merged[index]!), index);
 	}
+	let appended = false;
 	for (const entry of entries) {
-		byKey.set(agentLogEntryKey(entry), entry);
+		const key = agentLogEntryKey(entry);
+		const index = indexByKey.get(key);
+		if (index === undefined) {
+			indexByKey.set(key, merged.length);
+			merged.push(entry);
+			appended = true;
+			continue;
+		}
+		merged[index] = entry;
 	}
-	return [...byKey.values()].sort(compareAgentLogEntries).slice(-1000);
+	const sorted = appended ? merged.sort(compareAgentLogEntries) : merged;
+	return sorted.length > 1000 ? sorted.slice(-1000) : sorted;
 }
 
 function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {

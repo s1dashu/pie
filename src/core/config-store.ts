@@ -365,6 +365,7 @@ export function getProfileModel(profile: AgentProfile | undefined): ModelProfile
 	return profile?.backend.kind === "ousia" ||
 		profile?.backend.kind === "pi" ||
 		profile?.backend.kind === "codex" ||
+		profile?.backend.kind === "openclaw" ||
 		profile?.backend.kind === "hermes"
 		? profile.backend.model
 		: undefined;

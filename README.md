@@ -4,8 +4,6 @@ Pie is a personal Agent client product. It is not an agent framework name.
 
 The current runtime is built on `@mariozechner/pi-coding-agent`, with a desktop-first product direction and lightweight support for multiple future agent frameworks such as Pi, Ousia, Openclaw, Hermes, Claude Code, and Codex.
 
-`pi-feishu/` is a separate Feishu/Lark-only channel package.
-
 ## Current Status
 
 Pie has not shipped a first public release yet. The main development target is the desktop app; the CLI onboarding flow, channel adapters, runtime process, and framework integration support that desktop experience.
@@ -23,8 +21,6 @@ Channel status:
 1. **Feishu/Lark** is the most complete channel today.
 2. **WeChat** has an early integration with login, polling, message receive/send, and retry handling.
 3. **Slack**, **Discord**, and **Telegram** have adapter/config surfaces, but should still be treated as early or placeholder support before release.
-
-The previous memory palace / perception / cognition / motivation ontology has been removed. Future memory, knowledge, and plugin systems should be designed as product features instead of default filesystem assumptions.
 
 ## Product Shape
 
@@ -68,7 +64,6 @@ src/
       runtime/         Ousia task engine process and turn gateway
       task-engine/     Ousia Task Engine implementation
   desktop/             Electron desktop app
-pi-feishu/             standalone Feishu/Lark package
 ```
 
 ## Agent Home
@@ -193,6 +188,12 @@ Observability files are written under `<agent-home>/runtime/`, including task en
 
 ## Quick Start
 
+Requirements:
+
+1. Node.js 20+
+2. At least one model provider key
+3. Channel credentials for the channel you enable
+
 ```bash
 npm install
 npm run start:onboard
@@ -229,15 +230,13 @@ npm run check
 
 For runtime, build entrypoint, or desktop changes, also run the relevant build command.
 
-## Requirements
-
-1. Node.js 20+
-2. At least one model provider key
-3. Channel credentials for the channel you enable
-
 ## Security
 
 Pie executes tools and shell commands through the underlying agent runtime. Do not expose local gateway ports to the public internet without an explicit ingress, auth, and deployment design.
+
+## Release Hygiene
+
+Do not commit local profile state, provider keys, channel credentials, generated runtime files, or local Codex environment files. Keep secrets in profile-scoped `.env` files under `~/.pie/profiles/<profile-id>/`.
 
 ## License
 

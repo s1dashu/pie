@@ -50,5 +50,5 @@ export function getPackageVersion(): string {
 }
 
 export function getUserAgent(): string {
-	return `pi-feishu/${getPackageVersion()}`;
+	return `pie-feishu/${getPackageVersion()}`;
 }

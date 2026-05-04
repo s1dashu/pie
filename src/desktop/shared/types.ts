@@ -74,7 +74,7 @@ export interface AgentDetails extends AgentSummary {
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code" | "hermes";
+export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
@@ -168,6 +168,13 @@ export interface DesktopRuntimeDiagnostic {
 	installCommand?: string[];
 }
 
+export type DesktopManagedRuntimeKind = "hermes" | "openclaw" | "codex";
+
+export interface DesktopManagedRuntimeStatus extends DesktopRuntimeDiagnostic {
+	kind: DesktopManagedRuntimeKind;
+	label: string;
+}
+
 export interface DesktopModelCatalog {
 	models: DesktopModelOption[];
 	providers: string[];
@@ -189,6 +196,7 @@ export interface AgentCreationSession {
 	models: DesktopModelOption[];
 	providers: string[];
 	codexModels: DesktopCodexModelOption[];
+	openClawModels: DesktopModelOption[];
 }
 
 export interface BotAvatarOption {
@@ -262,6 +270,11 @@ export interface AgentDeleteEvent {
 	agentId: string;
 	step: AgentDeleteEventStep;
 	message: string;
+}
+
+export interface DesktopQuitEvent {
+	phase: "terminating-agents";
+	agentIds: string[];
 }
 
 export interface AgentLogEntry {
@@ -349,6 +362,11 @@ export interface PieDesktopApi {
 	openCodexLogin(sessionId: string): Promise<DesktopCodexDiagnostic>;
 	checkHermesEnvironment(): Promise<DesktopRuntimeDiagnostic>;
 	installHermes(sessionId: string): Promise<DesktopRuntimeDiagnostic>;
+	cancelHermesInstall(sessionId: string): Promise<void>;
+	getOpenClawModelCatalog(): Promise<DesktopModelCatalog>;
+	getManagedRuntimeStatus(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus>;
+	upgradeManagedRuntime(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus>;
+	uninstallManagedRuntime(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
 	createWechatLogin(sessionId: string): Promise<DesktopWechatCredentials>;
 	syncFeishuAppProfile(id: string): Promise<AgentDetails>;
@@ -374,5 +392,6 @@ export interface PieDesktopApi {
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;
 	onAgentDeleteEvent(callback: (event: AgentDeleteEvent) => void): () => void;
+	onDesktopQuitEvent(callback: (event: DesktopQuitEvent) => void): () => void;
 	onSelectAgent(callback: (agentId: string) => void): () => void;
 }

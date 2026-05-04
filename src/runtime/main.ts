@@ -132,11 +132,13 @@ export async function runPie(): Promise<number> {
 				gatewaySecret,
 			})
 		: undefined;
+	const profile = getStoredProfile(loadConfigStore());
 	const backendService = backend.createManagedServiceManager
 		? backend.createManagedServiceManager({
 				homeDir,
 				environment,
-				config: getStoredProfile(loadConfigStore())?.backend.config,
+				config: profile?.backend.config,
+				model: profile?.backend.model,
 			})
 		: undefined;
 	const turnGateway = framework.createTurnGatewayServer

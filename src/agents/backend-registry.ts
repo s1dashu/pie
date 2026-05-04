@@ -4,9 +4,11 @@ import type { AgentBackendKind } from "../core/config-store.js";
 import { resolveAgentFrameworkRuntime, type AgentFrameworkRuntime } from "../core/backend-framework.js";
 import { codexCliAgentBackendAdapter } from "./adapters/codex-cli.js";
 import { hermesAgentBackendAdapter } from "./adapters/hermes.js";
+import { openClawAgentBackendAdapter } from "./adapters/openclaw.js";
 import { ousiaAgentBackendAdapter, piAgentBackendAdapter } from "./adapters/pi.js";
 import type { AgentBackendManagedServiceManagerFactory } from "./backend-service.js";
 import { createHermesServiceProcessManager } from "./backend-services/hermes.js";
+import { createOpenClawServiceProcessManager } from "./backend-services/openclaw.js";
 import type { AgentBackendAdapter } from "./types.js";
 
 export interface AgentSkillSourceRegistration {
@@ -62,6 +64,14 @@ const AGENT_BACKEND_DEFINITIONS: Partial<Record<AgentBackendKind, AgentBackendDe
 		createManagedServiceManager: createHermesServiceProcessManager,
 		skillSources: [globalSkillSource("agent-type", "Hermes Skills", ".hermes")],
 	},
+	openclaw: {
+		kind: "openclaw",
+		label: "OpenClaw",
+		adapter: openClawAgentBackendAdapter,
+		frameworkRuntime: resolveAgentFrameworkRuntime("openclaw"),
+		createManagedServiceManager: createOpenClawServiceProcessManager,
+		skillSources: [globalSkillSource("agent-type", "OpenClaw Skills", ".openclaw")],
+	},
 };
 
 export function getAgentBackendDefinition(kind: AgentBackendKind): AgentBackendDefinition {
@@ -70,6 +80,10 @@ export function getAgentBackendDefinition(kind: AgentBackendKind): AgentBackendD
 		throw new Error(`Agent backend "${kind}" is not supported by this Pie runtime.`);
 	}
 	return definition;
+}
+
+export function getAgentBackendLabel(kind: AgentBackendKind): string {
+	return getAgentBackendDefinition(kind).label;
 }
 
 export function listAgentBackendDefinitions(): AgentBackendDefinition[] {

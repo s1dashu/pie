@@ -42,13 +42,28 @@ const channelOptions = [
 
 const manualChannelKinds: DesktopChannelKind[] = ["discord", "telegram", "slack"];
 const controlSurfaceClass = "border-transparent bg-[var(--slate-2)] hover:border-transparent focus-visible:border-transparent";
-type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model";
+type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model" | "runtime";
+type InstallStepTone = "active" | "done" | "error";
+type InstallStep = { id: number; message: string; tone: InstallStepTone };
+
+function appendInstallStep(steps: InstallStep[], message: string, tone: InstallStepTone): InstallStep[] {
+	const cleanMessage = message.trim();
+	if (!cleanMessage) {
+		return steps;
+	}
+	const lastStep = steps.at(-1);
+	if (lastStep?.message === cleanMessage) {
+		return [...steps.slice(0, -1), { ...lastStep, tone }];
+	}
+	return [...steps, { id: Date.now() + steps.length, message: cleanMessage, tone }].slice(-6);
+}
 
 const frameworkOptions: Array<{ value: DesktopAgentFramework; label: string; enabled: boolean }> = [
 	{ value: "pi", label: "Pi", enabled: true },
 	{ value: "codex", label: "Codex", enabled: true },
 	{ value: "ousia", label: "Ousia", enabled: true },
 	{ value: "hermes", label: "Hermes", enabled: true },
+	{ value: "openclaw", label: "OpenClaw", enabled: true },
 ];
 
 const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: string }> = [
@@ -87,6 +102,13 @@ const frameworkModelConfig = {
 		showsCodexWebSearch: false,
 	},
 	hermes: {
+		usesCodexCli: false,
+		showsProvider: true,
+		showsApiKey: true,
+		showsCodexAccessMode: false,
+		showsCodexWebSearch: false,
+	},
+	openclaw: {
 		usesCodexCli: false,
 		showsProvider: true,
 		showsApiKey: true,
@@ -133,6 +155,8 @@ export function CreateAgentView({
 	const [codexLoginStatus, setCodexLoginStatus] = useState("");
 	const [codexLoginUrl, setCodexLoginUrl] = useState("");
 	const [hermesInstallStatus, setHermesInstallStatus] = useState("");
+	const [hermesInstallSteps, setHermesInstallSteps] = useState<InstallStep[]>([]);
+	const [hermesRuntimeReady, setHermesRuntimeReady] = useState(false);
 	const [framework, setFramework] = useState<DesktopAgentFramework>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
@@ -159,6 +183,14 @@ export function CreateAgentView({
 		enabled: framework === "hermes",
 		refetchOnWindowFocus: false,
 		retry: false,
+	});
+	const openClawCatalog = useQuery({
+		queryKey: ["openclaw-model-catalog"],
+		queryFn: () => window.pie.getOpenClawModelCatalog(),
+		enabled: framework === "openclaw",
+		refetchOnWindowFocus: false,
+		retry: false,
+		staleTime: 5 * 60_000,
 	});
 	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
 		setFeishu(created);
@@ -198,10 +230,8 @@ export function CreateAgentView({
 		onSuccess: (created) => {
 			setSession(created);
 			setName(created.name);
-			const defaultProvider = created.providers.includes("kimi-coding") ? "kimi-coding" : created.providers[0] ?? "kimi-coding";
-			const defaultModel = defaultProvider === "kimi-coding"
-				? "k2p6"
-				: created.models.find((item) => item.provider === defaultProvider)?.id ?? "";
+			const defaultProvider = created.providers[0] ?? "openai";
+			const defaultModel = created.models.find((item) => item.provider === defaultProvider)?.id ?? "";
 			setProvider(defaultProvider);
 			setModel(defaultModel);
 			void prefillProviderApiKey(defaultProvider, created.profileId, true);
@@ -275,7 +305,7 @@ export function CreateAgentView({
 			if (framework === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
 				throw new Error(t("codexNeedInstalled"));
 			}
-			if (framework === "hermes" && !hermesDiagnostic.data?.ready) {
+			if (framework === "hermes" && !isHermesRuntimeReady) {
 				throw new Error(t("hermesNeedInstalled"));
 			}
 			return window.pie.completeAgentCreation({
@@ -389,11 +419,38 @@ export function CreateAgentView({
 				throw new Error(t("creationNotInitialized"));
 			}
 			setHermesInstallStatus(t("hermesInstalling"));
+			setHermesInstallSteps([{ id: Date.now(), message: t("hermesPreparingInstall"), tone: "active" }]);
 			return window.pie.installHermes(session.sessionId);
 		},
 		onSuccess: async (diagnostic) => {
-			await hermesDiagnostic.refetch();
-			setHermesInstallStatus(diagnostic.ready ? t("hermesInstallDone") : diagnostic.error || t("hermesInstallFirst"));
+			const refreshed = await hermesDiagnostic.refetch();
+			const ready = diagnostic.ready || refreshed.data?.ready === true;
+			setHermesRuntimeReady(ready);
+			const message = ready ? t("hermesInstallDone") : diagnostic.error || refreshed.data?.error || t("hermesInstallFirst");
+			setHermesInstallStatus(message);
+			setHermesInstallSteps((steps) => appendInstallStep(steps, message, ready ? "done" : "error"));
+		},
+		onError: (err: Error) => {
+			setHermesInstallSteps((steps) => appendInstallStep(steps, err.message, "error"));
+			if (!err.message.includes(t("hermesInstallCancelled"))) {
+				onError(err.message);
+			}
+		},
+	});
+	const cancelHermesInstall = useMutation({
+		mutationFn: () => {
+			if (!session) {
+				throw new Error(t("creationNotInitialized"));
+			}
+			setHermesInstallStatus(t("hermesCancelingInstall"));
+			setHermesInstallSteps((steps) => appendInstallStep(steps, t("hermesCancelingInstall"), "active"));
+			return window.pie.cancelHermesInstall(session.sessionId);
+		},
+		onSuccess: () => {
+			setHermesRuntimeReady(false);
+			setHermesInstallStatus(t("hermesInstallCancelled"));
+			setHermesInstallSteps((steps) => appendInstallStep(steps, t("hermesInstallCancelled"), "error"));
+			void hermesDiagnostic.refetch();
 		},
 		onError: (err: Error) => onError(err.message),
 	});
@@ -407,6 +464,31 @@ export function CreateAgentView({
 			setAvatarId(botAvatars.data[0].id);
 		}
 	}, [avatarId, botAvatars.data, channels]);
+
+	useEffect(() => {
+		if (framework === "hermes" && hermesDiagnostic.data?.ready) {
+			setHermesRuntimeReady(true);
+		}
+	}, [framework, hermesDiagnostic.data?.ready]);
+
+	useEffect(() => {
+		if (framework !== "openclaw") {
+			return;
+		}
+		const openClawModels = openClawCatalog.data?.models ?? [];
+		if (!openClawModels.length) {
+			return;
+		}
+		const currentStillAvailable = openClawModels.some((item) => item.provider === provider && item.id === model);
+		if (currentStillAvailable) {
+			return;
+		}
+		const openClawProviders = providersFromModels(openClawModels);
+		const defaultProvider = openClawProviders.includes("kimi-coding") ? "kimi-coding" : openClawProviders[0] ?? "kimi-coding";
+		setProvider(defaultProvider);
+		setModel(openClawModels.find((item) => item.provider === defaultProvider)?.id ?? openClawModels[0]?.id ?? "");
+		void prefillProviderApiKey(defaultProvider, session?.profileId, true);
+	}, [framework, model, openClawCatalog.data?.models, provider, session?.profileId]);
 
 	useEffect(() => {
 		return window.pie.onAgentOnboardEvent((event) => {
@@ -428,6 +510,12 @@ export function CreateAgentView({
 			if (event.source === "hermes-install") {
 				if (event.message) {
 					setHermesInstallStatus(event.message);
+					setHermesInstallSteps((steps) =>
+						appendInstallStep(steps, event.message ?? "", event.type === "error" ? "error" : event.type === "done" ? "done" : "active"),
+					);
+					if (event.type === "done") {
+						setHermesRuntimeReady(true);
+					}
 				}
 				if (event.type === "done" || event.type === "error") {
 					void queryClient.invalidateQueries({ queryKey: ["hermes-diagnostic"] });
@@ -466,6 +554,8 @@ export function CreateAgentView({
 	const usesCodexCli = modelConfig.usesCodexCli;
 	const activeModelOptions = framework === "hermes"
 		? mergeModelOptions(session?.models ?? [], HERMES_MODEL_OPTIONS)
+		: framework === "openclaw"
+			? openClawCatalog.data?.models ?? session?.openClawModels ?? []
 		: session?.models ?? [];
 	const modelsForProvider = activeModelOptions.filter((item) => item.provider === provider);
 	const providers = activeModelOptions.length ? providersFromModels(activeModelOptions) : [provider];
@@ -488,6 +578,7 @@ export function CreateAgentView({
 	};
 	const updateFrameworkSelection = (nextFramework: DesktopAgentFramework) => {
 		setFramework(nextFramework);
+		setHermesRuntimeReady(nextFramework === "hermes" && hermesDiagnostic.data?.ready === true);
 		if (nextFramework === "codex") {
 			const defaultCodexModel = session?.codexModels[0];
 			setProvider("codex-cli");
@@ -508,12 +599,20 @@ export function CreateAgentView({
 			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
 			return;
 		}
-		if (provider === "codex-cli") {
-			const defaultProvider = session?.providers.includes("kimi-coding") ? "kimi-coding" : session?.providers[0] ?? "kimi-coding";
+		if (nextFramework === "openclaw") {
+			const openClawModels = openClawCatalog.data?.models ?? session?.openClawModels ?? [];
+			const openClawProviders = providersFromModels(openClawModels);
+			const defaultProvider = openClawProviders.includes("kimi-coding") ? "kimi-coding" : openClawProviders[0] ?? "kimi-coding";
 			setProvider(defaultProvider);
-			setModel(defaultProvider === "kimi-coding"
-				? "k2p6"
-				: session?.models.find((item) => item.provider === defaultProvider)?.id ?? "");
+			setModel(openClawModels.find((item) => item.provider === defaultProvider)?.id ?? "");
+			setThinkingLevel("off");
+			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
+			return;
+		}
+		if (provider === "codex-cli") {
+			const defaultProvider = session?.providers[0] ?? "openai";
+			setProvider(defaultProvider);
+			setModel(session?.models.find((item) => item.provider === defaultProvider)?.id ?? "");
 			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
 		}
 	};
@@ -526,10 +625,13 @@ export function CreateAgentView({
 	const authPrompt = channels.includes("wechat")
 		? t("useWechatScan")
 		: t("useFeishuScan");
+	const isHermesRuntimeReady = framework === "hermes" && (hermesRuntimeReady || hermesDiagnostic.data?.ready === true);
+	const requiresRuntimeInstall = framework === "hermes" && !isHermesRuntimeReady;
 	const visibleSteps = createAgentStepFlow({
 		requiresIdentity,
 		requiresQrAuth,
 		requiresManualCredentials,
+		requiresRuntimeInstall: requiresRuntimeInstall || step === "runtime",
 	});
 	const stepDescription = {
 		config: t("chooseFrameworkAndChannel"),
@@ -537,6 +639,7 @@ export function CreateAgentView({
 		auth: t("authSelectedChannels"),
 		credentials: t("fillChannelCredentials"),
 		model: t("configureModelAndKey"),
+		runtime: t("installRuntimeDesc"),
 	}[step];
 	const stepTitle = {
 		config: t("chooseAgentType"),
@@ -544,6 +647,7 @@ export function CreateAgentView({
 		auth: t("scanAuth"),
 		credentials: t("connectChannel"),
 		model: t("chooseModel"),
+		runtime: t("installRuntime"),
 	}[step];
 	const handleNext = () => {
 		if (step === "config") {
@@ -576,13 +680,19 @@ export function CreateAgentView({
 			goToStep("model");
 			return;
 		}
+		if (step === "model" && requiresRuntimeInstall) {
+			goToStep("runtime");
+			return;
+		}
 		complete.mutate();
 	};
 	const nextDisabled = begin.isPending
 		|| !session
 		|| (step === "config" && !channels.length)
 		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
-		|| (step === "model" && (complete.isPending || installCodex.isPending || installHermes.isPending));
+		|| (step === "model" && framework === "openclaw" && openClawCatalog.isLoading)
+		|| (step === "model" && (complete.isPending || installCodex.isPending))
+		|| (step === "runtime" && (complete.isPending || installHermes.isPending || !isHermesRuntimeReady));
 	const currentStepIndex = visibleSteps.indexOf(step);
 
 	return (
@@ -609,7 +719,12 @@ export function CreateAgentView({
 							variant="unstyled"
 							size="inline"
 							className="no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]"
-							onClick={onCancel}
+							onClick={() => {
+								if (installHermes.isPending) {
+									cancelHermesInstall.mutate();
+								}
+								onCancel();
+							}}
 							aria-label={t("closeCreate")}
 						>
 							<HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-5" />
@@ -700,6 +815,22 @@ export function CreateAgentView({
 											setTelegramBotUsername={setTelegramBotUsername}
 										/>
 									</div>
+								) : step === "runtime" ? (
+									<HermesDiagnosticPanel
+										diagnostic={hermesDiagnostic.data}
+										isRuntimeReady={isHermesRuntimeReady}
+										isLoading={hermesDiagnostic.isFetching}
+										error={hermesDiagnostic.error instanceof Error ? hermesDiagnostic.error.message : undefined}
+										installStatus={hermesInstallStatus}
+										installSteps={hermesInstallSteps}
+										isInstalling={installHermes.isPending}
+										onInstall={() => installHermes.mutate()}
+										onCancelInstall={() => cancelHermesInstall.mutate()}
+										onRefresh={async () => {
+											const refreshed = await hermesDiagnostic.refetch();
+											setHermesRuntimeReady(refreshed.data?.ready === true);
+										}}
+									/>
 								) : (
 									<div className="space-y-6">
 										{channels.includes("feishu") && <FeishuSyncPreview feishu={feishu} />}
@@ -715,7 +846,12 @@ export function CreateAgentView({
 												</Field>
 											)}
 											<Field label={t("model")}>
-												{usesCodexCli && codexModels.length ? (
+												{framework === "openclaw" && openClawCatalog.isLoading ? (
+													<div className={cn("flex h-9 items-center rounded-md px-3 text-sm text-muted-foreground", controlSurfaceClass)}>
+														<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" />
+														{t("loadingCatalog")}
+													</div>
+												) : usesCodexCli && codexModels.length ? (
 													<Select value={model} onValueChange={updateCodexModelSelection}>
 														<SelectTrigger className={controlSurfaceClass}>
 															<SelectValue />
@@ -810,17 +946,6 @@ export function CreateAgentView({
 												)}
 											</>
 										)}
-										{framework === "hermes" && (
-											<HermesDiagnosticPanel
-												diagnostic={hermesDiagnostic.data}
-												isLoading={hermesDiagnostic.isFetching}
-												error={hermesDiagnostic.error instanceof Error ? hermesDiagnostic.error.message : undefined}
-												installStatus={hermesInstallStatus}
-												isInstalling={installHermes.isPending}
-												onInstall={() => installHermes.mutate()}
-												onRefresh={() => void hermesDiagnostic.refetch()}
-											/>
-										)}
 									</div>
 								)}
 							</div>
@@ -831,7 +956,16 @@ export function CreateAgentView({
 
 			<footer className={cn("no-drag flex shrink-0 items-center border-t border-foreground/5 px-8 py-5", step === "config" ? "justify-end" : "justify-between")}>
 				{step !== "config" && (
-					<Button variant="secondary" onClick={goBack} disabled={complete.isPending}>
+					<Button
+						variant="secondary"
+						onClick={() => {
+							if (installHermes.isPending) {
+								cancelHermesInstall.mutate();
+							}
+							goBack();
+						}}
+						disabled={complete.isPending}
+					>
 						{t("previous")}
 					</Button>
 				)}
@@ -844,6 +978,8 @@ export function CreateAgentView({
 									{t("creating")}
 								</>
 							) : step === "model" ? (
+								requiresRuntimeInstall ? t("next") : t("finishCreate")
+							) : step === "runtime" ? (
 								t("finishCreate")
 							) : (
 								t("next")
@@ -860,10 +996,12 @@ function createAgentStepFlow({
 	requiresIdentity,
 	requiresQrAuth,
 	requiresManualCredentials,
+	requiresRuntimeInstall,
 }: {
 	requiresIdentity: boolean;
 	requiresQrAuth: boolean;
 	requiresManualCredentials: boolean;
+	requiresRuntimeInstall: boolean;
 }): CreateAgentStep[] {
 	return [
 		"config",
@@ -871,6 +1009,7 @@ function createAgentStepFlow({
 		...(requiresQrAuth ? ["auth" as const] : []),
 		...(requiresManualCredentials ? ["credentials" as const] : []),
 		"model",
+		...(requiresRuntimeInstall ? ["runtime" as const] : []),
 	];
 }
 
@@ -1015,29 +1154,36 @@ function CodexDiagnosticPanel({
 
 function HermesDiagnosticPanel({
 	diagnostic,
+	isRuntimeReady,
 	isLoading,
 	error,
 	installStatus,
+	installSteps,
 	isInstalling,
 	onInstall,
+	onCancelInstall,
 	onRefresh,
 }: {
 	diagnostic: DesktopRuntimeDiagnostic | undefined;
+	isRuntimeReady: boolean;
 	isLoading: boolean;
 	error?: string;
 	installStatus?: string;
+	installSteps: InstallStep[];
 	isInstalling: boolean;
 	onInstall: () => void;
+	onCancelInstall: () => void;
 	onRefresh: () => void;
 }): JSX.Element {
 	const { t } = useI18n();
+	const ready = isRuntimeReady || diagnostic?.ready === true;
 	const status = error
 		? { label: t("hermesDiagnosticFailed"), tone: "text-[var(--red-11)]", detail: error }
+		: ready
+			? { label: t("hermesReady"), tone: "text-[var(--lime-11)]", detail: diagnostic?.version || t("hermesInstalled") }
 		: !diagnostic
 		? { label: isLoading ? t("hermesChecking") : t("hermesNotChecked"), tone: "text-muted-foreground", detail: t("hermesNeedInstalled") }
-		: diagnostic.ready
-			? { label: t("hermesReady"), tone: "text-[var(--lime-11)]", detail: diagnostic.version || t("hermesInstalled") }
-			: diagnostic.installed
+		: diagnostic.installed
 				? { label: t("hermesUpgradeRequired"), tone: "text-[var(--amber-11)]", detail: diagnostic.error || diagnostic.version || t("hermesUpgradeFirst") }
 			: { label: t("hermesMissing"), tone: "text-[var(--red-11)]", detail: diagnostic.error || t("hermesInstallFirst") };
 
@@ -1055,19 +1201,40 @@ function HermesDiagnosticPanel({
 					<Button
 						variant="secondary"
 						size="xs"
-						className="h-6 px-2.5 text-[11px] leading-4 font-medium text-[var(--slate-11)] hover:text-[var(--slate-12)]"
+						className="h-6 px-2.5 text-xs font-normal leading-none text-muted-foreground hover:text-[var(--slate-12)]"
 						onClick={onRefresh}
 						disabled={isLoading || isInstalling}
 					>
 						{isLoading ? t("hermesRefreshing") : t("hermesRefresh")}
 					</Button>
-					{!diagnostic?.ready && (
-						<Button onClick={onInstall} disabled={isInstalling}>
-							{isInstalling ? t("hermesInstalling") : t("hermesInstall")}
+					{!ready && (
+						<Button
+							variant={isInstalling ? "destructive" : "default"}
+							size="sm"
+							className="h-8 px-3 text-xs font-medium"
+							onClick={isInstalling ? onCancelInstall : onInstall}
+						>
+							{isInstalling ? t("cancelInstall") : t("hermesInstall")}
 						</Button>
 					)}
 				</div>
 			</div>
+			{installSteps.length > 0 && (
+				<div className="mt-3 space-y-1.5 rounded-xl bg-white/70 p-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+					{installSteps.map((step, index) => {
+						const isLatest = index === installSteps.length - 1;
+						const dotClass = step.tone === "error" ? "bg-[var(--red-9)]" : "bg-[var(--lime-9)]";
+						return (
+							<div key={step.id} className="flex min-w-0 items-start gap-2 text-[11px] leading-5 text-muted-foreground">
+								<span className={cn("mt-2 size-1.5 shrink-0 rounded-full", dotClass, isLatest && step.tone === "active" ? "animate-pulse" : "")} />
+								<span className={cn("min-w-0 flex-1 truncate", isLatest ? "text-[var(--slate-12)]" : "")} title={step.message}>
+									{step.message}
+								</span>
+							</div>
+						);
+					})}
+				</div>
+			)}
 		</div>
 	);
 }

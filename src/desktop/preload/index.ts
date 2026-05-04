@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentAvatarUpload, AgentCreationDraft, AgentDeleteEvent, AgentDraft, AgentLogEntry, AgentOnboardEvent, DesktopSettingsDraft, PieDesktopApi } from "../shared/types.js";
+import type {
+	AgentAvatarUpload,
+	AgentCreationDraft,
+	AgentDeleteEvent,
+	AgentDraft,
+	AgentLogEntry,
+	AgentOnboardEvent,
+	DesktopQuitEvent,
+	DesktopSettingsDraft,
+	PieDesktopApi,
+} from "../shared/types.js";
 
 const api: PieDesktopApi = {
 	getSettings: () => ipcRenderer.invoke("settings:get"),
@@ -16,6 +26,11 @@ const api: PieDesktopApi = {
 	openCodexLogin: (sessionId: string) => ipcRenderer.invoke("agents:codex-login", sessionId),
 	checkHermesEnvironment: () => ipcRenderer.invoke("agents:hermes-diagnostic"),
 	installHermes: (sessionId: string) => ipcRenderer.invoke("agents:hermes-install", sessionId),
+	cancelHermesInstall: (sessionId: string) => ipcRenderer.invoke("agents:hermes-install-cancel", sessionId),
+	getOpenClawModelCatalog: () => ipcRenderer.invoke("agents:openclaw-model-catalog"),
+	getManagedRuntimeStatus: (kind) => ipcRenderer.invoke("runtimes:status", kind),
+	upgradeManagedRuntime: (kind) => ipcRenderer.invoke("runtimes:upgrade", kind),
+	uninstallManagedRuntime: (kind) => ipcRenderer.invoke("runtimes:uninstall", kind),
 	createFeishuApp: (sessionId: string) => ipcRenderer.invoke("agents:create-feishu-app", sessionId),
 	createWechatLogin: (sessionId: string) => ipcRenderer.invoke("agents:create-wechat-login", sessionId),
 	syncFeishuAppProfile: (id: string) => ipcRenderer.invoke("agents:sync-feishu-app-profile", id),
@@ -53,6 +68,11 @@ const api: PieDesktopApi = {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentDeleteEvent) => callback(payload);
 		ipcRenderer.on("agents:delete-event", listener);
 		return () => ipcRenderer.removeListener("agents:delete-event", listener);
+	},
+	onDesktopQuitEvent: (callback: (event: DesktopQuitEvent) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: DesktopQuitEvent) => callback(payload);
+		ipcRenderer.on("desktop:quit-event", listener);
+		return () => ipcRenderer.removeListener("desktop:quit-event", listener);
 	},
 	onSelectAgent: (callback: (agentId: string) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: string) => callback(payload);

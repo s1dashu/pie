@@ -5,5 +5,5 @@
     "rootDir": "./src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "packages", "pi-feishu", "**/*.d.ts"]
+  "exclude": ["node_modules", "dist", "packages", "**/*.d.ts"]
 }

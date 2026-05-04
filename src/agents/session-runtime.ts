@@ -8,7 +8,7 @@ import {
 	extractLastAssistantError,
 	wasLastAssistantMessageAborted,
 } from "./messages.js";
-import { getAgentRoundInputText } from "./types.js";
+import { getAgentRoundInputText, isFirstResponseSignal } from "./types.js";
 import type {
 	AgentConversationSession,
 	AgentConversationSessionPool,
@@ -26,6 +26,12 @@ export type {
 	AgentSessionRuntimeOptions,
 	BackendDiagnostic,
 } from "./types.js";
+export { isFirstResponseSignal } from "./types.js";
+
+function normalizeConversationKey(conversationKey: string | undefined): string {
+	const key = conversationKey?.trim();
+	return key || "conversation";
+}
 
 class LoggedAgentSession implements AgentConversationSession {
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -110,13 +116,6 @@ class LoggedAgentSession implements AgentConversationSession {
 	}
 }
 
-function isFirstResponseSignal(event: AgentSessionEvent): boolean {
-	if (event.type === "text_delta" || event.type === "thinking_delta") {
-		return Boolean(event.delta);
-	}
-	return event.type === "text_start" || event.type === "thinking_start" || event.type === "tool_call_started";
-}
-
 class LoggedAgentSessionPool implements AgentConversationSessionPool {
 	readonly capabilities;
 	private readonly sessions = new WeakMap<AgentConversationSession, LoggedAgentSession>();
@@ -129,14 +128,31 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 	}
 
 	async getSession(conversationKey: string): Promise<AgentConversationSession> {
-		const session = await this.inner.getSession(conversationKey);
+		const normalizedConversationKey = normalizeConversationKey(conversationKey);
+		const session = await this.inner.getSession(normalizedConversationKey);
 		const existing = this.sessions.get(session);
 		if (existing) {
 			return existing;
 		}
-		const logged = new LoggedAgentSession(session, this.homeDir, conversationKey);
+		const logged = new LoggedAgentSession(session, this.homeDir, normalizedConversationKey);
 		this.sessions.set(session, logged);
 		return logged;
+	}
+
+	async compactSession(conversationKey: string): Promise<{ summary?: string }> {
+		const compactSession = this.inner.compactSession;
+		if (!compactSession) {
+			throw new Error("This agent backend does not support /compact yet. Use /new to start a fresh session.");
+		}
+		return compactSession.call(this.inner, normalizeConversationKey(conversationKey));
+	}
+
+	async resetSession(conversationKey: string): Promise<void> {
+		const resetSession = this.inner.resetSession;
+		if (!resetSession) {
+			throw new Error("This agent backend does not support /new yet.");
+		}
+		await resetSession.call(this.inner, normalizeConversationKey(conversationKey));
 	}
 }
 

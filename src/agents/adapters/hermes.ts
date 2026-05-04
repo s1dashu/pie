@@ -570,6 +570,14 @@ class HermesSessionPool implements AgentConversationSessionPool {
 		this.sessions.set(conversationKey, session);
 		return session;
 	}
+
+	async resetSession(conversationKey: string): Promise<void> {
+		const existing = this.sessions.get(conversationKey);
+		if (existing?.isStreaming) {
+			await existing.abort();
+		}
+		this.sessions.delete(conversationKey);
+	}
 }
 
 export const hermesAgentBackendAdapter: AgentBackendAdapter = {

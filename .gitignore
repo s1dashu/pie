@@ -2,6 +2,12 @@ node_modules/
 dist/
 out/
 .DS_Store
+.env
+.env.*
+.codex/
+.pet-runs/
+config.json
+tasks/
 .crush/
 .firecrawl/
 superhuman_refund_email.txt

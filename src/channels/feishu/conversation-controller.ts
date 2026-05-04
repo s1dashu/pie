@@ -4,6 +4,7 @@ import {
 	canSteerSession,
 	extractAssistantText,
 	extractLastAssistantError,
+	isFirstResponseSignal,
 	type AgentConversationSessionPool,
 	wasLastAssistantMessageAborted,
 } from "../../agents/session-runtime.js";
@@ -179,24 +180,15 @@ export class ConversationController {
 		}
 
 		const promptStartedAt = Date.now();
-		let sawFirstThinkingDelta = false;
-		let sawFirstTextDelta = false;
+		let sawFirstResponse = false;
 		const onSessionEvent = (event: SessionEvent): void => {
 			request.reporter.onSessionEvent(event);
-			if (!sawFirstThinkingDelta && event.type === "thinking_delta" && event.delta) {
-				sawFirstThinkingDelta = true;
+			if (!sawFirstResponse && isFirstResponseSignal(event)) {
+				sawFirstResponse = true;
 				this.logTurnTiming(
-					"first_thinking_delta",
+					"first_response",
 					Date.now() - request.receivedAtMs,
-					`since_prompt=${Date.now() - promptStartedAt}ms`,
-				);
-			}
-			if (!sawFirstTextDelta && event.type === "text_delta" && event.delta) {
-				sawFirstTextDelta = true;
-				this.logTurnTiming(
-					"first_text_delta",
-					Date.now() - request.receivedAtMs,
-					`since_prompt=${Date.now() - promptStartedAt}ms`,
+					`since_prompt=${Date.now() - promptStartedAt}ms signal=${event.type}`,
 				);
 			}
 		};

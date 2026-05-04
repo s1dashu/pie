@@ -27,7 +27,7 @@ function formatMessage(tag: string, message: string, meta?: Record<string, unkno
 }
 
 function createLogger(subsystem: string): LarkLogger {
-	const tag = `pi-feishu/${subsystem}`;
+	const tag = `pie/feishu/${subsystem}`;
 	return {
 		subsystem,
 		debug(message, meta) {

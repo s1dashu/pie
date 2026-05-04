@@ -147,6 +147,17 @@ function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?:
 			label: modelId?.trim() || "hermes default",
 		};
 	}
+	if (backendKind === "openclaw") {
+		const requestedModel = modelId?.trim();
+		const requestedProvider = provider?.trim();
+		const openClawModel = requestedModel && requestedProvider && !requestedModel.includes("/")
+			? `${requestedProvider}/${requestedModel}`
+			: requestedModel;
+		return {
+			modelId: openClawModel || undefined,
+			label: openClawModel || "openclaw default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}
@@ -263,6 +274,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const runMode = resolveRunMode(env);
 	const debug = parseBooleanFlag(env.FEISHU_BOT_DEBUG, false);
+	const messageOutputMode = resolveFeishuMessageOutputMode(feishuChannel, env.FEISHU_BOT_IM_OUTPUT_MODE);
 
 	return {
 		homeDir,
@@ -289,8 +301,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, true),
 		outputToolCallsToIm: parseBooleanFlag(env.FEISHU_BOT_IM_TOOL_CALLS, true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH),
-		outputThinkingToIm: parseBooleanFlag(env.FEISHU_BOT_IM_THINKING, false),
-		messageOutputMode: resolveFeishuMessageOutputMode(feishuChannel, env.FEISHU_BOT_IM_OUTPUT_MODE),
+		outputThinkingToIm: messageOutputMode === "card" ? false : parseBooleanFlag(env.FEISHU_BOT_IM_THINKING, false),
+		messageOutputMode,
 		startedAtMs: Date.now(),
 	};
 }

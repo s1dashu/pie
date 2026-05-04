@@ -127,6 +127,17 @@ function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?:
 			label: modelId?.trim() || "hermes default",
 		};
 	}
+	if (backendKind === "openclaw") {
+		const requestedModel = modelId?.trim();
+		const requestedProvider = provider?.trim();
+		const openClawModel = requestedModel && requestedProvider && !requestedModel.includes("/")
+			? `${requestedProvider}/${requestedModel}`
+			: requestedModel;
+		return {
+			modelId: openClawModel || undefined,
+			label: openClawModel || "openclaw default",
+		};
+	}
 	if (!provider || !modelId) {
 		return { model: undefined, label: "auto" };
 	}

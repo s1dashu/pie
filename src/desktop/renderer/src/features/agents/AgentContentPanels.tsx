@@ -96,6 +96,10 @@ export function AgentContentPanels({
 	];
 	const usesCodexCli = draft.provider === "codex-cli" || agent.frameworkKind === "codex";
 	const showsSystemPrompt = agent.frameworkKind === "ousia";
+	const usesFeishuMessageCard = hasFeishuChannel && (channelDraft.feishuMessageOutputMode ?? "bubble") === "card";
+	const totalCacheTokens = usage.total.cacheReadTokens + usage.total.cacheWriteTokens;
+	const inputTokensWithCache = usage.total.inputTokens + totalCacheTokens;
+	const tokenUsageHint = `${formatTokenCount(inputTokensWithCache)} / ${formatTokenCount(usage.total.outputTokens)}`;
 
 	return (
 		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
@@ -110,7 +114,7 @@ export function AgentContentPanels({
 						<UsageMetric
 							label={t("tokenUsage")}
 							value={formatTokenCountCompact(usage.total.tokens)}
-							hint={`${formatTokenCount(usage.total.inputTokens)} / ${formatTokenCount(usage.total.outputTokens)}`}
+							hint={tokenUsageHint}
 						/>
 						<UsageMetric
 							label={t("runDuration")}
@@ -145,7 +149,6 @@ export function AgentContentPanels({
 						<StorageDetailCard
 							resources={resources}
 							className="col-span-2 max-[620px]:col-span-1"
-							contentClassName="max-w-[28rem]"
 						/>
 					</div>
 				</div>
@@ -369,7 +372,13 @@ export function AgentContentPanels({
 								<Field label={t("feishuMessageOutputMode")}>
 									<Select
 										value={channelDraft.feishuMessageOutputMode ?? "bubble"}
-										onValueChange={(value) => onUpdateChannelField("feishuMessageOutputMode", value as DesktopFeishuMessageOutputMode)}
+										onValueChange={(value) => {
+											const nextMode = value as DesktopFeishuMessageOutputMode;
+											onUpdateChannelField("feishuMessageOutputMode", nextMode);
+											if (nextMode === "card") {
+												onUpdateChannelField("outputThinkingToIm", false);
+											}
+										}}
 									>
 										<SelectTrigger>
 											<SelectValue />
@@ -395,15 +404,18 @@ export function AgentContentPanels({
 									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("showToolCallsInImDesc")}</span>
 								</span>
 							</label>
-							<label className="flex cursor-pointer items-start gap-3 py-2.5">
+							<label className={cn("flex items-start gap-3 py-2.5", usesFeishuMessageCard ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
 								<Checkbox
-									checked={channelDraft.outputThinkingToIm ?? false}
+									checked={usesFeishuMessageCard ? false : channelDraft.outputThinkingToIm ?? false}
 									onCheckedChange={(checked) => onUpdateChannelField("outputThinkingToIm", checked)}
+									disabled={usesFeishuMessageCard}
 									className="mt-0.5"
 								/>
 								<span className="min-w-0 flex-1">
 									<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("showThinkingInIm")}</span>
-									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("showThinkingInImDesc")}</span>
+									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">
+										{usesFeishuMessageCard ? t("showThinkingInImCardUnsupportedDesc") : t("showThinkingInImDesc")}
+									</span>
 								</span>
 							</label>
 							<Field label={t("toolCallTruncation")}>
@@ -631,25 +643,42 @@ const PROFILE_STORAGE_BAR_CAP_BYTES = 500 * 1024 * 1024;
 function StorageDetailCard({
 	resources,
 	className,
-	contentClassName,
 }: {
 	resources?: AgentResourceStats;
 	className?: string;
-	contentClassName?: string;
 }): JSX.Element {
 	const { t } = useI18n();
 	const storageBytes = resources?.storageBytes ?? 0;
+	const diskTotalBytes = resources?.diskTotalBytes;
+	const diskAvailableBytes = resources?.diskAvailableBytes;
 	const rawBarPercent = (storageBytes / PROFILE_STORAGE_BAR_CAP_BYTES) * 100;
 	const barWidthPercent = storageBytes <= 0 ? 0 : Math.min(100, Math.max(2, rawBarPercent));
+	const storageMetrics = [
+		{ label: t("profileUsage"), value: formatBytes(storageBytes) },
+		{ label: t("diskAvailable"), value: formatOptionalBytes(diskAvailableBytes, t("unknown")) },
+		{ label: t("diskCapacity"), value: formatOptionalBytes(diskTotalBytes, t("unknown")) },
+	];
 
 	return (
 		<div className={cn("pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4", className)}>
-			<div className={cn("min-w-0", contentClassName)}>
-				<div className="min-w-0">
+			<div className="min-w-0">
+				<div className="flex min-w-0 items-start justify-between gap-4">
 					<SectionTitle title={t("storage")} description={t("storageDesc")} />
+					{diskTotalBytes && diskAvailableBytes !== undefined ? (
+						<div className="shrink-0 pt-0.5 text-right text-xs font-medium text-muted-foreground tabular-nums">
+							{formatPercent((diskAvailableBytes / diskTotalBytes) * 100)} {t("diskAvailable")}
+						</div>
+					) : null}
 				</div>
-				<div className="mt-5 text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-2xl">
-					{formatBytes(storageBytes)}
+				<div className="mt-5 grid grid-cols-3 gap-3 max-[760px]:grid-cols-1">
+					{storageMetrics.map((metric) => (
+						<div key={metric.label} className="min-w-0">
+							<div className="truncate text-xs font-medium uppercase text-muted-foreground">{metric.label}</div>
+							<div className="mt-2 truncate text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-2xl">
+								{metric.value}
+							</div>
+						</div>
+					))}
 				</div>
 				<div className="mt-5">
 					<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
@@ -662,6 +691,10 @@ function StorageDetailCard({
 			</div>
 		</div>
 	);
+}
+
+function formatOptionalBytes(bytes: number | undefined, fallback: string): string {
+	return bytes !== undefined && Number.isFinite(bytes) ? formatBytes(bytes) : fallback;
 }
 
 function formatBytes(bytes: number): string {
@@ -777,7 +810,7 @@ function SkillSourceRow({
 				<Button
 					variant="unstyled"
 					size="inline"
-					className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--slate-2)] text-[var(--slate-10)] transition-[background-color,color,scale] hover:bg-[var(--slate-3)] hover:text-[var(--slate-12)] active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+					className="inline-flex h-9 w-9 items-center justify-center text-[var(--slate-10)] transition-[color,scale] hover:text-[var(--slate-12)] active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
 					onClick={onOpen}
 					disabled={isOpening}
 					aria-label={t("openSkillsFolder")}

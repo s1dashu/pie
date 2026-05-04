@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from "chalk";
+import { getAgentBackendLabel } from "../../agents/backend-registry.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -18,20 +19,8 @@ import {
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import { extractTextPart, type IncomingChannelMessage, type TextChannelAdapter } from "./channel-model.js";
+import { handleImCommand, parseImCommand } from "./im-commands.js";
 import { formatToolImErrorLine, formatToolImLine } from "./tool-call-im.js";
-
-function formatBackendLabel(kind: CommonChannelRuntimeConfig["backendKind"]): string {
-	if (kind === "ousia") {
-		return "Ousia";
-	}
-	if (kind === "codex") {
-		return "Codex";
-	}
-	if (kind === "hermes") {
-		return "Hermes";
-	}
-	return "Pi Coding Agent";
-}
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -256,7 +245,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const lines = [
-			chalk.bold(`${formatBackendLabel(this.config.backendKind)} ${this.channelLabel} channel ready`),
+			chalk.bold(`${getAgentBackendLabel(this.config.backendKind)} ${this.channelLabel} channel ready`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),
@@ -313,6 +302,15 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		const promptText = extractTextPart(message.parts);
 		if (!promptText) {
 			await this.sendPlainReply(message, "Only text messages are supported.");
+			return;
+		}
+		const command = parseImCommand(promptText);
+		if (command) {
+			await handleImCommand(command, {
+				conversationKey: message.conversationKey,
+				sessionPool: this.sessionPool,
+				reply: (text) => this.sendPlainReply(message, text),
+			});
 			return;
 		}
 		console.log(chalk.cyan(`${this.channelLabel} message received: ${message.conversationKey} ${promptText.slice(0, 120)}`));

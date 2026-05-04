@@ -2,12 +2,13 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	upsertAgentEnv,
 } from "../../core/agent-home.js";
@@ -33,6 +34,7 @@ import {
 } from "../../core/config-store.js";
 import {
 	generateBotProfileId,
+	getDefaultPieRootDir,
 	getProfileHomeDir,
 	loadProfileRegistry,
 	registerProfileHome,
@@ -41,6 +43,8 @@ import type {
 	AgentCreationDraft,
 	AgentCreationSession,
 	AgentOnboardEvent,
+	DesktopManagedRuntimeKind,
+	DesktopManagedRuntimeStatus,
 	DesktopFeishuAppCredentials,
 	DesktopCodexDiagnostic,
 	DesktopCodexModelOption,
@@ -48,7 +52,12 @@ import type {
 	DesktopRuntimeDiagnostic,
 	DesktopWechatCredentials,
 } from "../shared/types.js";
-import { HERMES_MODEL_OPTIONS, mergeModelOptions, providersFromModels } from "../shared/model-catalog.js";
+import {
+	HERMES_MODEL_OPTIONS,
+	OPENCLAW_429_MODEL_OPTIONS,
+	mergeModelOptions,
+	providersFromModels,
+} from "../shared/model-catalog.js";
 
 type EmitOnboardEvent = (event: AgentOnboardEvent) => void;
 
@@ -86,6 +95,23 @@ const HERMES_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/Nou
 const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex";
 const CODEX_INSTALL_WITH_NODE_COMMAND = "brew install node && npm install -g @openai/codex";
 const MIN_HERMES_GOOD_DISPLAY_VERSION = "0.12.0";
+const DEFAULT_OPENCLAW_GATEWAY_PORT = 18789;
+const activeHermesInstalls = new Map<string, HermesInstallContext>();
+
+interface HermesInstallContext {
+	sessionId: string;
+	emit: EmitOnboardEvent;
+	child?: ChildProcess;
+	cancelled: boolean;
+	checkoutBackup?: {
+		path: string;
+		preserveOnSuccess: boolean;
+	};
+	originalBin:
+		| { kind: "missing" }
+		| { kind: "symlink"; target: string }
+		| { kind: "file" };
+}
 
 const DEFAULT_BOT_NAMES = [
 	"Mia",
@@ -139,6 +165,68 @@ function runLoginShellCommand(command: string): Promise<{ code: number | null; s
 	});
 }
 
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function hermesCheckoutDir(): string {
+	return join(homedir(), ".hermes", "hermes-agent");
+}
+
+function hermesBinPath(): string {
+	return join(homedir(), ".local", "bin", "hermes");
+}
+
+function openClawBinPath(): string {
+	return join(homedir(), ".local", "bin", "openclaw");
+}
+
+async function resolveCommandPath(command: string, fallbackPaths: string[]): Promise<string | undefined> {
+	const found = await runLoginShellCommand(`command -v ${shellQuote(command)}`);
+	const executablePath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
+	if (found.code === 0 && executablePath) {
+		return executablePath;
+	}
+	return fallbackPaths.find((path) => existsSync(path));
+}
+
+function readHermesBinState(): HermesInstallContext["originalBin"] {
+	const path = hermesBinPath();
+	if (!existsSync(path)) {
+		return { kind: "missing" };
+	}
+	const stat = lstatSync(path);
+	if (stat.isSymbolicLink()) {
+		return { kind: "symlink", target: readlinkSync(path) };
+	}
+	return { kind: "file" };
+}
+
+function createHermesInstallContext(sessionId: string, emit: EmitOnboardEvent): HermesInstallContext {
+	return {
+		sessionId,
+		emit,
+		cancelled: false,
+		originalBin: readHermesBinState(),
+	};
+}
+
+function signalInstallProcess(child: ChildProcess): void {
+	if (!child.pid) {
+		child.kill("SIGTERM");
+		return;
+	}
+	if (process.platform !== "win32") {
+		try {
+			process.kill(-child.pid, "SIGTERM");
+			return;
+		} catch {
+			// Fall back to the direct child process.
+		}
+	}
+	child.kill("SIGTERM");
+}
+
 function parseSemver(text: string): [number, number, number] | undefined {
 	const match = text.match(/\bv?(\d+)\.(\d+)\.(\d+)\b/);
 	if (!match) {
@@ -170,6 +258,7 @@ function runInstallCommand(options: {
 	emit: EmitOnboardEvent;
 	startMessage: string;
 	doneMessage: string;
+	context?: HermesInstallContext;
 }): Promise<void> {
 	return new Promise((resolve, reject) => {
 		let output = "";
@@ -177,7 +266,11 @@ function runInstallCommand(options: {
 		const child = spawn(shellPath(), ["-lc", options.command], {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: process.env,
+			detached: process.platform !== "win32",
 		});
+		if (options.context) {
+			options.context.child = child;
+		}
 		const handleOutput = (chunk: Buffer) => {
 			const text = stripAnsi(chunk.toString("utf8"));
 			output += text;
@@ -190,16 +283,322 @@ function runInstallCommand(options: {
 		child.stderr.on("data", handleOutput);
 		child.on("error", reject);
 		child.on("close", (code) => {
+			if (options.context?.child === child) {
+				options.context.child = undefined;
+			}
+			if (options.context?.cancelled) {
+				const message = "Hermes 安装已取消。";
+				options.emit({ sessionId: options.sessionId, type: "error", source: options.source, message });
+				reject(new Error(message));
+				return;
+			}
 			if (code === 0) {
 				options.emit({ sessionId: options.sessionId, type: "done", source: options.source, message: options.doneMessage });
 				resolve();
 				return;
 			}
-			const message = output.trim().split(/\r?\n/).filter(Boolean).slice(-8).join("\n") || `${options.command} exited with code ${String(code)}`;
+			const rawMessage = output.trim().split(/\r?\n/).filter(Boolean).slice(-8).join("\n") || `${options.command} exited with code ${String(code)}`;
+			const message = normalizeInstallError(options.source, rawMessage);
 			options.emit({ sessionId: options.sessionId, type: "error", source: options.source, message });
 			reject(new Error(message));
 		});
 	});
+}
+
+function normalizeInstallError(source: NonNullable<AgentOnboardEvent["source"]>, message: string): string {
+	if (source === "hermes-install" && isHermesDirtyCheckoutInstallError(message)) {
+		return "Hermes 本地安装目录存在未提交的变更，自动更新失败。Pie 下次会先备份旧安装目录后重新安装。";
+	}
+	if (source === "hermes-install" && isHermesCloneInstallError(message)) {
+		return "Hermes 仓库克隆失败，可能是上次安装中断留下了半成品目录或网络传输失败。Pie 会清理半成品后重试。";
+	}
+	return message;
+}
+
+function isHermesDirtyCheckoutInstallError(message: string): boolean {
+	return message.includes("is not a stash reference") || message.includes("Changes not staged for commit");
+}
+
+function isHermesCloneInstallError(message: string): boolean {
+	return message.includes("Failed to clone repository") ||
+		message.includes("invalid index-pack output") ||
+		message.includes("could not open") && message.includes(".git/objects/pack");
+}
+
+async function backupHermesCheckoutForInstall(context: HermesInstallContext): Promise<void> {
+	if (context.checkoutBackup) {
+		return;
+	}
+	const checkoutDir = hermesCheckoutDir();
+	if (!existsSync(join(checkoutDir, ".git"))) {
+		return;
+	}
+	const status = await runLoginShellCommand(`git -C ${shellQuote(checkoutDir)} status --porcelain`);
+	const isDirty = status.code === 0 && Boolean(status.stdout.trim());
+	const backupDir = join(homedir(), ".hermes", `hermes-agent.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+	context.emit({
+		sessionId: context.sessionId,
+		type: "status",
+		source: "hermes-install",
+		message: isDirty
+			? "检测到 Hermes 旧安装目录有本地变更，正在备份后重新安装..."
+			: "正在备份当前 Hermes 安装目录...",
+	});
+	renameSync(checkoutDir, backupDir);
+	context.checkoutBackup = { path: backupDir, preserveOnSuccess: isDirty };
+	context.emit({
+		sessionId: context.sessionId,
+		type: "status",
+		source: "hermes-install",
+		message: `旧安装目录已备份到 ${backupDir}`,
+	});
+}
+
+function restoreHermesBinState(context: HermesInstallContext): void {
+	const path = hermesBinPath();
+	if (context.originalBin.kind === "file") {
+		return;
+	}
+	rmSync(path, { force: true });
+	if (context.originalBin.kind === "symlink") {
+		mkdirSync(join(homedir(), ".local", "bin"), { recursive: true });
+		symlinkSync(context.originalBin.target, path);
+	}
+}
+
+function cleanupHermesInstallContext(context: HermesInstallContext, outcome: "success" | "cancelled" | "failed"): void {
+	const checkoutDir = hermesCheckoutDir();
+	if (outcome === "success") {
+		if (context.checkoutBackup && !context.checkoutBackup.preserveOnSuccess) {
+			rmSync(context.checkoutBackup.path, { recursive: true, force: true });
+		}
+		return;
+	}
+	rmSync(checkoutDir, { recursive: true, force: true });
+	if (context.checkoutBackup && existsSync(context.checkoutBackup.path)) {
+		renameSync(context.checkoutBackup.path, checkoutDir);
+	}
+	restoreHermesBinState(context);
+}
+
+export async function cancelHermesInstallForDesktop(sessionId: string): Promise<void> {
+	const context = activeHermesInstalls.get(sessionId);
+	if (!context) {
+		return;
+	}
+	context.cancelled = true;
+	context.emit({ sessionId, type: "status", source: "hermes-install", message: "正在取消 Hermes 安装并清理..." });
+	if (context.child) {
+		signalInstallProcess(context.child);
+		return;
+	}
+	cleanupHermesInstallContext(context, "cancelled");
+	activeHermesInstalls.delete(sessionId);
+	context.emit({ sessionId, type: "error", source: "hermes-install", message: "Hermes 安装已取消。" });
+}
+
+export function cancelAllHermesInstallsForDesktop(): void {
+	for (const sessionId of [...activeHermesInstalls.keys()]) {
+		void cancelHermesInstallForDesktop(sessionId);
+	}
+}
+
+function runtimeLabel(kind: DesktopManagedRuntimeKind): string {
+	if (kind === "hermes") {
+		return "Hermes";
+	}
+	if (kind === "openclaw") {
+		return "OpenClaw";
+	}
+	return "Codex";
+}
+
+function asManagedRuntimeStatus(
+	kind: DesktopManagedRuntimeKind,
+	diagnostic: DesktopRuntimeDiagnostic,
+): DesktopManagedRuntimeStatus {
+	return {
+		kind,
+		label: runtimeLabel(kind),
+		...diagnostic,
+	};
+}
+
+async function checkOpenClawEnvironmentForDesktop(): Promise<DesktopRuntimeDiagnostic> {
+	const executablePath = await resolveCommandPath("openclaw", [
+		openClawBinPath(),
+		"/opt/homebrew/bin/openclaw",
+		"/usr/local/bin/openclaw",
+	]);
+	if (!executablePath) {
+		return {
+			installed: false,
+			ready: false,
+			error: "openclaw command not found in login shell PATH",
+		};
+	}
+	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
+	const versionText = stripAnsi(version.stdout || version.stderr).trim();
+	return {
+		installed: true,
+		ready: version.code === 0,
+		executablePath,
+		version: versionText || undefined,
+		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "OpenClaw CLI exists but did not run successfully.",
+	};
+}
+
+async function checkCodexRuntimeForDesktop(): Promise<DesktopRuntimeDiagnostic> {
+	const executablePath = await resolveCommandPath("codex", [
+		join(homedir(), ".local", "bin", "codex"),
+		"/opt/homebrew/bin/codex",
+		"/usr/local/bin/codex",
+	]);
+	if (!executablePath) {
+		return {
+			installed: false,
+			ready: false,
+			error: "codex command not found in login shell PATH",
+			installCommand: ["bash", "-lc", CODEX_INSTALL_COMMAND],
+		};
+	}
+	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
+	const versionText = stripAnsi(version.stdout || version.stderr).trim();
+	return {
+		installed: true,
+		ready: version.code === 0,
+		executablePath,
+		version: versionText || undefined,
+		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "Codex CLI exists but did not run successfully.",
+		installCommand: ["bash", "-lc", CODEX_INSTALL_COMMAND],
+	};
+}
+
+export async function checkManagedRuntimeForDesktop(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> {
+	if (kind === "hermes") {
+		return asManagedRuntimeStatus(kind, await checkHermesEnvironmentForDesktop());
+	}
+	if (kind === "codex") {
+		return asManagedRuntimeStatus(kind, await checkCodexRuntimeForDesktop());
+	}
+	return asManagedRuntimeStatus(kind, await checkOpenClawEnvironmentForDesktop());
+}
+
+export async function upgradeManagedRuntimeForDesktop(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> {
+	if (kind === "hermes") {
+		const diagnostic = await installHermesForDesktop(`settings-${kind}`, () => undefined);
+		return asManagedRuntimeStatus(kind, diagnostic);
+	}
+	if (kind === "codex") {
+		const diagnostic = await installCodexForDesktop(`settings-${kind}`, () => undefined);
+		return asManagedRuntimeStatus(kind, {
+			installed: diagnostic.installed,
+			ready: diagnostic.installed,
+			executablePath: diagnostic.executablePath,
+			version: diagnostic.version,
+			error: diagnostic.error,
+			installCommand: ["bash", "-lc", CODEX_INSTALL_COMMAND],
+		});
+	}
+	const diagnostic = await checkOpenClawEnvironmentForDesktop();
+	if (!diagnostic.installed) {
+		throw new Error("未检测到 OpenClaw CLI，当前只能升级已安装的 OpenClaw。");
+	}
+	const upgrade = await runLoginShellCommand("openclaw update");
+	if (upgrade.code !== 0) {
+		throw new Error(stripAnsi(upgrade.stderr || upgrade.stdout).trim() || "OpenClaw 升级失败。");
+	}
+	return checkManagedRuntimeForDesktop(kind);
+}
+
+function uninstallHermesRuntime(): void {
+	rmSync(hermesBinPath(), { force: true });
+	rmSync(join(homedir(), ".hermes", "hermes-agent"), { recursive: true, force: true });
+}
+
+async function uninstallOpenClawRuntime(): Promise<void> {
+	const diagnostic = await checkOpenClawEnvironmentForDesktop();
+	const executablePath = diagnostic.executablePath?.trim();
+	if (executablePath && (executablePath === openClawBinPath() || executablePath.startsWith(join(homedir(), ".local", "bin")))) {
+		rmSync(executablePath, { force: true });
+	}
+	rmSync(openClawBinPath(), { force: true });
+	rmSync(join(homedir(), ".openclaw"), { recursive: true, force: true });
+}
+
+async function uninstallCodexRuntime(): Promise<void> {
+	const npmCheck = await runLoginShellCommand("command -v npm");
+	if (npmCheck.code === 0) {
+		await runLoginShellCommand("npm uninstall -g @openai/codex");
+	}
+	const diagnostic = await checkCodexRuntimeForDesktop();
+	const executablePath = diagnostic.executablePath?.trim();
+	if (executablePath && (executablePath.startsWith(join(homedir(), ".local", "bin")) || executablePath.startsWith("/opt/homebrew/bin") || executablePath.startsWith("/usr/local/bin"))) {
+		rmSync(executablePath, { force: true });
+	}
+}
+
+export async function uninstallManagedRuntimeForDesktop(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> {
+	if (kind === "hermes") {
+		await cancelHermesInstallForDesktop(`settings-${kind}`);
+		uninstallHermesRuntime();
+		return checkManagedRuntimeForDesktop(kind);
+	}
+	if (kind === "codex") {
+		await uninstallCodexRuntime();
+		return checkManagedRuntimeForDesktop(kind);
+	}
+	await uninstallOpenClawRuntime();
+	return checkManagedRuntimeForDesktop(kind);
+}
+
+async function runHermesInstallCommandWithDirtyCheckoutRecovery(options: {
+	sessionId: string;
+	emit: EmitOnboardEvent;
+	command: string;
+	startMessage: string;
+	doneMessage: string;
+	context: HermesInstallContext;
+}): Promise<void> {
+	await backupHermesCheckoutForInstall(options.context);
+	try {
+		await runInstallCommand({
+			sessionId: options.sessionId,
+			source: "hermes-install",
+			command: options.command,
+			emit: options.emit,
+			startMessage: options.startMessage,
+			doneMessage: options.doneMessage,
+			context: options.context,
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (options.context.cancelled || (!isHermesDirtyCheckoutInstallError(message) && !isHermesCloneInstallError(message))) {
+			throw error;
+		}
+		options.emit({
+			sessionId: options.sessionId,
+			type: "status",
+			source: "hermes-install",
+			message: isHermesCloneInstallError(message)
+				? "Hermes 克隆失败，正在清理半成品后重试..."
+				: "Hermes 旧安装目录更新失败，正在备份后重试...",
+		});
+		if (isHermesCloneInstallError(message)) {
+			rmSync(hermesCheckoutDir(), { recursive: true, force: true });
+		} else {
+			await backupHermesCheckoutForInstall(options.context);
+		}
+		await runInstallCommand({
+			sessionId: options.sessionId,
+			source: "hermes-install",
+			command: options.command,
+			emit: options.emit,
+			startMessage: "正在重新运行 Hermes 官方安装器...",
+			doneMessage: options.doneMessage,
+			context: options.context,
+		});
+	}
 }
 
 export function deriveHermesApiServerPort(profileId: string): number {
@@ -250,6 +649,11 @@ export function loadModelCatalog(homeDir: string): Pick<AgentCreationSession, "m
 
 export function loadHermesModelCatalog(homeDir: string): Pick<AgentCreationSession, "models" | "providers"> {
 	const models = mergeModelOptions(loadModelOptions(homeDir), HERMES_MODEL_OPTIONS);
+	return { models, providers: providersFromModels(models) };
+}
+
+export function loadOpenClawModelCatalog(): Pick<AgentCreationSession, "models" | "providers"> {
+	const models = OPENCLAW_429_MODEL_OPTIONS;
 	return { models, providers: providersFromModels(models) };
 }
 
@@ -364,6 +768,7 @@ export function beginAgentCreation(): AgentCreationSession {
 		models,
 		providers,
 		codexModels: loadCodexModelCatalog(),
+		openClawModels: [],
 	};
 }
 
@@ -428,9 +833,11 @@ export async function installCodexForDesktop(
 }
 
 export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntimeDiagnostic> {
-	const found = await runLoginShellCommand("command -v hermes");
-	const executablePath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
-	if (found.code !== 0 || !executablePath) {
+	const executablePath = await resolveCommandPath("hermes", [
+		hermesBinPath(),
+		join(homedir(), ".hermes", "hermes-agent", "venv", "bin", "hermes"),
+	]);
+	if (!executablePath) {
 		return {
 			installed: false,
 			ready: false,
@@ -438,7 +845,7 @@ export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntime
 			installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
 		};
 	}
-	const version = await runLoginShellCommand("hermes --version");
+	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
 	const versionText = stripAnsi(version.stdout || version.stderr).trim();
 	if (version.code === 0 && !isHermesVersionSupported(versionText)) {
 		return {
@@ -464,18 +871,37 @@ export async function installHermesForDesktop(
 	sessionId: string,
 	emit: EmitOnboardEvent,
 ): Promise<DesktopRuntimeDiagnostic> {
+	emit({ sessionId, type: "status", source: "hermes-install", message: "正在检查本机 Hermes..." });
 	const existing = await checkHermesEnvironmentForDesktop();
 	if (existing.installed && !existing.ready) {
-		await runInstallCommand({
-			sessionId,
-			source: "hermes-install",
-			command: "hermes update",
-			emit,
-			startMessage: `正在升级 Hermes 到 ${MIN_HERMES_GOOD_DISPLAY_VERSION}+...`,
-			doneMessage: "Hermes 已升级。",
-		});
-		return checkHermesEnvironmentForDesktop();
+		const context = createHermesInstallContext(sessionId, emit);
+		activeHermesInstalls.set(sessionId, context);
+		emit({ sessionId, type: "status", source: "hermes-install", message: existing.version ? `检测到 Hermes ${existing.version}，准备升级...` : "检测到 Hermes，但版本不可用，准备升级..." });
+		try {
+			await runHermesInstallCommandWithDirtyCheckoutRecovery({
+				sessionId,
+				command: "hermes update",
+				emit,
+				startMessage: `正在升级 Hermes 到 ${MIN_HERMES_GOOD_DISPLAY_VERSION}+...`,
+				doneMessage: "Hermes 已升级。",
+				context,
+			});
+			cleanupHermesInstallContext(context, "success");
+			emit({ sessionId, type: "status", source: "hermes-install", message: "正在复检 Hermes 环境..." });
+			return checkHermesEnvironmentForDesktop();
+		} catch (error) {
+			cleanupHermesInstallContext(context, context.cancelled ? "cancelled" : "failed");
+			throw error;
+		} finally {
+			activeHermesInstalls.delete(sessionId);
+		}
 	}
+	if (existing.ready) {
+		emit({ sessionId, type: "done", source: "hermes-install", message: "Hermes 已安装。" });
+		return existing;
+	}
+	emit({ sessionId, type: "status", source: "hermes-install", message: "未检测到 Hermes，准备运行官方安装器..." });
+	emit({ sessionId, type: "status", source: "hermes-install", message: "正在检查 curl..." });
 	const curlCheck = await runLoginShellCommand("command -v curl");
 	if (curlCheck.code !== 0) {
 		const diagnostic: DesktopRuntimeDiagnostic = {
@@ -487,15 +913,26 @@ export async function installHermesForDesktop(
 		emit({ sessionId, type: "error", source: "hermes-install", message: diagnostic.error });
 		return diagnostic;
 	}
-	await runInstallCommand({
-		sessionId,
-		source: "hermes-install",
-		command: HERMES_INSTALL_COMMAND,
-		emit,
-		startMessage: "正在运行 Hermes 官方安装器...",
-		doneMessage: "Hermes 已安装。",
-	});
-	return checkHermesEnvironmentForDesktop();
+	const context = createHermesInstallContext(sessionId, emit);
+	activeHermesInstalls.set(sessionId, context);
+	try {
+		await runHermesInstallCommandWithDirtyCheckoutRecovery({
+			sessionId,
+			command: HERMES_INSTALL_COMMAND,
+			emit,
+			startMessage: "正在运行 Hermes 官方安装器...",
+			doneMessage: "Hermes 已安装。",
+			context,
+		});
+		cleanupHermesInstallContext(context, "success");
+		emit({ sessionId, type: "status", source: "hermes-install", message: "正在复检 Hermes 环境..." });
+		return checkHermesEnvironmentForDesktop();
+	} catch (error) {
+		cleanupHermesInstallContext(context, context.cancelled ? "cancelled" : "failed");
+		throw error;
+	} finally {
+		activeHermesInstalls.delete(sessionId);
+	}
 }
 
 let codexLoginPromise: Promise<DesktopCodexDiagnostic> | undefined;
@@ -750,7 +1187,74 @@ export async function createWechatLoginForSession(
 	}
 }
 
-export function completeAgentCreation(draft: AgentCreationDraft): void {
+function parseOpenClawGatewayPort(value: unknown): number | undefined {
+	if (typeof value !== "string" || !value.trim()) {
+		return undefined;
+	}
+	try {
+		const raw = value.trim();
+		const url = new URL(raw.startsWith("ws://") || raw.startsWith("wss://") ? raw : `ws://${raw}`);
+		const port = Number.parseInt(url.port, 10);
+		return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function canConnectLocalPort(port: number): Promise<boolean> {
+	return new Promise((resolvePort) => {
+		let settled = false;
+		const socket = net.createConnection({ host: "127.0.0.1", port });
+		const settle = (value: boolean) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			socket.destroy();
+			resolvePort(value);
+		};
+		socket.once("connect", () => settle(true));
+		socket.once("error", () => settle(false));
+		socket.setTimeout(500, () => settle(false));
+	});
+}
+
+function collectConfiguredOpenClawGatewayPorts(): Set<number> {
+	const rootDir = getDefaultPieRootDir();
+	const registry = loadProfileRegistry(rootDir);
+	const ports = new Set<number>();
+	for (const entry of Object.values(registry.profiles)) {
+		try {
+			const homeDir = resolve(rootDir, entry.home);
+			const profile = getStoredProfile(loadConfigStore(homeDir));
+			if (profile?.backend.kind !== "openclaw") {
+				continue;
+			}
+			const port = parseOpenClawGatewayPort(profile.backend.config?.gatewayUrl);
+			if (port) {
+				ports.add(port);
+			}
+		} catch {
+			// Ignore incomplete profile homes while choosing a free OpenClaw gateway port.
+		}
+	}
+	return ports;
+}
+
+async function resolveOpenClawGatewayUrl(): Promise<string> {
+	const configuredPorts = collectConfiguredOpenClawGatewayPorts();
+	for (let port = DEFAULT_OPENCLAW_GATEWAY_PORT; port < 65536; port += 1) {
+		if (configuredPorts.has(port)) {
+			continue;
+		}
+		if (!(await canConnectLocalPort(port))) {
+			return `ws://127.0.0.1:${port}`;
+		}
+	}
+	throw new Error("没有可用的 OpenClaw gateway 端口。");
+}
+
+export async function completeAgentCreation(draft: AgentCreationDraft): Promise<void> {
 	const profileId = draft.sessionId;
 	const homeDir = getProfileHomeDir(profileId);
 	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
@@ -814,6 +1318,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 			models: [{ id: model }],
 		});
 	}
+	const openClawGatewayUrl = draft.framework === "openclaw" ? await resolveOpenClawGatewayUrl() : undefined;
 
 	const profile = createAgentProfile({
 		backend: {
@@ -836,6 +1341,12 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 								managed: true,
 							},
 						}
+					: draft.framework === "openclaw"
+						? {
+								config: {
+									gatewayUrl: openClawGatewayUrl,
+								},
+							}
 				: {}),
 			model: {
 				provider,
@@ -843,7 +1354,7 @@ export function completeAgentCreation(draft: AgentCreationDraft): void {
 				thinkingLevel: draft.thinkingLevel as ThinkingLevel,
 				tools: exModel?.tools ?? "coding",
 				debug: exModel?.debug ?? false,
-				resumeSessions: draft.framework === "ousia",
+				resumeSessions: false,
 				outputToolCallsToIm: true,
 				outputToolCallImMaxLength: 60,
 				outputThinkingToIm: false,

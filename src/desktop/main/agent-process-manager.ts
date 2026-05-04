@@ -40,12 +40,34 @@ const AGENT_READY_LOG_MARKERS = [
 	"Pi Slack channel ready",
 	"Pi Discord channel ready",
 	"Pi Telegram channel ready",
+	"OpenClaw gateway ready",
+	"[gateway] ready",
+	"[gateway] http server listening",
+	"OpenClaw gateway already reachable",
 ];
 const AGENT_START_TIMEOUT_MS = 30_000;
-const AGENT_STOP_FORCE_KILL_MS = 1500;
+const AGENT_STOP_FORCE_KILL_MS = 5000;
+const STREAM_LOG_UPDATE_DEBOUNCE_MS = 100;
 const WECHAT_SESSION_EXPIRED_MARKER = "微信会话已失效（errcode -14）";
 const WECHAT_SESSION_STILL_EXPIRED_MARKER = "微信会话仍然失效（errcode -14）";
 const WECHAT_SESSION_RECOVERED_MARKER = "微信会话已恢复";
+
+function appendStreamDelta(existing: string, incoming: string): string {
+	if (!incoming) {
+		return existing;
+	}
+	if (!existing) {
+		return incoming;
+	}
+	if (incoming.startsWith(existing)) {
+		return incoming;
+	}
+	return `${existing}${incoming}`;
+}
+
+function stripAnsiControlSequences(text: string): string {
+	return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+}
 
 function signalAgentProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 	if (child.pid && process.platform !== "win32") {
@@ -91,7 +113,7 @@ export class AgentProcessManager {
 	private readonly runningAgents = new Map<string, ChildProcess>();
 	private readonly agentLogs = new Map<string, AgentLogEntry[]>();
 	private readonly agentLogBuffers = new Map<string, { stdout: string; stderr: string }>();
-	private readonly activeAgentStreamLogs = new Map<string, { prefix: string; entry: AgentLogEntry }>();
+	private readonly activeAgentStreamLogs = new Map<string, { prefix: string; entry: AgentLogEntry; flushTimer?: NodeJS.Timeout; dirty: boolean }>();
 	private readonly agentStartedAt = new Map<string, number>();
 	private readonly agentLifecycles = new Map<string, RuntimeEnvironmentLifecycle>();
 	private readonly agentEnvironments = new Map<string, AgentRuntimeEnvironment>();
@@ -306,27 +328,28 @@ export class AgentProcessManager {
 	}
 
 	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string): void {
-		if (!text) {
+		const cleanText = stripAnsiControlSequences(text);
+		if (!cleanText) {
 			return;
 		}
-		this.updateLifecycleFromLog(agentId, text);
-		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => text.includes(marker))) {
+		this.updateLifecycleFromLog(agentId, cleanText);
+		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => cleanText.includes(marker))) {
 			this.markAgentReady(agentId);
 		}
 		if (stream === "stdout") {
 			for (const prefix of ["Agent: ", "> Thinking "]) {
-				if (text.startsWith(prefix)) {
-					this.appendAgentStreamDelta(agentId, prefix, text.slice(prefix.length));
+				if (cleanText.startsWith(prefix)) {
+					this.appendAgentStreamDelta(agentId, prefix, cleanText.slice(prefix.length));
 					return;
 				}
 			}
 		}
-		this.activeAgentStreamLogs.delete(agentId);
+		this.flushAgentStreamLog(agentId);
 		const entry: AgentLogEntry = {
 			id: this.nextLogId++,
 			agentId,
 			stream,
-			text,
+			text: cleanText,
 			timestamp: new Date().toISOString(),
 		};
 		this.pushLogEntry(agentId, entry);
@@ -336,10 +359,12 @@ export class AgentProcessManager {
 	private appendAgentStreamDelta(agentId: string, prefix: string, delta: string): void {
 		const activeLog = this.activeAgentStreamLogs.get(agentId);
 		if (activeLog?.prefix === prefix) {
-			activeLog.entry.text += delta;
-			this.emitAgentLog({ ...activeLog.entry, updated: true });
+			activeLog.entry.text = `${prefix}${appendStreamDelta(activeLog.entry.text.slice(prefix.length), delta)}`;
+			activeLog.dirty = true;
+			this.scheduleAgentStreamLogFlush(agentId, activeLog);
 			return;
 		}
+		this.flushAgentStreamLog(agentId);
 
 		const entry: AgentLogEntry = {
 			id: this.nextLogId++,
@@ -349,8 +374,38 @@ export class AgentProcessManager {
 			timestamp: new Date().toISOString(),
 		};
 		this.pushLogEntry(agentId, entry);
-		this.activeAgentStreamLogs.set(agentId, { prefix, entry });
+		this.activeAgentStreamLogs.set(agentId, { prefix, entry, dirty: false });
 		this.emitAgentLog(entry);
+	}
+
+	private scheduleAgentStreamLogFlush(agentId: string, activeLog: { prefix: string; entry: AgentLogEntry; flushTimer?: NodeJS.Timeout; dirty: boolean }): void {
+		if (activeLog.flushTimer) {
+			return;
+		}
+		activeLog.flushTimer = setTimeout(() => {
+			activeLog.flushTimer = undefined;
+			if (!activeLog.dirty) {
+				return;
+			}
+			activeLog.dirty = false;
+			this.emitAgentLog({ ...activeLog.entry, updated: true });
+		}, STREAM_LOG_UPDATE_DEBOUNCE_MS);
+	}
+
+	private flushAgentStreamLog(agentId: string): void {
+		const activeLog = this.activeAgentStreamLogs.get(agentId);
+		if (!activeLog) {
+			return;
+		}
+		if (activeLog.flushTimer) {
+			clearTimeout(activeLog.flushTimer);
+			activeLog.flushTimer = undefined;
+		}
+		if (activeLog.dirty) {
+			activeLog.dirty = false;
+			this.emitAgentLog({ ...activeLog.entry, updated: true });
+		}
+		this.activeAgentStreamLogs.delete(agentId);
 	}
 
 	private pushLogEntry(agentId: string, entry: AgentLogEntry): void {
@@ -460,6 +515,7 @@ export class AgentProcessManager {
 	}
 
 	private flushAgentLogBuffers(agentId: string): void {
+		this.flushAgentStreamLog(agentId);
 		const buffer = this.agentLogBuffers.get(agentId);
 		if (!buffer) {
 			return;

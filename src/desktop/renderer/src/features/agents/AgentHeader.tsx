@@ -141,6 +141,12 @@ export function AgentHeader({
 		});
 		reader.readAsDataURL(file);
 	};
+	const showRuntimeUnavailable =
+		agent.frameworkKind === "hermes" &&
+		agent.desiredState === "running" &&
+		agent.runtimeEnvironment?.lifecycle.state === "failed" &&
+		agent.status !== "running" &&
+		agent.status !== "starting";
 
 	return (
 		<div className={`${open ? "no-drag" : "drag-region"} shrink-0 bg-white px-7 pb-2 pt-5`}>
@@ -251,6 +257,10 @@ export function AgentHeader({
 					) : showRestartConfigHint ? (
 						<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)]">
 							{t("restartAppliesLatestConfig")}
+						</span>
+					) : showRuntimeUnavailable ? (
+						<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--red-3)] px-2.5 text-[11px] font-medium text-[var(--red-11)]">
+							{t("runtimeUnavailable")}
 						</span>
 					) : null}
 				</div>

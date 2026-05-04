@@ -86,6 +86,7 @@ export class SessionPool {
 	private readonly authStorage: AuthStorage;
 	private readonly modelRegistry: ModelRegistry;
 	private readonly sessions = new Map<string, AgentSession>();
+	private readonly freshSessionKeys = new Set<string>();
 
 	constructor(options: SessionPoolOptions) {
 		this.options = options;
@@ -121,10 +122,13 @@ export class SessionPool {
 		const reloadStartedAt = Date.now();
 		await resourceLoader.reload();
 		initSteps.push({ label: "reload", durationMs: Date.now() - reloadStartedAt });
-		const latestSessionFile = this.options.resumeSessions ? getLatestSessionFile(sessionHistoryDir) : undefined;
+		const shouldCreateFreshSession = this.freshSessionKeys.delete(conversationKey);
+		const latestSessionFile = this.options.resumeSessions && !shouldCreateFreshSession ? getLatestSessionFile(sessionHistoryDir) : undefined;
 		const sessionManagerStartedAt = Date.now();
 		const sessionManager = this.options.resumeSessions
-			? latestSessionFile
+			? shouldCreateFreshSession
+				? SessionManager.create(this.options.homeDir, sessionHistoryDir)
+				: latestSessionFile
 				? SessionManager.open(latestSessionFile, sessionHistoryDir)
 				: SessionManager.create(this.options.homeDir, sessionHistoryDir)
 			: SessionManager.inMemory();
@@ -162,6 +166,25 @@ export class SessionPool {
 		}
 		this.sessions.set(conversationKey, session);
 		return session;
+	}
+
+	async compactSession(conversationKey: string): Promise<{ summary?: string }> {
+		const session = await this.getSession(conversationKey);
+		if (session.isStreaming) {
+			throw new Error("Agent is still responding. Wait for the current turn to finish, then send /compact again.");
+		}
+		const result = await session.compact();
+		const summary = typeof result?.summary === "string" ? result.summary : undefined;
+		return { summary };
+	}
+
+	async resetSession(conversationKey: string): Promise<void> {
+		const existing = this.sessions.get(conversationKey);
+		if (existing?.isStreaming) {
+			await existing.abort();
+		}
+		this.sessions.delete(conversationKey);
+		this.freshSessionKeys.add(conversationKey);
 	}
 }
 

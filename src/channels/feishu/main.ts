@@ -3,6 +3,7 @@
 import process from "node:process";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import chalk from "chalk";
+import { getAgentBackendLabel } from "../../agents/backend-registry.js";
 import {
 	createAgentSessionPool,
 	extractAssistantText,
@@ -16,6 +17,7 @@ import {
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import {
 	extractPromptText,
 	getConversationKey,
@@ -28,21 +30,8 @@ import { loadConfig, type FeishuBotConfig } from "./config.js";
 import { type LarkMessageEvent, LarkClient } from "./platform/index.js";
 import { sendPlainReply } from "./progress-reporter.js";
 
-function formatBackendLabel(kind: FeishuBotConfig["backendKind"]): string {
-	if (kind === "ousia") {
-		return "Ousia";
-	}
-	if (kind === "codex") {
-		return "Codex";
-	}
-	if (kind === "hermes") {
-		return "Hermes";
-	}
-	return "Pi Coding Agent";
-}
-
 function formatRuntimeTitle(kind: FeishuBotConfig["backendKind"]): string {
-	return `${formatBackendLabel(kind)} Feishu channel ready`;
+	return `${getAgentBackendLabel(kind)} Feishu channel ready`;
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -289,6 +278,17 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 
 		const conversationKey = getConversationKey(event);
+		const command = parseImCommand(promptText);
+		if (command) {
+			await handleImCommand(command, {
+				conversationKey,
+				sessionPool: this.sessionPool,
+				reply: async (text) => {
+					await sendPlainReply(this.config.feishu, event, text);
+				},
+			});
+			return;
+		}
 		console.log(chalk.cyan(`Message received: ${conversationKey} ${promptText.slice(0, 120)}`));
 		const controller = this.getConversationController(conversationKey);
 		await controller.submit(event, promptText);
@@ -305,7 +305,7 @@ export function createFeishuBotRuntime(config: FeishuBotConfig): FeishuBotRuntim
 
 function armForceExitAfterInterrupt(code: number): ReturnType<typeof setTimeout> {
 	return setTimeout(() => {
-		console.error("\n[pi-feishu] Graceful shutdown is taking too long; forcing exit.");
+		console.error("\n[pie/feishu] Graceful shutdown is taking too long; forcing exit.");
 		process.exit(code);
 	}, 2500);
 }
@@ -331,7 +331,7 @@ export async function runFeishuBot(nextConfig: FeishuBotConfig = loadConfig()): 
 	const onSigint = (): void => {
 		sigintCount += 1;
 		if (sigintCount >= 2) {
-			console.error("\n[pi-feishu] Second interrupt: forcing exit.");
+			console.error("\n[pie/feishu] Second interrupt: forcing exit.");
 			process.exit(130);
 		}
 		requestStop(130);

@@ -54,12 +54,20 @@ const CODEX_FRAMEWORK: AgentFrameworkRuntime = {
 	label: "Codex",
 };
 
+const OPENCLAW_FRAMEWORK: AgentFrameworkRuntime = {
+	kind: "openclaw",
+	label: "OpenClaw",
+};
+
 export function resolveAgentFrameworkRuntime(kind: AgentBackendKind | undefined): AgentFrameworkRuntime {
 	if (kind === "ousia") {
 		return OUSIA_FRAMEWORK;
 	}
 	if (kind === "codex") {
 		return CODEX_FRAMEWORK;
+	}
+	if (kind === "openclaw") {
+		return OPENCLAW_FRAMEWORK;
 	}
 	if (kind === "hermes") {
 		return HERMES_FRAMEWORK;

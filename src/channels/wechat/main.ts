@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import chalk from "chalk";
+import { getAgentBackendLabel } from "../../agents/backend-registry.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -17,6 +18,7 @@ import {
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import { formatToolImErrorLine, formatToolImLine } from "../common/tool-call-im.js";
 import { loadConfig, type WechatBotConfig } from "./config.js";
 import { loginWechatWithQr } from "./login.js";
@@ -58,19 +60,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			{ once: true },
 		);
 	});
-}
-
-function formatBackendLabel(kind: WechatBotConfig["backendKind"]): string {
-	if (kind === "ousia") {
-		return "Ousia";
-	}
-	if (kind === "codex") {
-		return "Codex";
-	}
-	if (kind === "hermes") {
-		return "Hermes";
-	}
-	return "Pi Coding Agent";
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -454,7 +443,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const lines = [
-			chalk.bold(`${formatBackendLabel(this.config.backendKind)} Wechat channel ready`),
+			chalk.bold(`${getAgentBackendLabel(this.config.backendKind)} Wechat channel ready`),
 			chalk.gray(`account    ${this.config.wechat.accountId}`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
@@ -517,6 +506,15 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			return;
 		}
 		const conversationKey = getConversationKey(message);
+		const command = parseImCommand(promptText);
+		if (command) {
+			await handleImCommand(command, {
+				conversationKey,
+				sessionPool: this.sessionPool,
+				reply: (text) => this.sendPlainReply(message, text),
+			});
+			return;
+		}
 		console.log(chalk.cyan(`Wechat message received: ${conversationKey} ${promptText.slice(0, 120)}`));
 		await this.getConversationController(conversationKey).submit(message, promptText);
 	}

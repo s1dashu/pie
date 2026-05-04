@@ -60,6 +60,14 @@ class PiAdapterSessionPool implements AgentConversationSessionPool {
 		const session = (await this.pool.getSession(conversationKey)) as unknown as AgentConversationSession;
 		return session.capabilities ? session : withCapabilities(session);
 	}
+
+	compactSession(conversationKey: string): Promise<{ summary?: string }> {
+		return this.pool.compactSession(conversationKey);
+	}
+
+	resetSession(conversationKey: string): Promise<void> {
+		return this.pool.resetSession(conversationKey);
+	}
 }
 
 export const piAgentBackendAdapter: AgentBackendAdapter = {

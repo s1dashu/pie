@@ -138,6 +138,19 @@ export interface AgentSessionCapabilities {
 	supportsToolEvents: boolean;
 }
 
+export function isFirstResponseSignal(event: AgentSessionEvent): boolean {
+	if (event.type === "text_delta" || event.type === "thinking_delta") {
+		return Boolean(event.delta);
+	}
+	if (event.type === "tool_call_started") {
+		return true;
+	}
+	if (event.type === "tool_call_updated") {
+		return event.partialResult !== undefined;
+	}
+	return false;
+}
+
 export interface AgentRoundInput {
 	text: string;
 }
@@ -161,6 +174,8 @@ export interface AgentConversationSession {
 export interface AgentConversationSessionPool {
 	readonly capabilities: AgentSessionCapabilities;
 	getSession(conversationKey: string): Promise<AgentConversationSession>;
+	compactSession?(conversationKey: string): Promise<{ summary?: string }>;
+	resetSession?(conversationKey: string): Promise<void>;
 }
 
 export interface AgentSessionRuntimeOptions {

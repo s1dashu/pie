@@ -43,6 +43,22 @@ async function withMinimumDuration<T>(operation: () => Promise<T>, minDurationMs
 	}
 }
 
+function isRuntimeUnavailableStartError(message: string): boolean {
+	return message.includes("未检测到 Hermes 运行时") ||
+		message.includes("Hermes 运行时不可用") ||
+		message.includes("Bot process exited before it was ready");
+}
+
+function getFriendlyStartError(message: string, t: ReturnType<typeof useI18n>["t"]): string {
+	if (message.includes("Bot did not become ready within 30s")) {
+		return t("startTimeout");
+	}
+	if (isRuntimeUnavailableStartError(message)) {
+		return t("startRuntimeUnavailable");
+	}
+	return message;
+}
+
 function setAgentStatusInCache(
 	queryClient: ReturnType<typeof useQueryClient>,
 	agentId: string,
@@ -432,7 +448,7 @@ export function AgentDetailView({
 		onError: (err: Error) => {
 			void queryClient.invalidateQueries({ queryKey: ["agents"] });
 			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
-			onError(err.message);
+			onError(getFriendlyStartError(err.message, t));
 		},
 	});
 	const reauthorizeWechat = useMutation({
@@ -499,7 +515,7 @@ export function AgentDetailView({
 		onError: (err: Error) => {
 			void queryClient.invalidateQueries({ queryKey: ["agents"] });
 			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
-			onError(err.message);
+			onError(getFriendlyStartError(err.message, t));
 		},
 	});
 	const pause = useMutation({

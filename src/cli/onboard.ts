@@ -903,7 +903,7 @@ export async function runOnboard(argv: string[]): Promise<void> {
 
 	const tools = exModel?.tools ?? "coding";
 
-	const resumeSessions = true;
+	const resumeSessions = false;
 	const outputToolCallsToIm = false;
 	const outputToolCallImMaxLength = 60;
 	const outputThinkingToIm = false;

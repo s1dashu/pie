@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { AgentDetails, AgentSummary } from "../shared/types";
 import { AgentAvatar } from "./components/shared/agent-avatar";
+import { Spinner } from "./components/ui/spinner-1";
 import { Toaster, toast } from "./components/ui/sonner";
 import { runtimeLifecycleLabel, runtimeLifecycleTone, statusLabel, statusTone } from "./features/agents/agent-display";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
@@ -51,6 +52,7 @@ export function App(): JSX.Element {
 	}
 
 	const [selection, setSelection] = useState<AppSelection | undefined>();
+	const [quittingAgentIds, setQuittingAgentIds] = useState<string[]>();
 	const queryClient = useQueryClient();
 	const selectedId = selection?.type === "agent" ? selection.id : undefined;
 
@@ -97,6 +99,55 @@ export function App(): JSX.Element {
 			setSelection({ type: "agent", id: agentId });
 			void queryClient.invalidateQueries({ queryKey: ["agents"] });
 			void queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+		});
+	}, [queryClient]);
+
+	useEffect(() => {
+		return window.pie.onDesktopQuitEvent((event) => {
+			if (event.phase !== "terminating-agents") {
+				return;
+			}
+			const agentIds = new Set(event.agentIds);
+			setQuittingAgentIds(event.agentIds);
+			const updatedAt = new Date().toISOString();
+			queryClient.setQueryData<AgentSummary[]>(["agents"], (current) =>
+				current?.map((agent) =>
+					agentIds.has(agent.id)
+						? {
+								...agent,
+								status: "running",
+								runtimeEnvironment: agent.runtimeEnvironment
+									? {
+											...agent.runtimeEnvironment,
+											lifecycle: {
+												state: "stopping",
+												updatedAt,
+												reason: "quit",
+											},
+										}
+									: agent.runtimeEnvironment,
+							}
+						: agent,
+				),
+			);
+			for (const agentId of event.agentIds) {
+				queryClient.setQueryData<AgentDetails>(["agent", agentId], (current) =>
+					current?.runtimeEnvironment
+						? {
+								...current,
+								status: "running",
+								runtimeEnvironment: {
+									...current.runtimeEnvironment,
+									lifecycle: {
+										state: "stopping",
+										updatedAt,
+										reason: "quit",
+									},
+								},
+							}
+						: current,
+				);
+			}
 		});
 	}, [queryClient]);
 
@@ -166,8 +217,27 @@ export function App(): JSX.Element {
 					}}
 				/>
 				<Toaster />
+				{quittingAgentIds?.length ? <QuitOverlay count={quittingAgentIds.length} /> : null}
 			</main>
 		</I18nProvider>
+	);
+}
+
+function QuitOverlay({ count }: { count: number }): JSX.Element {
+	const { t } = useI18n();
+	return (
+		<div className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(248,250,252,0.74)] px-6 backdrop-blur-md">
+			<div className="pie-smooth-corner w-full max-w-[360px] rounded-[24px] border border-[var(--slate-5)] bg-white/95 px-6 py-5 text-center shadow-[0_18px_60px_rgba(15,23,42,0.16),0_2px_8px_rgba(15,23,42,0.08)]">
+				<div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-[var(--slate-3)]">
+					<Spinner size={18} color="var(--slate-11)" />
+				</div>
+				<div className="mt-4 text-base font-semibold leading-snug text-foreground">{t("quittingTitle")}</div>
+				<div className="mt-2 text-sm leading-5 text-muted-foreground">{t("quittingDesc")}</div>
+				<div className="mt-4 rounded-md border border-[var(--slate-5)] bg-[var(--slate-2)] px-3 py-2 text-xs font-medium text-muted-foreground">
+					{t("quittingCount", { count })}
+				</div>
+			</div>
+		</div>
 	);
 }
 

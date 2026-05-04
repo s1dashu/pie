@@ -3,7 +3,7 @@ import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import type { DesktopLanguage, DesktopLogRetention, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
+import type { DesktopLanguage, DesktopLogRetention, DesktopManagedRuntimeKind, DesktopManagedRuntimeStatus, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
@@ -54,6 +54,32 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 			}
 			onError((error as Error).message);
 		},
+	});
+	const runtimeStatuses = useQuery({
+		queryKey: ["managed-runtimes"],
+		queryFn: async () => Promise.all([
+			window.pie.getManagedRuntimeStatus("hermes"),
+			window.pie.getManagedRuntimeStatus("codex"),
+			window.pie.getManagedRuntimeStatus("openclaw"),
+		]),
+	});
+	const upgradeRuntime = useMutation({
+		mutationFn: (kind: DesktopManagedRuntimeKind) => window.pie.upgradeManagedRuntime(kind),
+		onSuccess: (updated) => {
+			queryClient.setQueryData<DesktopManagedRuntimeStatus[]>(["managed-runtimes"], (current) =>
+				(current ?? []).map((item) => (item.kind === updated.kind ? updated : item)),
+			);
+		},
+		onError: (error) => onError((error as Error).message),
+	});
+	const uninstallRuntime = useMutation({
+		mutationFn: (kind: DesktopManagedRuntimeKind) => window.pie.uninstallManagedRuntime(kind),
+		onSuccess: (updated) => {
+			queryClient.setQueryData<DesktopManagedRuntimeStatus[]>(["managed-runtimes"], (current) =>
+				(current ?? []).map((item) => (item.kind === updated.kind ? updated : item)),
+			);
+		},
+		onError: (error) => onError((error as Error).message),
 	});
 
 	const data = settings.data;
@@ -206,6 +232,26 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 							</Field>
 						</SettingsSection>
 
+						<SettingsSection title={t("advancedFeatures")} contentClassName="space-y-4">
+							<div className="px-1">
+								<div className="text-sm font-medium text-foreground">{t("versionManagement")}</div>
+								<div className="mt-1 text-xs leading-5 text-muted-foreground">{t("versionManagementDesc")}</div>
+							</div>
+							<div className="space-y-2">
+								{(["hermes", "codex", "openclaw"] as const).map((kind) => (
+									<RuntimeVersionRow
+										key={kind}
+										kind={kind}
+										status={runtimeStatuses.data?.find((item) => item.kind === kind)}
+										isLoading={runtimeStatuses.isLoading}
+										isUpgrading={upgradeRuntime.isPending && upgradeRuntime.variables === kind}
+										isUninstalling={uninstallRuntime.isPending && uninstallRuntime.variables === kind}
+										onUpgrade={() => upgradeRuntime.mutate(kind)}
+										onUninstall={() => uninstallRuntime.mutate(kind)}
+									/>
+								))}
+							</div>
+						</SettingsSection>
 					</div>
 				) : (
 					<div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
@@ -233,6 +279,64 @@ function SettingsSection({
 				{children}
 			</div>
 		</section>
+	);
+}
+
+function RuntimeVersionRow({
+	kind,
+	status,
+	isLoading,
+	isUpgrading,
+	isUninstalling,
+	onUpgrade,
+	onUninstall,
+}: {
+	kind: DesktopManagedRuntimeKind;
+	status?: DesktopManagedRuntimeStatus;
+	isLoading: boolean;
+	isUpgrading: boolean;
+	isUninstalling: boolean;
+	onUpgrade: () => void;
+	onUninstall: () => void;
+}): JSX.Element {
+	const { t } = useI18n();
+	const label = kind === "hermes" ? "Hermes" : kind === "openclaw" ? "OpenClaw" : "Codex";
+	const installed = status?.installed === true;
+	const detail = isLoading
+		? t("checking")
+		: installed
+			? status?.version || status?.executablePath || t("installed")
+			: status?.error || t("notInstalled");
+	return (
+		<div className="flex items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+			<div className="min-w-0">
+				<div className="flex items-center gap-2">
+					<span className={`size-2 rounded-full ${installed ? "bg-[var(--lime-9)]" : "bg-[var(--slate-6)]"}`} />
+					<div className="text-sm font-medium text-foreground">{label}</div>
+				</div>
+				<div className="mt-1 truncate text-xs leading-5 text-muted-foreground">{detail}</div>
+			</div>
+			<div className="flex shrink-0 items-center gap-2">
+				<Button
+					variant="secondary"
+					size="xs"
+					className="!h-6 rounded-full px-2.5 !text-[11px] !font-medium !leading-none"
+					onClick={onUpgrade}
+					disabled={isLoading || isUpgrading || isUninstalling || (kind === "openclaw" && !installed)}
+				>
+					{isUpgrading ? t("upgrading") : t("upgradeLatest")}
+				</Button>
+				<Button
+					variant="destructive"
+					size="xs"
+					className="!h-6 rounded-full px-2.5 !text-[11px] !font-medium !leading-none"
+					onClick={onUninstall}
+					disabled={isLoading || isUpgrading || isUninstalling || !installed}
+				>
+					{isUninstalling ? t("uninstalling") : t("uninstall")}
+				</Button>
+			</div>
+		</div>
 	);
 }
 

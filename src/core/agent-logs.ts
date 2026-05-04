@@ -40,7 +40,19 @@ export function readAgentLogEntries(homeDir: string, limit = 1000): AgentLogEntr
 			// Ignore malformed append-only log lines.
 		}
 	}
-	return entries.sort(compareAgentLogEntries).slice(-limit);
+	return mergeUpdatedLogEntries(entries).sort(compareAgentLogEntries).slice(-limit);
+}
+
+function agentLogEntryKey(entry: AgentLogEntry): string {
+	return `${entry.agentId}:${entry.id}:${entry.timestamp}`;
+}
+
+function mergeUpdatedLogEntries(entries: AgentLogEntry[]): AgentLogEntry[] {
+	const byKey = new Map<string, AgentLogEntry>();
+	for (const entry of entries) {
+		byKey.set(agentLogEntryKey(entry), entry);
+	}
+	return [...byKey.values()];
 }
 
 function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): number {

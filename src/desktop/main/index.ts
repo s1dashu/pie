@@ -54,8 +54,11 @@ import type {
 	AgentSummary,
 	BotAvatarOption,
 	DesktopCodexDiagnostic,
+	DesktopQuitEvent,
 	DesktopModelCatalog,
 	DesktopFeishuAppCredentials,
+	DesktopManagedRuntimeKind,
+	DesktopManagedRuntimeStatus,
 	DesktopRuntimeDiagnostic,
 	DesktopWechatCredentials,
 	DesktopSettings,
@@ -67,6 +70,9 @@ import {
 	beginAgentCreation as beginCreationSession,
 	checkCodexEnvironmentForDesktop,
 	checkHermesEnvironmentForDesktop,
+	cancelAllHermesInstallsForDesktop,
+	cancelHermesInstallForDesktop,
+	checkManagedRuntimeForDesktop,
 	completeAgentCreation as completeCreationSession,
 	createFeishuAppForSession,
 	createWechatLoginForSession,
@@ -74,8 +80,11 @@ import {
 	getProviderCredentialEnv,
 	installCodexForDesktop,
 	installHermesForDesktop,
+	uninstallManagedRuntimeForDesktop,
+	upgradeManagedRuntimeForDesktop,
 	loadHermesModelCatalog,
 	loadCodexModelCatalog,
+	loadOpenClawModelCatalog,
 	loadModelCatalog,
 	loadModelOptions,
 	openCodexLoginForDesktop,
@@ -93,6 +102,7 @@ const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "sto
 const cpuStatsCache = new Map<string, { cpuTimeSeconds: number; sampledAt: number }>();
 const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
+const RUNTIME_STOP_FORCE_KILL_MS = 5000;
 let isQuitting = false;
 let didStopAgentsForQuit = false;
 const restoringAgentIds = new Set<string>();
@@ -996,6 +1006,9 @@ async function getAgentResources(id: string): Promise<AgentResourceStats> {
 
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
+	if (agent.frameworkKind === "openclaw") {
+		return loadOpenClawModelCatalog();
+	}
 	const catalog = agent.frameworkKind === "hermes" ? loadHermesModelCatalog(agent.home) : loadModelCatalog(agent.home);
 	if (agent.model?.provider !== "codex-cli") {
 		return catalog;
@@ -1234,6 +1247,9 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	const nextAppId = draft.appId ?? feishuChannel?.appId ?? "";
 	const nextBrand = draft.brand ?? feishuChannel?.brand ?? "feishu";
 	const nextFeishuMessageOutputMode = draft.feishuMessageOutputMode ?? feishuChannel?.messageOutputMode ?? "bubble";
+	const nextOutputThinkingToIm = nextFeishuMessageOutputMode === "card"
+		? false
+		: draft.outputThinkingToIm ?? model.outputThinkingToIm ?? false;
 	const nextAppSecret = draft.appSecret ?? readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
 	if (hasFeishuUpdate) {
 		if (!nextAppId.trim() || !nextAppSecret.trim()) {
@@ -1312,7 +1328,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		thinkingLevel: draft.thinkingLevel ?? model.thinkingLevel,
 		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm ?? true,
 		outputToolCallImMaxLength: draft.outputToolCallImMaxLength ?? model.outputToolCallImMaxLength ?? 60,
-		outputThinkingToIm: draft.outputThinkingToIm ?? model.outputThinkingToIm ?? false,
+		outputThinkingToIm: nextOutputThinkingToIm,
 	});
 	writeProfileConfig(agent.home, {
 		...current,
@@ -1394,6 +1410,24 @@ async function startAgent(id: string): Promise<AgentDetails> {
 		return getAgent(id);
 	}
 	const existing = await getAgent(id);
+	if (existing.frameworkKind === "hermes") {
+		const diagnostic = await checkHermesEnvironmentForDesktop();
+		if (!diagnostic.ready) {
+			const message = diagnostic.installed
+				? "Hermes 运行时不可用，请先升级或重新安装 Hermes。"
+				: "未检测到 Hermes 运行时，请先安装 Hermes 后再启动这个 Agent。";
+			writeRuntimeStateRecord(existing.home, {
+				homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
+				workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
+				lifecycle: {
+					state: "failed",
+					updatedAt: new Date().toISOString(),
+					reason: message,
+				},
+			});
+			throw new Error(message);
+		}
+	}
 	if (hasLiveRuntimeProcess(existing.home)) {
 		writeRuntimeStateRecord(existing.home, {
 			homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
@@ -1434,7 +1468,7 @@ async function stopRunningAgent(id: string): Promise<void> {
 				process: record,
 			});
 			signalRuntimeProcess(record.pid, "SIGTERM");
-			await new Promise((resolveStop) => setTimeout(resolveStop, 1500));
+			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
 			if (isPidRunning(record.pid)) {
 				signalRuntimeProcess(record.pid, "SIGKILL");
 			}
@@ -1458,6 +1492,19 @@ async function stopRunningAgent(id: string): Promise<void> {
 
 async function stopAgentsForQuit(): Promise<void> {
 	const agents = await listAgents();
+	const terminatingAgentIds = agents
+		.filter((agent) => {
+			if (agentProcesses.isRunning(agent.id)) {
+				return true;
+			}
+			const record = readRuntimeProcessRecord(agent.home);
+			return Boolean(record && resolve(record.agentHome) === resolve(agent.home) && isPidRunning(record.pid));
+		})
+		.map((agent) => agent.id);
+	if (terminatingAgentIds.length) {
+		showMainWindow();
+		emitDesktopQuitEvent({ phase: "terminating-agents", agentIds: terminatingAgentIds });
+	}
 	await Promise.allSettled(
 		agents.map(async (agent) => {
 			if (agentProcesses.isRunning(agent.id)) {
@@ -1480,7 +1527,7 @@ async function stopAgentsForQuit(): Promise<void> {
 				process: record,
 			});
 			signalRuntimeProcess(record.pid, "SIGTERM");
-			await new Promise((resolveStop) => setTimeout(resolveStop, 1500));
+			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
 			if (isPidRunning(record.pid)) {
 				signalRuntimeProcess(record.pid, "SIGKILL");
 			}
@@ -1501,6 +1548,23 @@ async function stopAgentsForQuit(): Promise<void> {
 			});
 		}),
 	);
+}
+
+function emitDesktopQuitEvent(event: DesktopQuitEvent): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (win.isDestroyed() || win.webContents.isDestroyed()) {
+			continue;
+		}
+		if (win.webContents.isLoading()) {
+			win.webContents.once("did-finish-load", () => {
+				if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+					win.webContents.send("desktop:quit-event", event);
+				}
+			});
+		} else {
+			win.webContents.send("desktop:quit-event", event);
+		}
+	}
 }
 
 function emitDeleteEvent(event: AgentDeleteEvent): void {
@@ -1810,6 +1874,14 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:openclaw-model-catalog", async () => {
+		try {
+			return loadOpenClawModelCatalog();
+		} catch (error) {
+			console.error("[ipc] agents:openclaw-model-catalog failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:codex-diagnostic", async (): Promise<DesktopCodexDiagnostic> => {
 		try {
 			return await checkCodexEnvironmentForDesktop();
@@ -1850,6 +1922,38 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:hermes-install-cancel", async (_event, sessionId: string): Promise<void> => {
+		try {
+			await cancelHermesInstallForDesktop(sessionId);
+		} catch (error) {
+			console.error("[ipc] agents:hermes-install-cancel failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("runtimes:status", async (_event, kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> => {
+		try {
+			return await checkManagedRuntimeForDesktop(kind);
+		} catch (error) {
+			console.error("[ipc] runtimes:status failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("runtimes:upgrade", async (_event, kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> => {
+		try {
+			return await upgradeManagedRuntimeForDesktop(kind);
+		} catch (error) {
+			console.error("[ipc] runtimes:upgrade failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("runtimes:uninstall", async (_event, kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus> => {
+		try {
+			return await uninstallManagedRuntimeForDesktop(kind);
+		} catch (error) {
+			console.error("[ipc] runtimes:uninstall failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:create-feishu-app", async (_event, sessionId: string): Promise<DesktopFeishuAppCredentials> => {
 		try {
 			return await createFeishuAppForSession(sessionId, emitOnboardEvent);
@@ -1884,7 +1988,7 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("agents:create-complete", async (_event, draft: AgentCreationDraft) => {
 		try {
-			completeCreationSession(draft);
+			await completeCreationSession(draft);
 			const agent = await getAgent(draft.sessionId);
 			if (draft.feishu?.avatarUrl) {
 				await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
@@ -2068,6 +2172,7 @@ app.on("activate", () => {
 app.on("before-quit", (event) => {
 	isQuitting = true;
 	applyKeepAwakeSetting({ ...readDesktopSettings(), keepAwakeWhileOpen: false });
+	cancelAllHermesInstallsForDesktop();
 	if (readDesktopSettings().quitTerminatesAgents && !didStopAgentsForQuit) {
 		event.preventDefault();
 		void stopAgentsForQuit().finally(() => {

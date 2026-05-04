@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -125,6 +125,13 @@ class CodexAppServerSession implements AgentConversationSession {
 	async abort(): Promise<void> {
 		this.aborted = true;
 		this.process?.kill("SIGTERM");
+	}
+
+	close(): void {
+		this.aborted = true;
+		this.process?.kill("SIGTERM");
+		this.process = undefined;
+		this.initialized = false;
 	}
 
 	async steer(text: string): Promise<void> {
@@ -571,6 +578,11 @@ class CodexAppServerSession implements AgentConversationSession {
 		mkdirSync(this.sessionDir(), { recursive: true });
 		writeFileSync(join(this.sessionDir(), "thread.json"), `${JSON.stringify({ threadId }, null, 2)}\n`, "utf8");
 	}
+
+	clearPersistedThread(): void {
+		this.threadId = undefined;
+		rmSync(join(this.sessionDir(), "thread.json"), { force: true });
+	}
 }
 
 class CodexAppServerSessionPool implements AgentConversationSessionPool {
@@ -601,6 +613,33 @@ class CodexAppServerSessionPool implements AgentConversationSessionPool {
 		});
 		this.sessions.set(conversationKey, session);
 		return session;
+	}
+
+	async resetSession(conversationKey: string): Promise<void> {
+		const existing = this.sessions.get(conversationKey);
+		if (existing) {
+			if (existing.isStreaming) {
+				await existing.abort();
+			}
+			existing.clearPersistedThread();
+			existing.close();
+			this.sessions.delete(conversationKey);
+			return;
+		}
+		const requestedModel = this.options.modelId ?? (this.options.model?.id ? String(this.options.model.id) : undefined);
+		const session = new CodexAppServerSession({
+			homeDir: this.options.homeDir,
+			conversationKey,
+			model: this.resolveModel(requestedModel),
+			thinkingLevel: this.options.thinkingLevel,
+			sandboxMode: readCodexSandboxMode(this.options.backendConfig),
+			webSearchMode: readCodexWebSearchMode(this.options.backendConfig),
+			systemPrompt: this.options.assistantSystemPrompt,
+			resumeSessions: this.options.resumeSessions,
+			verboseLogs: this.options.verboseLogs,
+			debug: this.options.debug,
+		});
+		session.clearPersistedThread();
 	}
 
 	private resolveModel(requestedModel: string | undefined): string {

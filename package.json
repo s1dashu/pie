@@ -1,13 +1,25 @@
 {
   "name": "pie",
+  "version": "0.0.0",
   "private": true,
+  "description": "Personal Agent client for desktop-first local agent profiles and IM channels.",
   "license": "MIT",
   "type": "module",
   "main": "out/main/index.js",
   "bin": {
-    "pie": "dist/cli/index.js",
-    "pi-feishu": "dist/cli/index.js"
+    "pie": "dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "docs",
+    "out",
+    "resources",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "scripts": {
     "clean": "shx rm -rf dist",
     "check": "tsc --noEmit -p tsconfig.json",

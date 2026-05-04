@@ -94,9 +94,7 @@ export function createRuntimeTurnGatewayServer(options: RuntimeTurnGatewayOption
 			if (options.secret) {
 				const provided =
 					req.headers["x-pie-runtime-secret"] ??
-					req.headers["x-pi-feishu-secret"] ??
-					req.headers["x-pie-secret"] ??
-					req.headers["x-momo-secret"];
+					req.headers["x-pie-secret"];
 				if (provided !== options.secret) {
 					sendJson(res, 401, { ok: false, error: "invalid secret" });
 					return;
