@@ -13,14 +13,6 @@ The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark cha
 
 [Watch the product demo](docs/assets/pie-product-demo.mp4)
 
-## Download
-
-Desktop app downloads are coming soon.
-
-- [Download for macOS](#download-coming-soon)
-- [Download for Windows](#download-coming-soon)
-- [Download for Linux](#download-coming-soon)
-
 ## What Pie Does
 
 Pie gives you one desktop surface for day-to-day Agent work:
@@ -29,38 +21,43 @@ Pie gives you one desktop surface for day-to-day Agent work:
 2. See which Agents exist, which channels they are connected to, whether they are running, what model they use, and how much they have been used.
 3. Inspect recent runtime output, profile folders, logs, config, secrets, Skills, and working directories without hunting through terminal sessions.
 
+## Key Features
+
+### Monitor Agent Activity
+
+Follow messages, runtime state, CPU, memory, and recent activity from the desktop view.
+
 <img src="docs/assets/screenshots/dashboard.png" alt="Pie desktop dashboard" width="100%">
 
-## Feature Highlights
+### Create Local Agent Profiles
 
-### Create Agents Quickly
+Create a profile, choose a harness, connect channels, and set the working directory.
 
-Configure an Agent profile, harness, channel, and runtime settings from the desktop app.
+<img src="docs/assets/screenshots/create-easily.png" alt="Create an Agent profile in Pie" width="100%">
 
-<img src="docs/assets/screenshots/create-easily.png" alt="Create an Agent profile in Pie" width="48%"> <img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%">
+### Connect Channels And Choose Models
 
-### Tune The Runtime
+Configure IM channels and model settings from the desktop app.
 
-Manage model settings, Skills, and runtime output without switching between config files and terminal windows.
+<img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%"> <img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%">
 
-<img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%"> <img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="48%">
+### Manage Skills And Identity
 
-<img src="docs/assets/screenshots/agent-terminal-logs.png" alt="Agent terminal logs in Pie" width="48%"> <img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="48%">
+Manage Skill sources and give each Agent a recognizable identity.
 
-### Make It Yours
+<img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="48%"> <img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
 
-Pie includes profile presentation details such as Agent avatars, while keeping the runtime and harness setup visible.
+### Inspect Runtime Output
 
-<img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
+Review logs and terminal output when an Agent is running for a long time.
 
-## Product Shape
+<img src="docs/assets/screenshots/agent-terminal-logs.png" alt="Agent terminal logs in Pie" width="100%">
 
-Pie is organized around a small set of boundaries:
+### Customize The Workspace
 
-1. **Desktop app**: manage Agents, channels, models, logs, folders, Skills, and global preferences.
-2. **Runtime**: start one profile/Agent instance with its selected channels and harness capability.
-3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, Openclaw, and future backends into Pie's session and event surface.
-4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, and future adapters.
+Adjust the desktop theme and workspace presentation.
+
+<img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="100%">
 
 ## Status
 
@@ -77,6 +74,14 @@ WeChat can log in, poll, receive, and send messages, but should still be treated
 Ousia's Task Engine is prototype-level. It is useful for exploring scheduled or longer-running Agent work, but should not be used for critical automation.
 
 Pie does not provide a security sandbox yet. The Runtime Environment sets an Agent's home directory, working directory, and lifecycle state; file, command, and network access are still controlled by the selected Agent Harness and underlying tools.
+
+## Download
+
+Desktop app downloads are coming soon.
+
+- [Download for macOS](#download-coming-soon)
+- [Download for Windows](#download-coming-soon)
+- [Download for Linux](#download-coming-soon)
 
 ## Quick Start
 
@@ -98,6 +103,15 @@ Or run CLI onboarding and start the runtime:
 npm run start:onboard
 npm run start
 ```
+
+## Architecture
+
+Pie is organized around a small set of boundaries:
+
+1. **Desktop app**: manage Agents, channels, models, logs, folders, Skills, and global preferences.
+2. **Runtime**: start one profile/Agent instance with its selected channels and harness capability.
+3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, Openclaw, and future backends into Pie's session and event surface.
+4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, and future adapters.
 
 ## Development
 
