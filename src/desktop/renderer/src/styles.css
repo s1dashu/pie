@@ -88,7 +88,7 @@
 	--control-radius: 18px;
 	--control-menu-radius: calc(var(--control-radius) + 4px);
 	--control-item-radius: calc(var(--control-radius) - 4px);
-	--app-shell-radius: 48px;
+	--app-shell-radius: 28px;
 	--app-shell-gap: 6px;
 	--agent-detail-radius: calc(var(--app-shell-radius) - var(--app-shell-gap));
 	--app-shell-inner-stroke: rgba(15, 23, 42, 0.085);
@@ -157,7 +157,6 @@ body,
 
 body {
 	border-radius: var(--app-shell-radius);
-	corner-shape: squircle;
 	/* 彻底规避 fixed 元素溢出：让 body 成为所有 fixed 元素的包含块，从而严格执行 overflow: hidden 裁剪 */
 	contain: paint;
 	/* 修复边缘锯齿：强制开启硬件加速和抗锯齿 */
@@ -167,18 +166,15 @@ body {
 
 #root {
 	border-radius: var(--app-shell-radius);
-	corner-shape: squircle;
 	overflow: hidden;
 }
 
 .app-continuous-corner {
 	border-radius: var(--app-shell-radius);
-	corner-shape: squircle;
 }
 
 .agent-detail-corner {
 	border-radius: var(--agent-detail-radius);
-	corner-shape: squircle;
 }
 
 .pie-smooth-corner {
@@ -220,21 +216,11 @@ body {
 }
 
 .agent-detail-surface {
-	box-shadow:
-		0 4px 24px rgba(0, 0, 0, 0.04),
-		inset 0 0 0 1px var(--agent-detail-inner-stroke),
-		inset 0 1px 0 var(--agent-detail-inner-highlight);
+	box-shadow: none;
 }
 
 .agent-detail-surface::before {
-	position: absolute;
-	inset: 0;
-	z-index: 0;
-	pointer-events: none;
-	border-radius: inherit;
-	corner-shape: inherit;
-	content: "";
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0) 22%);
+	content: none;
 }
 
 .app-shell-surface > :not(.drag-region),

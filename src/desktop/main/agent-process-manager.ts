@@ -16,6 +16,10 @@ import {
 	type AgentRuntimeEnvironment,
 	type RuntimeEnvironmentLifecycleSnapshot,
 } from "../../runtime/environment.js";
+import {
+	getRuntimeLifecycleLogTransition,
+	isRuntimeReadyLog,
+} from "./runtime-lifecycle-signals.js";
 
 export interface AgentProcessManagerOptions {
 	getAppRoot(): string;
@@ -29,29 +33,9 @@ export interface AgentProcessManagerOptions {
 }
 
 const MAX_AGENT_LOGS = 1000;
-const AGENT_READY_LOG_MARKERS = [
-	"Feishu channel ready",
-	"Feishu bot ready",
-	"Wechat channel ready",
-	"Slack channel ready",
-	"Discord channel ready",
-	"Telegram channel ready",
-	"Pi Feishu bot ready",
-	"Pi Wechat channel ready",
-	"Pi Slack channel ready",
-	"Pi Discord channel ready",
-	"Pi Telegram channel ready",
-	"OpenClaw gateway ready",
-	"[gateway] ready",
-	"[gateway] http server listening",
-	"OpenClaw gateway already reachable",
-];
 const AGENT_START_TIMEOUT_MS = 30_000;
 const AGENT_STOP_FORCE_KILL_MS = 5000;
 const STREAM_LOG_UPDATE_DEBOUNCE_MS = 100;
-const WECHAT_SESSION_EXPIRED_MARKER = "微信会话已失效（errcode -14）";
-const WECHAT_SESSION_STILL_EXPIRED_MARKER = "微信会话仍然失效（errcode -14）";
-const WECHAT_SESSION_RECOVERED_MARKER = "微信会话已恢复";
 
 function appendStreamDelta(existing: string, incoming: string): string {
 	if (!incoming) {
@@ -158,6 +142,7 @@ export class AgentProcessManager {
 			return;
 		}
 		const command = this.getBotLaunchCommand();
+		const runsWithPackagedElectron = Boolean(process.versions.electron) && command.argv.some((arg) => arg.endsWith("/dist/runtime/main.js"));
 		const home = await this.options.getAgentHome(agentId);
 		const lifecycle = new RuntimeEnvironmentLifecycle();
 		this.agentLifecycles.set(agentId, lifecycle);
@@ -177,6 +162,7 @@ export class AgentProcessManager {
 			detached: process.platform !== "win32",
 			env: {
 				...process.env,
+				...(runsWithPackagedElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 				PIE_AGENT_HOME: home,
 				PIE_GATEWAY_PORT: String(gatewayPort),
 				PIE_DESKTOP_LOGS: "1",
@@ -339,7 +325,7 @@ export class AgentProcessManager {
 			return;
 		}
 		this.updateLifecycleFromLog(agentId, cleanText);
-		if (stream === "stdout" && AGENT_READY_LOG_MARKERS.some((marker) => cleanText.includes(marker))) {
+		if (stream === "stdout" && isRuntimeReadyLog(cleanText)) {
 			this.markAgentReady(agentId);
 		}
 		if (stream === "stdout") {
@@ -448,13 +434,9 @@ export class AgentProcessManager {
 		if (!lifecycle) {
 			return;
 		}
-		if (text.includes(WECHAT_SESSION_EXPIRED_MARKER) || text.includes(WECHAT_SESSION_STILL_EXPIRED_MARKER)) {
-			lifecycle.mark("degraded", "wechat-session-expired");
-			this.persistRuntimeState(agentId, lifecycle.snapshot);
-			return;
-		}
-		if (text.includes(WECHAT_SESSION_RECOVERED_MARKER) && lifecycle.snapshot.state === "degraded") {
-			lifecycle.mark("running", "wechat-session-recovered");
+		const transition = getRuntimeLifecycleLogTransition(lifecycle.snapshot, text);
+		if (transition) {
+			lifecycle.mark(transition.state, transition.reason);
 			this.persistRuntimeState(agentId, lifecycle.snapshot);
 		}
 	}

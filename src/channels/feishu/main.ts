@@ -12,12 +12,16 @@ import {
 import {
 	getOwnerSessionBinding,
 	loadConfigStore,
-	saveConfigStore,
-	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
 import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
+import {
+	formatAgentTaskPrompt,
+	isSilentAgentTask,
+	rememberOwnerSessionBinding,
+	ScheduledTurnQueue,
+} from "../common/turn-orchestration.js";
 import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import {
 	extractMessageParts,
@@ -37,25 +41,13 @@ function formatRuntimeTitle(kind: FeishuBotConfig["harnessKind"]): string {
 	return `${getAgentHarnessLabel(kind)} Feishu channel ready`;
 }
 
-function formatTaskPrompt(prompt: string): string {
-	const trimmed = prompt.trim();
-	if (!trimmed) {
-		throw new Error("Task prompt is empty.");
-	}
-	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
-}
-
-function isSilentAgentTask(request: AgentTurnInput): boolean {
-	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
-}
-
 export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 	readonly identity;
 	private readonly dedup = new MessageDedup();
 	private readonly abortController = new AbortController();
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, ConversationController>();
-	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
+	private readonly scheduledTurns = new ScheduledTurnQueue();
 	private currentBotOpenId: string | undefined;
 	private larkClient: LarkClient | undefined;
 	private shutdownExitCode = 0;
@@ -156,7 +148,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 				chat_type: "p2p",
 				message_type: "text",
 				content: JSON.stringify({
-					text: formatTaskPrompt(request.prompt),
+					text: formatAgentTaskPrompt(request.prompt),
 				}),
 				user_agent: "ousia-task-engine",
 			},
@@ -173,31 +165,13 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 			openId: event.sender.sender_id.open_id,
 			updatedAt: new Date().toISOString(),
 		};
-		const store = loadConfigStore();
-		const existing = getOwnerSessionBinding(store);
-		if (!existing) {
-			saveConfigStore(setOwnerSessionBinding(store, ownerSession));
-			return;
-		}
-		const isSameOwner =
-			existing.chatId === ownerSession.chatId || Boolean(existing.openId && existing.openId === ownerSession.openId);
-		if (!isSameOwner) {
-			return;
-		}
-		if (
-			existing.chatId === ownerSession.chatId &&
-			existing.sessionKey === ownerSession.sessionKey &&
-			existing.openId === ownerSession.openId
-		) {
-			return;
-		}
-		saveConfigStore(setOwnerSessionBinding(store, ownerSession));
+		rememberOwnerSessionBinding(ownerSession, {
+			acceptExisting: (existing, next) =>
+				existing.chatId === next.chatId || Boolean(existing.openId && existing.openId === next.openId),
+		});
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{
-		sessionKey: string;
-		assistantText: string;
-	}> {
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -212,7 +186,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 				throw new Error("No owner session is bound yet. Send the bot a private message first.");
 			}
 			const event = this.createSyntheticTaskEvent(ownerSession, request);
-			const promptText = extractPromptText(event, this.currentBotOpenId) ?? formatTaskPrompt(request.prompt);
+			const promptText = extractPromptText(event, this.currentBotOpenId) ?? formatAgentTaskPrompt(request.prompt);
 			const controller = this.getConversationController(ownerSession.sessionKey);
 			const result = await controller.submit(event, promptText);
 			return {
@@ -238,29 +212,12 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{
-		sessionKey: string;
-		assistantText: string;
-	}> {
-		let result: { sessionKey: string; assistantText: string } | undefined;
-		const queueKey = this.resolveScheduledTurnQueueKey(request);
-		const previous = this.scheduledTurnQueues.get(queueKey) ?? Promise.resolve();
-		const current = previous
-			.catch(() => undefined)
-			.then(async () => {
-				result = await this.handleScheduledAgentTurn(request);
-			})
-			.finally(() => {
-				if (this.scheduledTurnQueues.get(queueKey) === current) {
-					this.scheduledTurnQueues.delete(queueKey);
-				}
-			});
-		this.scheduledTurnQueues.set(queueKey, current);
-		await current;
-		if (!result) {
-			throw new Error("Scheduled agent turn produced no result.");
-		}
-		return result;
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+		return this.scheduledTurns.enqueue(
+			request,
+			(turn) => this.handleScheduledAgentTurn(turn),
+			(turn) => this.resolveScheduledTurnQueueKey(turn),
+		);
 	}
 
 	private getConversationController(conversationKey: string): ConversationController {

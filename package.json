@@ -1,5 +1,6 @@
 {
   "name": "pie",
+  "productName": "Pie",
   "version": "0.0.0",
   "private": true,
   "description": "Personal Agent client for desktop-first local agent profiles and IM channels.",
@@ -21,6 +22,9 @@
     "LICENSE"
   ],
   "build": {
+    "mac": {
+      "icon": "build/icon.icon"
+    },
     "files": [
       "dist/**/*.js",
       "dist/frameworks/ousia/docs/**",

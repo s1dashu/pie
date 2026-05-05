@@ -19,7 +19,8 @@ import {
 	getPrimaryTelegramChannel,
 	getPrimaryWechatChannel,
 	getProfileModel,
-	normalizeConfigStore,
+	loadConfigStore,
+	saveConfigStore,
 	setProfileModel,
 	upsertFeishuChannel,
 	upsertDiscordChannel,
@@ -94,6 +95,13 @@ import {
 } from "./onboard-service.js";
 import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/harness.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
+import { AgentStartLimiter } from "./agent-start-limiter.js";
+import {
+	calculateAgentStartBudget,
+	getAgentStartWeight,
+	readAgentStartResourceSnapshot,
+	shouldDeferAutoStartForResources,
+} from "./agent-start-policy.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
 import { createRuntimeEnvironment } from "../../runtime/environment.js";
 import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
@@ -105,6 +113,13 @@ const cpuStatsCache = new Map<string, { cpuTimeSeconds: number; sampledAt: numbe
 const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 const RUNTIME_STOP_FORCE_KILL_MS = 5000;
+const RESTORE_AGENTS_ON_LAUNCH_DELAY_MS = 1_500;
+const RESTORE_AGENTS_STAGGER_MS = 500;
+const agentStartLimiter = new AgentStartLimiter({
+	limits: { hermes: 1, openclaw: 1 },
+	getWeight: getAgentStartWeight,
+	getBudget: () => calculateAgentStartBudget(readAgentStartResourceSnapshot()),
+});
 let isQuitting = false;
 let didStopAgentsForQuit = false;
 const restoringAgentIds = new Set<string>();
@@ -379,6 +394,19 @@ async function downloadAgentAvatar(id: string): Promise<void> {
 }
 
 function getNodeExecPath(): string {
+	if (app.isPackaged) {
+		const executableName = basename(process.execPath);
+		const contentsDir = dirname(dirname(process.execPath));
+		const helperExecPath = join(
+			contentsDir,
+			"Frameworks",
+			`${executableName} Helper.app`,
+			"Contents",
+			"MacOS",
+			`${executableName} Helper`,
+		);
+		return existsSync(helperExecPath) ? helperExecPath : process.execPath;
+	}
 	const npmNodeExecPath = process.env.npm_node_execpath?.trim();
 	if (npmNodeExecPath && existsSync(npmNodeExecPath)) {
 		return npmNodeExecPath;
@@ -391,16 +419,11 @@ function getNodeExecPath(): string {
 }
 
 function readProfileConfig(homeDir: string): AgentConfigStore | undefined {
-	const path = join(homeDir, "config.json");
-	if (!existsSync(path)) {
-		return undefined;
-	}
-	return normalizeConfigStore(JSON.parse(readFileSync(path, "utf8")) as unknown);
+	return loadConfigStore(homeDir);
 }
 
 function writeProfileConfig(homeDir: string, store: AgentConfigStore): void {
-	mkdirSync(homeDir, { recursive: true });
-	writeFileSync(join(homeDir, "config.json"), `${JSON.stringify(store, null, 2)}\n`, "utf8");
+	saveConfigStore(store, homeDir);
 }
 
 function readProfileEnv(homeDir: string): Record<string, string> {
@@ -890,35 +913,68 @@ async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<Desktop
 	return settings;
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function restoreAgentOnLaunch(agent: AgentSummary): Promise<void> {
+	try {
+		await withAgentOperation(agent.id, () => startAgent(agent.id));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		writeRuntimeStateRecord(agent.home, {
+			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+			lifecycle: {
+				state: "failed",
+				updatedAt: new Date().toISOString(),
+				reason: `restore-failed: ${message}`,
+			},
+		});
+		console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
+	} finally {
+		restoringAgentIds.delete(agent.id);
+	}
+}
+
 async function restoreDesiredRunningAgents(): Promise<void> {
 	if (!readDesktopSettings().restoreRunningAgentsOnLaunch) {
 		return;
 	}
 	const agents = await listAgents();
-	const candidates = agents.filter((agent) => agent.desiredState === "running" && !hasLiveRuntimeProcess(agent.home));
+	const snapshot = readAgentStartResourceSnapshot();
+	const budget = calculateAgentStartBudget(snapshot);
+	const desiredCandidates = agents.filter((agent) => agent.desiredState === "running" && !hasLiveRuntimeProcess(agent.home));
+	const deferredCandidates = desiredCandidates.filter((agent) =>
+		shouldDeferAutoStartForResources(agent.harnessKind, snapshot),
+	);
+	const candidates = desiredCandidates.filter((agent) => !deferredCandidates.includes(agent));
+	console.log(
+		`[desktop] restore start budget maxConcurrent=${budget.maxConcurrent} maxWeight=${budget.maxWeight} ` +
+			`freeMemGb=${(snapshot.freeMemoryBytes / 1024 ** 3).toFixed(1)} load=${snapshot.loadAverage1m.toFixed(2)}/${snapshot.cpuCount}`,
+	);
+	for (const agent of deferredCandidates) {
+		writeRuntimeStateRecord(agent.home, {
+			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
+			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
+			lifecycle: {
+				state: "stopped",
+				updatedAt: new Date().toISOString(),
+				reason: "restore-deferred-low-resources",
+			},
+		});
+		console.warn(`[desktop] deferred auto-start for ${agent.id} (${agent.harnessKind}) because system resources are low.`);
+	}
 	for (const agent of candidates) {
 		restoringAgentIds.add(agent.id);
 	}
 	await Promise.allSettled(
-		candidates.map((agent) =>
-			withAgentOperation(agent.id, () => startAgent(agent.id))
-				.catch((error) => {
-					const message = error instanceof Error ? error.message : String(error);
-					writeRuntimeStateRecord(agent.home, {
-						homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-						workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-						lifecycle: {
-							state: "failed",
-							updatedAt: new Date().toISOString(),
-							reason: `restore-failed: ${message}`,
-						},
-					});
-					console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
-				})
-				.finally(() => {
-					restoringAgentIds.delete(agent.id);
-				}),
-		),
+		candidates.map(async (agent, index) => {
+			if (index > 0) {
+				await delay(index * RESTORE_AGENTS_STAGGER_MS);
+			}
+			await restoreAgentOnLaunch(agent);
+		}),
 	);
 }
 
@@ -1575,6 +1631,10 @@ async function startAgent(id: string): Promise<AgentDetails> {
 		return getAgent(id);
 	}
 	const existing = await getAgent(id);
+	return startKnownAgent(existing);
+}
+
+async function startKnownAgent(existing: AgentDetails): Promise<AgentDetails> {
 	if (existing.feishuCredentialState === "invalidated") {
 		const message = "飞书凭证已失效，请重新授权后再启动这个 Agent。";
 		writeRuntimeStateRecord(existing.home, {
@@ -1617,12 +1677,12 @@ async function startAgent(id: string): Promise<AgentDetails> {
 			},
 			...(readRuntimeProcessRecord(existing.home) ? { process: readRuntimeProcessRecord(existing.home)! } : {}),
 		});
-		updateProfileRegistryEntry(id, { desiredState: "running", selected: true });
-		return getAgent(id);
+		updateProfileRegistryEntry(existing.id, { desiredState: "running", selected: true });
+		return getAgent(existing.id);
 	}
-	await agentProcesses.start(id);
-	updateProfileRegistryEntry(id, { desiredState: "running", selected: true });
-	return getAgent(id);
+	await agentStartLimiter.run(existing.harnessKind, () => agentProcesses.start(existing.id));
+	updateProfileRegistryEntry(existing.id, { desiredState: "running", selected: true });
+	return getAgent(existing.id);
 }
 
 async function pauseAgent(id: string): Promise<AgentDetails> {
@@ -1865,7 +1925,7 @@ function createWindow(): BrowserWindow {
 	const preloadPath = join(appRoot, "out/preload/index.cjs");
 	const win = new BrowserWindow({
 		width: 1024,
-		height: 654,
+		height: 576,
 		minWidth: 1024,
 		minHeight: 576,
 		show: false,
@@ -2369,9 +2429,11 @@ app.whenReady().then(() => {
 	});
 	createTray();
 	createWindow();
-	void restoreDesiredRunningAgents().catch((error) => {
-		console.error("[desktop] failed to restore auto-start agents:", error);
-	});
+	setTimeout(() => {
+		void restoreDesiredRunningAgents().catch((error) => {
+			console.error("[desktop] failed to restore auto-start agents:", error);
+		});
+	}, RESTORE_AGENTS_ON_LAUNCH_DELAY_MS);
 });
 
 app.on("window-all-closed", () => {

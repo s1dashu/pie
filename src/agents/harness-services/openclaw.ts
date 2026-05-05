@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import net from "node:net";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import { ensureOpenClawModelState, normalizeOpenClawModelRef, toOpenClawModelRef } from "../openclaw-models.js";
 import type {
 	AgentHarnessManagedServiceManager,
@@ -10,6 +11,89 @@ import type {
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function resolveLoginShellPath(): string | undefined {
+	const shell = process.env.SHELL?.trim() || "/bin/zsh";
+	const result = spawnSync(shell, ["-lc", 'printf "%s" "$PATH"'], {
+		encoding: "utf8",
+		env: process.env,
+	});
+	const path = result.stdout.trim();
+	return result.status === 0 && path ? path : undefined;
+}
+
+function combinePath(...paths: Array<string | undefined>): string | undefined {
+	const seen = new Set<string>();
+	const values: string[] = [];
+	for (const path of paths) {
+		for (const entry of path?.split(delimiter) ?? []) {
+			if (!entry || seen.has(entry)) {
+				continue;
+			}
+			seen.add(entry);
+			values.push(entry);
+		}
+	}
+	return values.length ? values.join(delimiter) : undefined;
+}
+
+function resolveExecutable(command: string): { executablePath: string; pathEnv?: string } {
+	const loginPath = resolveLoginShellPath();
+	const pathEnv = combinePath(loginPath, process.env.PATH);
+	if (command.includes("/") || command.includes("\\")) {
+		return { executablePath: command, pathEnv };
+	}
+	const shell = process.env.SHELL?.trim() || "/bin/zsh";
+	const found = spawnSync(shell, ["-lc", `command -v ${shellQuote(command)}`], {
+		encoding: "utf8",
+		env: { ...process.env, ...(pathEnv ? { PATH: pathEnv } : {}) },
+	});
+	const shellPath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
+	if (found.status === 0 && shellPath) {
+		return { executablePath: shellPath, pathEnv };
+	}
+	for (const candidate of [
+		join(homedir(), ".local", "bin", command),
+		`/opt/homebrew/bin/${command}`,
+		`/usr/local/bin/${command}`,
+	]) {
+		if (existsSync(candidate)) {
+			return { executablePath: candidate, pathEnv };
+		}
+	}
+	return { executablePath: command, pathEnv };
+}
+
+function isNodeCli(executablePath: string): boolean {
+	try {
+		const header = readFileSync(executablePath, "utf8").slice(0, 128);
+		return header.startsWith("#!") && header.includes("node");
+	} catch {
+		return false;
+	}
+}
+
+function resolveOpenClawLaunchCommand(command: string): { executablePath: string; argsPrefix: string[]; pathEnv?: string; electronRunAsNode: boolean } {
+	const resolved = resolveExecutable(command);
+	if (process.versions.electron && isNodeCli(resolved.executablePath)) {
+		return {
+			executablePath: process.execPath,
+			argsPrefix: [resolved.executablePath],
+			pathEnv: resolved.pathEnv,
+			electronRunAsNode: true,
+		};
+	}
+	return {
+		executablePath: resolved.executablePath,
+		argsPrefix: [],
+		pathEnv: resolved.pathEnv,
+		electronRunAsNode: false,
+	};
 }
 
 function isManagedDisabled(value: unknown): boolean {
@@ -121,8 +205,11 @@ export function createOpenClawServiceProcessManager(
 			}
 			mkdirSync(join(options.homeDir, "runtime"), { recursive: true });
 			ensureOpenClawModelState(stateDir, modelRef);
+			const launchCommand = resolveOpenClawLaunchCommand(command);
 			const env = {
 				...process.env,
+				...(launchCommand.pathEnv ? { PATH: launchCommand.pathEnv } : {}),
+				...(launchCommand.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 				PIE_AGENT_HOME: options.homeDir,
 				OPENCLAW_STATE_DIR: stateDir,
 			};
@@ -130,11 +217,26 @@ export function createOpenClawServiceProcessManager(
 				console.log(`OpenClaw gateway already reachable at ${gatewayUrl}`);
 				return;
 			}
-			child = spawn(command, ["gateway", "run", "--allow-unconfigured", "--auth", "none", "--port", String(port), "--ws-log", "compact"], {
-				cwd: options.environment.workDir,
-				env,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
+			child = spawn(
+				launchCommand.executablePath,
+				[
+					...launchCommand.argsPrefix,
+					"gateway",
+					"run",
+					"--allow-unconfigured",
+					"--auth",
+					"none",
+					"--port",
+					String(port),
+					"--ws-log",
+					"compact",
+				],
+				{
+					cwd: options.environment.workDir,
+					env,
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
 			let sawGatewayReady = false;
 			const waitForGatewayReady = new Promise<void>((resolve) => {
 				const markReady = (line: string) => {

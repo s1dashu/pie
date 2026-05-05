@@ -12,11 +12,9 @@ import {
 import {
 	getOwnerSessionBinding,
 	loadConfigStore,
-	saveConfigStore,
-	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
 import type { AgentRoundInputLike } from "../../agents/types.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import {
@@ -24,33 +22,20 @@ import {
 	type IncomingChannelMessage,
 	type TextChannelAdapter,
 } from "./channel-model.js";
+import { ThinkingPresentationBuffer } from "./im-event-rendering.js";
 import { handleImCommand, parseImCommand } from "./im-commands.js";
 import { splitTextNaturally } from "./message-splitting.js";
 import { getPresentationRules, type PresentationRules } from "./presentation-rules.js";
 import { formatToolImErrorLine, formatToolImLine } from "./tool-call-im.js";
+import {
+	formatAgentTaskPrompt,
+	isSilentAgentTask,
+	rememberOwnerSessionBinding,
+	ScheduledTurnQueue,
+} from "./turn-orchestration.js";
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function formatTaskPrompt(prompt: string): string {
-	const trimmed = prompt.trim();
-	if (!trimmed) {
-		throw new Error("Task prompt is empty.");
-	}
-	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
-}
-
-function isSilentAgentTask(request: AgentTurnInput): boolean {
-	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
-}
-
-function formatThinkingForIm(text: string): string {
-	return text
-		.trim()
-		.split(/\r?\n/)
-		.map((line) => `> ${line}`)
-		.join("\n");
 }
 
 interface QueuedTextTurn {
@@ -131,8 +116,7 @@ class TextConversationController {
 		let unsubscribe: (() => void) | undefined;
 		let pendingToolLines: string[] = [];
 		let toolSendQueue = Promise.resolve();
-		let thinkingText = "";
-		let flushedThinkingLength = 0;
+		const thinkingBuffer = new ThinkingPresentationBuffer();
 		const flushToolLines = (): Promise<void> => {
 			if (!pendingToolLines.length) {
 				return toolSendQueue;
@@ -155,22 +139,18 @@ class TextConversationController {
 			}
 		};
 		const flushThinking = async (): Promise<void> => {
-			const nextText = thinkingText.slice(flushedThinkingLength);
-			if (!nextText.trim()) {
+			const formattedThinking = thinkingBuffer.takeNextFormatted();
+			if (!formattedThinking) {
 				return;
 			}
-			flushedThinkingLength = thinkingText.length;
-			await this.runtime.sendPlainReply(request.message, formatThinkingForIm(nextText));
+			await this.runtime.sendPlainReply(request.message, formattedThinking);
 		};
 		try {
 			const session = await this.runtime.getSession(this.conversationKey);
 			if (this.runtime.shouldOutputToolCallsToIm() || this.runtime.shouldOutputThinkingToIm()) {
 				unsubscribe = session.subscribe((event) => {
-					if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_delta" && event.delta) {
-						thinkingText += event.delta;
-					}
-					if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_finished" && event.thinking) {
-						thinkingText = event.thinking;
+					if (this.runtime.shouldOutputThinkingToIm()) {
+						thinkingBuffer.ingest(event);
 					}
 					if (this.runtime.shouldOutputToolCallsToIm()) {
 						if (event.type === "tool_call_started") {
@@ -215,7 +195,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, TextConversationController>();
 	private readonly seenMessageIds = new Set<string>();
-	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
+	private readonly scheduledTurns = new ScheduledTurnQueue();
 	private shutdownExitCode = 0;
 
 	constructor(
@@ -324,17 +304,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 			openId: message.senderId,
 			updatedAt: new Date().toISOString(),
 		};
-		const store = loadConfigStore();
-		const existing = getOwnerSessionBinding(store);
-		if (
-			existing &&
-			existing.chatId === ownerSession.chatId &&
-			existing.sessionKey === ownerSession.sessionKey &&
-			existing.openId === ownerSession.openId
-		) {
-			return;
-		}
-		saveConfigStore(setOwnerSessionBinding(store, ownerSession));
+		rememberOwnerSessionBinding(ownerSession);
 	}
 
 	private getConversationController(conversationKey: string): TextConversationController {
@@ -384,14 +354,14 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 			channel: this.config.channelKind,
 			conversationKey: ownerSession.sessionKey,
 			target: { channelId: ownerSession.chatId, userId: ownerSession.openId },
-			parts: [{ type: "text", text: formatTaskPrompt(request.prompt) }],
+			parts: [{ type: "text", text: formatAgentTaskPrompt(request.prompt) }],
 			createdAtMs: Date.now(),
 			isDirectMessage: true,
 			senderId: ownerSession.openId,
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -403,7 +373,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 				throw new Error(`No owner session is bound yet. Send the ${this.channelLabel} channel a private message first.`);
 			}
 			const message = this.createSyntheticTaskMessage(ownerSession, request);
-			const promptText = formatTaskPrompt(request.prompt);
+			const promptText = formatAgentTaskPrompt(request.prompt);
 			const result = await this.getConversationController(ownerSession.sessionKey).submit(message, promptText, promptText);
 			return { sessionKey: ownerSession.sessionKey, assistantText: result.assistantText };
 		}
@@ -412,36 +382,8 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		return { sessionKey: request.sessionKey, assistantText: extractAssistantText(session) };
 	}
 
-	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
-		if (isSilentAgentTask(request)) {
-			return request.sessionKey;
-		}
-		if (request.kind !== "agent_task") {
-			return request.sessionKey;
-		}
-		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
-	}
-
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
-		let result: { sessionKey: string; assistantText: string } | undefined;
-		const queueKey = this.resolveScheduledTurnQueueKey(request);
-		const previous = this.scheduledTurnQueues.get(queueKey) ?? Promise.resolve();
-		const current = previous
-			.catch(() => undefined)
-			.then(async () => {
-				result = await this.handleScheduledAgentTurn(request);
-			})
-			.finally(() => {
-				if (this.scheduledTurnQueues.get(queueKey) === current) {
-					this.scheduledTurnQueues.delete(queueKey);
-				}
-			});
-		this.scheduledTurnQueues.set(queueKey, current);
-		await current;
-		if (!result) {
-			throw new Error("Scheduled agent turn produced no result.");
-		}
-		return result;
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+		return this.scheduledTurns.enqueue(request, (turn) => this.handleScheduledAgentTurn(turn));
 	}
 }
 

@@ -1,6 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import type {
 	AgentHarnessManagedServiceManager,
 	AgentHarnessManagedServiceManagerOptions,
@@ -8,6 +9,63 @@ import type {
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function resolveLoginShellPath(): string | undefined {
+	const shell = process.env.SHELL?.trim() || "/bin/zsh";
+	const result = spawnSync(shell, ["-lc", 'printf "%s" "$PATH"'], {
+		encoding: "utf8",
+		env: process.env,
+	});
+	const path = result.stdout.trim();
+	return result.status === 0 && path ? path : undefined;
+}
+
+function combinePath(...paths: Array<string | undefined>): string | undefined {
+	const seen = new Set<string>();
+	const values: string[] = [];
+	for (const path of paths) {
+		for (const entry of path?.split(delimiter) ?? []) {
+			if (!entry || seen.has(entry)) {
+				continue;
+			}
+			seen.add(entry);
+			values.push(entry);
+		}
+	}
+	return values.length ? values.join(delimiter) : undefined;
+}
+
+function resolveExecutable(command: string): { executablePath: string; pathEnv?: string } {
+	const loginPath = resolveLoginShellPath();
+	const pathEnv = combinePath(loginPath, process.env.PATH);
+	if (command.includes("/") || command.includes("\\")) {
+		return { executablePath: command, pathEnv };
+	}
+	const shell = process.env.SHELL?.trim() || "/bin/zsh";
+	const found = spawnSync(shell, ["-lc", `command -v ${shellQuote(command)}`], {
+		encoding: "utf8",
+		env: { ...process.env, ...(pathEnv ? { PATH: pathEnv } : {}) },
+	});
+	const shellPath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
+	if (found.status === 0 && shellPath) {
+		return { executablePath: shellPath, pathEnv };
+	}
+	for (const candidate of [
+		join(homedir(), ".local", "bin", command),
+		join(homedir(), ".hermes", "hermes-agent", "venv", "bin", command),
+		`/opt/homebrew/bin/${command}`,
+		`/usr/local/bin/${command}`,
+	]) {
+		if (existsSync(candidate)) {
+			return { executablePath: candidate, pathEnv };
+		}
+	}
+	return { executablePath: command, pathEnv };
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -123,8 +181,10 @@ export function createHermesServiceProcessManager(
 				return;
 			}
 			mkdirSync(join(options.homeDir, "runtime"), { recursive: true });
+			const launchCommand = resolveExecutable(command);
 			const env = {
 				...process.env,
+				...(launchCommand.pathEnv ? { PATH: launchCommand.pathEnv } : {}),
 				PIE_AGENT_HOME: options.homeDir,
 				HERMES_HOME: process.env.HERMES_HOME || join(options.homeDir, "hermes"),
 				API_SERVER_ENABLED: process.env.API_SERVER_ENABLED || "true",
@@ -132,7 +192,7 @@ export function createHermesServiceProcessManager(
 				API_SERVER_PORT: process.env.API_SERVER_PORT || process.env.HERMES_PORT || "8642",
 				GATEWAY_ALLOW_ALL_USERS: process.env.GATEWAY_ALLOW_ALL_USERS || "true",
 			};
-			child = spawn(command, args, {
+			child = spawn(launchCommand.executablePath, args, {
 				cwd: options.environment.workDir,
 				env,
 				stdio: ["ignore", "pipe", "pipe"],

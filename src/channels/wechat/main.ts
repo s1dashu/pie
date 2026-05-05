@@ -14,15 +14,23 @@ import { getAgentRoundInputText, type AgentRoundInputLike } from "../../agents/t
 import {
 	getOwnerSessionBinding,
 	loadConfigStore,
-	saveConfigStore,
-	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
 import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
+import {
+	AssistantTextPresentationBuffer,
+	ThinkingPresentationBuffer,
+} from "../common/im-event-rendering.js";
 import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import { getPresentationRules } from "../common/presentation-rules.js";
 import { formatToolImErrorLine, formatToolImLine } from "../common/tool-call-im.js";
+import {
+	formatAgentTaskPrompt,
+	isSilentAgentTask,
+	rememberOwnerSessionBinding,
+	ScheduledTurnQueue,
+} from "../common/turn-orchestration.js";
 import { resolveWechatMessageAttachments } from "./attachments.js";
 import { loadConfig, type WechatBotConfig } from "./config.js";
 import { loginWechatWithQr } from "./login.js";
@@ -66,26 +74,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			{ once: true },
 		);
 	});
-}
-
-function formatTaskPrompt(prompt: string): string {
-	const trimmed = prompt.trim();
-	if (!trimmed) {
-		throw new Error("Task prompt is empty.");
-	}
-	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
-}
-
-function isSilentAgentTask(request: AgentTurnInput): boolean {
-	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
-}
-
-function formatThinkingForIm(text: string): string {
-	return text
-		.trim()
-		.split(/\r?\n/)
-		.map((line) => `> ${line}`)
-		.join("\n");
 }
 
 function formatError(error: unknown): string {
@@ -190,9 +178,8 @@ class WechatConversationController {
 		let pendingToolLines: string[] = [];
 		let toolSendQueue = Promise.resolve();
 		let assistantSendQueue = Promise.resolve();
-		let activeAssistantText = "";
-		let thinkingText = "";
-		let flushedThinkingLength = 0;
+		const assistantBuffer = new AssistantTextPresentationBuffer();
+		const thinkingBuffer = new ThinkingPresentationBuffer();
 		let sentAssistantText = false;
 		const flushToolLines = (): Promise<void> => {
 			if (!pendingToolLines.length) {
@@ -226,52 +213,39 @@ class WechatConversationController {
 			return assistantSendQueue;
 		};
 		const flushThinkingText = (): Promise<void> => {
-			const nextText = thinkingText.slice(flushedThinkingLength);
-			if (!nextText.trim()) {
+			const formattedThinking = thinkingBuffer.takeNextFormatted();
+			if (!formattedThinking) {
 				return Promise.resolve();
 			}
-			flushedThinkingLength = thinkingText.length;
-			return this.runtime.sendPlainReply(request.message, formatThinkingForIm(nextText));
+			return this.runtime.sendPlainReply(request.message, formattedThinking);
 		};
 		const flushActiveAssistantText = (): Promise<void> => {
-			const text = activeAssistantText;
-			activeAssistantText = "";
+			const text = assistantBuffer.take();
+			if (!text) {
+				return assistantSendQueue;
+			}
 			return queueAssistantText(text);
 		};
 		try {
 			const session = await this.runtime.getSession(this.conversationKey);
 			unsubscribe = session.subscribe((event) => {
-				if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_delta" && event.delta) {
-					thinkingText += event.delta;
+				if (this.runtime.shouldOutputThinkingToIm()) {
+					thinkingBuffer.ingest(event);
 				}
-				if (this.runtime.shouldOutputThinkingToIm() && event.type === "thinking_finished" && event.thinking) {
-					thinkingText = event.thinking;
+				const assistantText = assistantBuffer.ingest(event);
+				if (assistantText) {
+					void queueAssistantText(assistantText);
 				}
-				if (event.type === "text_start") {
-					activeAssistantText = "";
-				}
-				if (event.type === "text_delta" && event.delta) {
-					activeAssistantText += event.delta;
-				}
-				if (event.type === "text_finished") {
-					if (event.text.trim()) {
-						activeAssistantText = event.text;
+				if (this.runtime.shouldOutputToolCallsToIm()) {
+					if (event.type === "tool_call_started") {
+						void flushThinkingText();
+						void flushActiveAssistantText();
+						appendToolLine(formatToolImLine(event.name, event.args, this.runtime.getToolCallImMaxLength()));
 					}
-					void flushActiveAssistantText();
-				}
-				if (event.type === "turn_finished") {
-					void flushActiveAssistantText();
-				}
-					if (this.runtime.shouldOutputToolCallsToIm()) {
-						if (event.type === "tool_call_started") {
-							void flushThinkingText();
-							void flushActiveAssistantText();
-							appendToolLine(formatToolImLine(event.name, event.args, this.runtime.getToolCallImMaxLength()));
-						}
-						if (event.type === "tool_call_finished" && event.isError) {
-							appendToolLine(formatToolImErrorLine(event.name, event.result, this.runtime.getToolCallImMaxLength()));
-						}
+					if (event.type === "tool_call_finished" && event.isError) {
+						appendToolLine(formatToolImErrorLine(event.name, event.result, this.runtime.getToolCallImMaxLength()));
 					}
+				}
 			});
 			await session.prompt(request.promptInput);
 			const providerError = extractLastAssistantError(session);
@@ -311,7 +285,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private readonly abortController = new AbortController();
 	private readonly dedup = new MessageDedup();
 	private readonly conversations = new Map<string, WechatConversationController>();
-	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
+	private readonly scheduledTurns = new ScheduledTurnQueue();
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly contextTokens: ContextTokenStore;
 	private shutdownExitCode = 0;
@@ -474,17 +448,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			openId: userId,
 			updatedAt: new Date().toISOString(),
 		};
-		const store = loadConfigStore();
-		const existing = getOwnerSessionBinding(store);
-		if (
-			existing &&
-			existing.chatId === ownerSession.chatId &&
-			existing.sessionKey === ownerSession.sessionKey &&
-			existing.openId === ownerSession.openId
-		) {
-			return;
-		}
-		saveConfigStore(setOwnerSessionBinding(store, ownerSession));
+		rememberOwnerSessionBinding(ownerSession);
 	}
 
 	private getConversationController(conversationKey: string): WechatConversationController {
@@ -616,15 +580,12 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			to_user_id: this.config.wechat.accountId,
 			create_time_ms: Date.now(),
 			message_type: 1,
-			item_list: [{ type: 1, text_item: { text: formatTaskPrompt(request.prompt) } }],
+			item_list: [{ type: 1, text_item: { text: formatAgentTaskPrompt(request.prompt) } }],
 			context_token: this.contextTokens.get(ownerSession.chatId),
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<{
-		sessionKey: string;
-		assistantText: string;
-	}> {
+	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -641,7 +602,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			const message = this.createSyntheticTaskMessage(ownerSession, request);
 			const result = await this.getConversationController(ownerSession.sessionKey).submit(
 				message,
-				formatTaskPrompt(request.prompt),
+				formatAgentTaskPrompt(request.prompt),
 			);
 			return {
 				sessionKey: ownerSession.sessionKey,
@@ -666,29 +627,12 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<{
-		sessionKey: string;
-		assistantText: string;
-	}> {
-		let result: { sessionKey: string; assistantText: string } | undefined;
-		const queueKey = this.resolveScheduledTurnQueueKey(request);
-		const previous = this.scheduledTurnQueues.get(queueKey) ?? Promise.resolve();
-		const current = previous
-			.catch(() => undefined)
-			.then(async () => {
-				result = await this.handleScheduledAgentTurn(request);
-			})
-			.finally(() => {
-				if (this.scheduledTurnQueues.get(queueKey) === current) {
-					this.scheduledTurnQueues.delete(queueKey);
-				}
-			});
-		this.scheduledTurnQueues.set(queueKey, current);
-		await current;
-		if (!result) {
-			throw new Error("Scheduled agent turn produced no result.");
-		}
-		return result;
+	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+		return this.scheduledTurns.enqueue(
+			request,
+			(turn) => this.handleScheduledAgentTurn(turn),
+			(turn) => this.resolveScheduledTurnQueueKey(turn),
+		);
 	}
 }
 
