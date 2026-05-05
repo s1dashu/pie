@@ -9,7 +9,9 @@ Pie is a desktop-first Agent client for creating, running, and observing local A
 
 The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel. WeChat is early, overseas IM channels are still in development, Hermes and OpenClaw are not exposed in the release UI yet, and Ousia/Codex remain experimental integration surfaces.
 
-<video src="docs/assets/pie-product-demo.mp4" poster="docs/assets/pie-product-demo-cover.png" controls width="100%"></video>
+<a href="docs/assets/pie-product-demo.mp4">
+  <img src="docs/assets/pie-product-demo-preview.gif" alt="Pie product demo" width="100%">
+</a>
 
 [Watch the product demo](docs/assets/pie-product-demo.mp4)
 
