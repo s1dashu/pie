@@ -6,8 +6,8 @@ This document describes the intended first public release scope for Pie.
 
 1. Desktop app for creating, starting, pausing, deleting, and inspecting local Agent profiles.
 2. One profile equals one Agent instance.
-3. Pi framework as the default runtime path.
-4. Ousia framework as an explicit advanced/experimental framework.
+3. Pi Agent Harness as the default runtime path.
+4. Ousia Agent Harness as an explicit advanced/experimental harness.
 5. Feishu/Lark as the primary IM channel.
 6. WeChat as early channel support.
 7. Profile-scoped config, secrets, sessions, logs, usage, skills, and runtime state.
