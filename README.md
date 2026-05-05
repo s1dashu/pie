@@ -9,7 +9,7 @@ Pie is a desktop-first Agent client for creating, running, and observing local A
 
 The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel. WeChat is early, overseas IM channels are still in development, Hermes and OpenClaw are not exposed in the release UI yet, and Ousia/Codex remain experimental integration surfaces.
 
-[![Pie product demo](docs/assets/pie-product-demo-cover.png)](docs/assets/pie-product-demo.mp4)
+<video src="docs/assets/pie-product-demo.mp4" poster="docs/assets/pie-product-demo-cover.png" controls width="100%"></video>
 
 [Watch the product demo](docs/assets/pie-product-demo.mp4)
 
@@ -28,6 +28,30 @@ Pie gives you one desktop surface for day-to-day Agent work:
 1. Create an Agent profile, choose an Agent Harness, connect an IM channel, select a model, and start running.
 2. See which Agents exist, which channels they are connected to, whether they are running, what model they use, and how much they have been used.
 3. Inspect recent runtime output, profile folders, logs, config, secrets, Skills, and working directories without hunting through terminal sessions.
+
+<img src="docs/assets/screenshots/dashboard.png" alt="Pie desktop dashboard" width="100%">
+
+## Feature Highlights
+
+### Create Agents Quickly
+
+Configure an Agent profile, harness, channel, and runtime settings from the desktop app.
+
+<img src="docs/assets/screenshots/create-easily.png" alt="Create an Agent profile in Pie" width="48%"> <img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%">
+
+### Tune The Runtime
+
+Manage model settings, Skills, and runtime output without switching between config files and terminal windows.
+
+<img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%"> <img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="48%">
+
+<img src="docs/assets/screenshots/agent-terminal-logs.png" alt="Agent terminal logs in Pie" width="48%"> <img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="48%">
+
+### Make It Yours
+
+Pie includes profile presentation details such as Agent avatars, while keeping the runtime and harness setup visible.
+
+<img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
 
 ## Product Shape
 
