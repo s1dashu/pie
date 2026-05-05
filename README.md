@@ -41,11 +41,11 @@ Configure IM channels and model settings from the desktop app.
 
 <img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%"> <img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%">
 
-### Manage Skills And Identity
+### Manage Skills
 
-Manage Skill sources and give each Agent a recognizable identity.
+Manage Skill sources from the desktop app.
 
-<img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="48%"> <img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
+<img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="100%">
 
 ### Inspect Runtime Output
 
@@ -55,9 +55,9 @@ Review logs and terminal output when an Agent is running for a long time.
 
 ### Customize The Workspace
 
-Adjust the desktop theme and workspace presentation.
+Adjust the desktop theme and profile presentation details.
 
-<img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="100%">
+<img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="48%"> <img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
 
 ## Status
 
