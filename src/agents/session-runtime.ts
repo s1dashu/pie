@@ -1,4 +1,4 @@
-import { getAgentBackendDefinition } from "./backend-registry.js";
+import { getAgentHarnessDefinition } from "./harness-registry.js";
 import { appendAgentUsageEvent } from "../core/usage-stats.js";
 import { AgentEventNormalizer } from "./event-normalizer.js";
 import { createProfileAgentEventSink } from "./event-sink.js";
@@ -18,13 +18,13 @@ import type {
 } from "./types.js";
 
 export type {
-	AgentBackendAdapter,
+	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
-	BackendDiagnostic,
+	HarnessDiagnostic,
 } from "./types.js";
 export { isFirstResponseSignal } from "./types.js";
 
@@ -142,7 +142,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 	async compactSession(conversationKey: string): Promise<{ summary?: string }> {
 		const compactSession = this.inner.compactSession;
 		if (!compactSession) {
-			throw new Error("This agent backend does not support /compact yet. Use /new to start a fresh session.");
+			throw new Error("This agent harness does not support /compact yet. Use /new to start a fresh session.");
 		}
 		return compactSession.call(this.inner, normalizeConversationKey(conversationKey));
 	}
@@ -150,7 +150,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 	async resetSession(conversationKey: string): Promise<void> {
 		const resetSession = this.inner.resetSession;
 		if (!resetSession) {
-			throw new Error("This agent backend does not support /new yet.");
+			throw new Error("This agent harness does not support /new yet.");
 		}
 		await resetSession.call(this.inner, normalizeConversationKey(conversationKey));
 	}
@@ -159,7 +159,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 export { extractAssistantText, extractLastAssistantError, wasLastAssistantMessageAborted };
 
 export function createAgentSessionPool(options: AgentSessionRuntimeOptions): AgentConversationSessionPool {
-	const adapter = getAgentBackendDefinition(options.backendKind).adapter;
+	const adapter = getAgentHarnessDefinition(options.harnessKind).adapter;
 	return new LoggedAgentSessionPool(adapter.createSessionPool(options), options.homeDir);
 }
 

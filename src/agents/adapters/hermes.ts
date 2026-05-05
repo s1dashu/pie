@@ -1,13 +1,13 @@
 import { getAgentRoundInputText } from "../types.js";
 import type {
-	AgentBackendAdapter,
+	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
 	AgentRoundInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
-	BackendDiagnostic,
+	HarnessDiagnostic,
 } from "../types.js";
 
 interface HermesChatCompletionResponse {
@@ -68,7 +68,7 @@ function asString(value: unknown): string | undefined {
 }
 
 function resolveEndpoint(options: AgentSessionRuntimeOptions): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return (
 		asString(config.endpoint) ??
 		process.env.HERMES_ENDPOINT?.trim() ??
@@ -77,19 +77,19 @@ function resolveEndpoint(options: AgentSessionRuntimeOptions): string {
 }
 
 function resolveTurnPath(options: AgentSessionRuntimeOptions): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	const path = asString(config.turnPath) ?? process.env.HERMES_TURN_PATH?.trim() ?? "/v1/chat/completions";
 	return path.startsWith("/") ? path : `/${path}`;
 }
 
 function resolveRunPath(options: AgentSessionRuntimeOptions): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	const path = asString(config.runPath) ?? process.env.HERMES_RUN_PATH?.trim() ?? "/v1/runs";
 	return path.startsWith("/") ? path : `/${path}`;
 }
 
 function resolveRunEventsPath(options: AgentSessionRuntimeOptions, runId: string): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	const path = asString(config.runEventsPath) ?? process.env.HERMES_RUN_EVENTS_PATH?.trim();
 	if (path) {
 		return (path.startsWith("/") ? path : `/${path}`).replace("{run_id}", encodeURIComponent(runId));
@@ -98,18 +98,18 @@ function resolveRunEventsPath(options: AgentSessionRuntimeOptions, runId: string
 }
 
 function resolveHealthPath(options: AgentSessionRuntimeOptions): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	const path = asString(config.healthPath) ?? process.env.HERMES_HEALTH_PATH?.trim() ?? "/health";
 	return path.startsWith("/") ? path : `/${path}`;
 }
 
 function resolveApiKey(options: AgentSessionRuntimeOptions): string | undefined {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return asString(config.apiKey) ?? process.env.API_SERVER_KEY?.trim() ?? process.env.HERMES_API_SERVER_KEY?.trim() ?? undefined;
 }
 
 function useChatCompletionsTransport(options: AgentSessionRuntimeOptions): boolean {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return asString(config.transport) === "chat_completions";
 }
 
@@ -580,11 +580,11 @@ class HermesSessionPool implements AgentConversationSessionPool {
 	}
 }
 
-export const hermesAgentBackendAdapter: AgentBackendAdapter = {
+export const hermesAgentHarnessAdapter: AgentHarnessAdapter = {
 	kind: "hermes",
 	label: "Hermes",
 	capabilities: HERMES_CAPABILITIES,
-	async checkEnvironment(options): Promise<BackendDiagnostic> {
+	async checkEnvironment(options): Promise<HarnessDiagnostic> {
 		const endpoint = resolveEndpoint(options);
 		try {
 			const apiKey = resolveApiKey(options);

@@ -63,7 +63,7 @@ export function createRuntimeEnvironment(options: {
 	const lifecycle = options.lifecycle ?? new RuntimeEnvironmentLifecycle();
 	return {
 		homeDir: resolve(options.homeDir),
-		workDir: resolveWorkDir(options.homeDir, options.profile?.runtime?.workDir ?? options.profile?.backend.model?.workDir),
+		workDir: resolveWorkDir(options.homeDir, options.profile?.runtime?.workDir ?? options.profile?.harness.model?.workDir),
 		lifecycle: lifecycle.snapshot,
 	};
 }

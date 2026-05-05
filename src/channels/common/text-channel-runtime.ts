@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from "chalk";
-import { getAgentBackendLabel } from "../../agents/backend-registry.js";
+import { getAgentHarnessLabel } from "../../agents/harness-registry.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -185,13 +185,13 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	) {
 		this.channelLabel = titleCase(config.channelKind);
 		this.identity = {
-			backend: config.backendKind,
+			harness: config.harnessKind,
 			channel: config.channelKind,
 			homeDir: config.homeDir,
 		};
 		this.sessionPool = createAgentSessionPool({
-			backendKind: config.backendKind,
-			backendConfig: config.backendConfig,
+			harnessKind: config.harnessKind,
+			harnessConfig: config.harnessConfig,
 			homeDir: config.homeDir,
 			model: config.model,
 			modelId: config.modelId,
@@ -245,7 +245,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const lines = [
-			chalk.bold(`${getAgentBackendLabel(this.config.backendKind)} ${this.channelLabel} channel ready`),
+			chalk.bold(`${getAgentHarnessLabel(this.config.harnessKind)} ${this.channelLabel} channel ready`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),
 			chalk.gray(`thinking   ${this.config.thinkingLevel}`),

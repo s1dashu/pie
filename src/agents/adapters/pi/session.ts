@@ -53,19 +53,19 @@ function overrideBaseSystemPrompt(
 		return basePrompt;
 	}
 	const head = assistantSystemPrompt.trim();
-	const backend =
+	const harness =
 		configuredModel != null
-			? `\n\n## Session backend\nRequests use provider \`${String(configuredModel.provider)}\` and model id \`${configuredModel.id}\` (OpenAI-compatible transport only describes the HTTP API; the underlying engine may differ). Do not insist you are a particular vendor-branded chatbot unless the user asks or the model id clearly names that vendor.`
+			? `\n\n## Session harness\nRequests use provider \`${String(configuredModel.provider)}\` and model id \`${configuredModel.id}\` (OpenAI-compatible transport only describes the HTTP API; the underlying engine may differ). Do not insist you are a particular vendor-branded chatbot unless the user asks or the model id clearly names that vendor.`
 			: "";
 	if (!basePrompt) {
-		return `${head}${backend}`;
+		return `${head}${harness}`;
 	}
 	const toolsSection = "\n\nAvailable tools:\n";
 	const toolsIndex = basePrompt.indexOf(toolsSection);
 	if (toolsIndex === -1) {
-		return `${head}${backend}`;
+		return `${head}${harness}`;
 	}
-	return `${head}${backend}${basePrompt.slice(toolsIndex)}`;
+	return `${head}${harness}${basePrompt.slice(toolsIndex)}`;
 }
 
 function truncate(text: string, max = 160): string {

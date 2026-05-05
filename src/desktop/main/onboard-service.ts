@@ -14,9 +14,10 @@ import {
 } from "../../core/agent-home.js";
 import {
 	checkCodexAppServerEnvironment,
-	codexCliAgentBackendAdapter,
+	codexCliAgentHarnessAdapter,
 	loginCodexWithAppServer,
 } from "../../agents/adapters/codex-cli.js";
+import { ensureOpenClawModelState, toOpenClawModelRef } from "../../agents/openclaw-models.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import {
 	DEFAULT_WECHAT_BASE_URL,
@@ -778,9 +779,9 @@ export async function checkCodexEnvironmentForDesktop(): Promise<DesktopCodexDia
 	} catch (error) {
 		const homeDir = join(homedir(), ".pie", "diagnostics", "codex");
 		mkdirSync(homeDir, { recursive: true });
-		const diagnostic = await (codexCliAgentBackendAdapter.checkEnvironment?.({
-			backendKind: "codex",
-			backendConfig: {},
+		const diagnostic = await (codexCliAgentHarnessAdapter.checkEnvironment?.({
+			harnessKind: "codex",
+			harnessConfig: {},
 			homeDir,
 			modelId: "gpt-5.5",
 			thinkingLevel: "medium",
@@ -1227,10 +1228,10 @@ function collectConfiguredOpenClawGatewayPorts(): Set<number> {
 		try {
 			const homeDir = resolve(rootDir, entry.home);
 			const profile = getStoredProfile(loadConfigStore(homeDir));
-			if (profile?.backend.kind !== "openclaw") {
+			if (profile?.harness.kind !== "openclaw") {
 				continue;
 			}
-			const port = parseOpenClawGatewayPort(profile.backend.config?.gatewayUrl);
+			const port = parseOpenClawGatewayPort(profile.harness.config?.gatewayUrl);
 			if (port) {
 				ports.add(port);
 			}
@@ -1293,16 +1294,16 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	const ex = getStoredProfile(store);
 	const exModel = getProfileModel(ex);
 
-	const codexModels = draft.framework === "codex" ? loadCodexModelCatalog() : [];
+	const codexModels = draft.harness === "codex" ? loadCodexModelCatalog() : [];
 	const provider =
-		draft.framework === "codex"
+		draft.harness === "codex"
 			? "codex-cli"
 			: draft.provider.trim();
 	const requestedModel = draft.model.trim();
 	const model =
-		draft.framework === "codex"
+		draft.harness === "codex"
 			? codexModels.find((item) => item.id === requestedModel)?.id ?? codexModels[0]?.id ?? "gpt-5.5"
-			: draft.framework === "hermes"
+			: draft.harness === "hermes"
 				? requestedModel
 			: requestedModel;
 	const apiKey = draft.apiKey?.trim();
@@ -1318,19 +1319,20 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 			models: [{ id: model }],
 		});
 	}
-	const openClawGatewayUrl = draft.framework === "openclaw" ? await resolveOpenClawGatewayUrl() : undefined;
+	const openClawGatewayUrl = draft.harness === "openclaw" ? await resolveOpenClawGatewayUrl() : undefined;
+	const openClawModelRef = draft.harness === "openclaw" ? toOpenClawModelRef(provider, model) : undefined;
 
 	const profile = createAgentProfile({
-		backend: {
-			kind: draft.framework,
-			...(draft.framework === "codex"
+		harness: {
+			kind: draft.harness,
+			...(draft.harness === "codex"
 				? {
 						config: {
 							sandboxMode: draft.codexSandboxMode ?? "danger-full-access",
 							webSearchMode: draft.codexWebSearchMode ?? "cached",
 						},
 					}
-				: draft.framework === "hermes"
+				: draft.harness === "hermes"
 					? {
 								config: {
 									endpoint: `http://127.0.0.1:${hermesApiServerPort}`,
@@ -1341,10 +1343,11 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 								managed: true,
 							},
 						}
-					: draft.framework === "openclaw"
+					: draft.harness === "openclaw"
 						? {
 								config: {
 									gatewayUrl: openClawGatewayUrl,
+									modelRef: openClawModelRef,
 								},
 							}
 				: {}),
@@ -1367,6 +1370,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 						id: "feishu",
 						enabled: true,
 						appId: draft.feishu.appId.trim(),
+						credentialState: "active" as const,
 						brand: draft.feishu.brand,
 						messageOutputMode: "bubble" as const,
 					}]
@@ -1408,6 +1412,9 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	});
 
 	saveConfigStore(setStoredProfile(store, profile), homeDir);
+	if (draft.harness === "openclaw") {
+		ensureOpenClawModelState(join(homeDir, "openclaw", "state"), openClawModelRef);
+	}
 	const savedEnv: Record<string, string> = {};
 	if (channels.includes("feishu") && draft.feishu) {
 		savedEnv.FEISHU_APP_SECRET = draft.feishu.appSecret.trim();
@@ -1422,7 +1429,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	if (channels.includes("telegram") && draft.telegram) {
 		savedEnv.TELEGRAM_BOT_TOKEN = draft.telegram.botToken.trim();
 	}
-	if (draft.framework === "hermes") {
+	if (draft.harness === "hermes") {
 		const hermesProvider = toHermesInferenceProvider(provider);
 		savedEnv.API_SERVER_ENABLED = "true";
 		savedEnv.API_SERVER_HOST = "127.0.0.1";

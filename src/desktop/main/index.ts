@@ -31,6 +31,7 @@ import {
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
 import { appendAgentUsageEvent, pruneAgentUsageEvents, readAgentUsageEvents, summarizeAgentUsage } from "../../core/usage-stats.js";
 import { resolveSkillSources } from "../../agents/skills.js";
+import { ensureOpenClawModelState, toOpenClawModelRef } from "../../agents/openclaw-models.js";
 import {
 	clearRuntimeProcessRecord,
 	isPidRunning,
@@ -90,12 +91,12 @@ import {
 	openCodexLoginForDesktop,
 	toHermesInferenceProvider,
 } from "./onboard-service.js";
-import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/framework.js";
+import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/harness.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
 import { createRuntimeEnvironment } from "../../runtime/environment.js";
-import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
-import type { AgentFrameworkRuntime } from "../../core/backend-framework.js";
+import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
+import type { AgentHarnessRuntime } from "../../core/agent-harness.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
 const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
@@ -604,29 +605,29 @@ function getConfiguredSystemPromptPath(profile: AgentConfigStore["profile"], env
 }
 
 function resolveSystemPromptSource(profile: AgentConfigStore["profile"], env: Record<string, string>): AgentSystemPromptSource {
-	const framework: Pick<AgentFrameworkRuntime, "label" | "systemPrompt"> = (() => {
+	const harness: Pick<AgentHarnessRuntime, "label" | "systemPrompt"> = (() => {
 		try {
-			return getAgentBackendDefinition(profile?.backend.kind ?? "pi").frameworkRuntime;
+			return getAgentHarnessDefinition(profile?.harness.kind ?? "pi").harnessRuntime;
 		} catch {
-			const label = String(profile?.backend.kind ?? "backend");
+			const label = String(profile?.harness.kind ?? "harness");
 			return { label };
 		}
 	})();
-	if (!framework.systemPrompt) {
+	if (!harness.systemPrompt) {
 		return {
 			label: "系统提示词",
-			description: `${framework.label} 的系统提示词由 backend runtime 内置或自行管理，Pie 当前没有注入可编辑的系统提示词文件。`,
+			description: `${harness.label} 的系统提示词由 harness runtime 内置或自行管理，Pie 当前没有注入可编辑的系统提示词文件。`,
 			path: "",
 			exists: true,
-			content: `${framework.label} 使用 backend runtime 提供的系统提示词；这里没有需要打开的本地提示词文件。`,
+			content: `${harness.label} 使用 harness runtime 提供的系统提示词；这里没有需要打开的本地提示词文件。`,
 		};
 	}
 
 	const configuredPath = getConfiguredSystemPromptPath(profile, env);
-	const path = configuredPath ?? framework.systemPrompt.defaultPath;
+	const path = configuredPath ?? harness.systemPrompt.defaultPath;
 	return describeSystemPromptSource({
 		label: "系统提示词",
-		description: `${framework.systemPrompt.label} 当前注入到 Agent session。`,
+		description: `${harness.systemPrompt.label} 当前注入到 Agent session。`,
 		path,
 	});
 }
@@ -648,6 +649,10 @@ const agentProcesses = new AgentProcessManager({
 	},
 	async getAgentName(agentId) {
 		return (await getAgent(agentId)).name;
+	},
+	async getAgentStartLabel(agentId) {
+		const agent = await getAgent(agentId);
+		return `名称=${agent.name} id=${agent.id} Agent Harness=${agent.harnessKind ?? "unknown"} 渠道=${agent.channelKinds?.join(",") || "none"}`;
 	},
 	async getRuntimeEnvironment(agentId) {
 		const agent = await getAgent(agentId);
@@ -806,7 +811,7 @@ async function listAgents(): Promise<AgentSummary[]> {
 		const channelKinds = profile?.channels
 			.filter((profileChannel) => profileChannel.enabled !== false)
 			.map((profileChannel) => profileChannel.kind);
-		const frameworkKind = profile?.backend.kind ? String(profile.backend.kind) : undefined;
+		const harnessKind = profile?.harness.kind ? String(profile.harness.kind) : undefined;
 		const selectedModelId = displayModelId(model?.model);
 		const modelOption = model?.provider && model?.model
 			? loadModelOptions(home).find((item) => item.provider === model.provider && item.id === selectedModelId)
@@ -824,7 +829,7 @@ async function listAgents(): Promise<AgentSummary[]> {
 			runtimeEnvironment,
 			createdAt: entry.createdAt,
 			updatedAt: entry.updatedAt,
-			frameworkKind,
+			harnessKind,
 			modelLabel,
 			channelKinds,
 			appId: channel?.appId,
@@ -932,6 +937,8 @@ async function getAgent(id: string): Promise<AgentDetails> {
 		...summary,
 		brand: channel?.brand,
 		feishuMessageOutputMode: channel?.messageOutputMode,
+		feishuCredentialState: channel?.credentialState ?? "active",
+		feishuCredentialInvalidatedReason: channel?.credentialInvalidatedReason,
 		appSecret: env.FEISHU_APP_SECRET,
 		wechat: wechatChannel
 			? {
@@ -971,6 +978,54 @@ async function getAgentUsage(id: string) {
 	return summarizeAgentUsage(readAgentUsageEvents(agent.home), { runningSince: agentProcesses.getStartedAt(id) });
 }
 
+async function invalidateFeishuCredentialsOwnedByOtherAgents(ownerId: string, appId: string): Promise<void> {
+	const targetAppId = appId.trim();
+	if (!targetAppId) {
+		return;
+	}
+	const registry = loadProfileRegistry();
+	const rootDir = getDefaultPieRootDir();
+	const invalidatedAt = new Date().toISOString();
+	for (const [agentId, entry] of Object.entries(registry.profiles)) {
+		if (agentId === ownerId) {
+			continue;
+		}
+		const home = profileHomeFromEntry(rootDir, entry.home);
+		const current = readProfileConfig(home);
+		const profile = current?.profile;
+		const channel = getPrimaryFeishuChannel(profile);
+		if (!current || !profile || !channel || channel.appId.trim() !== targetAppId) {
+			continue;
+		}
+		if (channel.credentialState === "invalidated" && channel.credentialInvalidatedReason === `transferred:${ownerId}`) {
+			continue;
+		}
+		const nextProfile = upsertFeishuChannel(profile, {
+			...channel,
+			credentialState: "invalidated",
+			credentialInvalidatedAt: invalidatedAt,
+			credentialInvalidatedReason: `transferred:${ownerId}`,
+		});
+		writeProfileConfig(home, {
+			...current,
+			version: 3,
+			profile: nextProfile,
+		});
+		upsertAgentEnv({ FEISHU_APP_SECRET: undefined }, home);
+		await stopRunningAgent(agentId);
+		writeRuntimeStateRecord(home, {
+			homeDir: home,
+			workDir: createRuntimeEnvironment({ homeDir: home, profile: nextProfile }).workDir,
+			lifecycle: {
+				state: "failed",
+				updatedAt: invalidatedAt,
+				reason: `feishu-credential-invalidated: transferred to ${ownerId}`,
+			},
+		});
+		console.warn(`[desktop] invalidated Feishu credentials for ${agentId}; App ID ${targetAppId} is now owned by ${ownerId}.`);
+	}
+}
+
 async function getAgentLogs(id: string) {
 	const agent = await getAgent(id);
 	const persisted = readAgentLogEntries(agent.home);
@@ -1006,10 +1061,10 @@ async function getAgentResources(id: string): Promise<AgentResourceStats> {
 
 async function getAgentModelCatalog(id: string): Promise<DesktopModelCatalog> {
 	const agent = await getAgent(id);
-	if (agent.frameworkKind === "openclaw") {
+	if (agent.harnessKind === "openclaw") {
 		return loadOpenClawModelCatalog();
 	}
-	const catalog = agent.frameworkKind === "hermes" ? loadHermesModelCatalog(agent.home) : loadModelCatalog(agent.home);
+	const catalog = agent.harnessKind === "hermes" ? loadHermesModelCatalog(agent.home) : loadModelCatalog(agent.home);
 	if (agent.model?.provider !== "codex-cli") {
 		return catalog;
 	}
@@ -1292,6 +1347,9 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		nextProfileWithChannel = upsertFeishuChannel(nextProfileWithChannel, {
 			...(feishuChannel ?? { kind: "feishu" as const, id: "feishu", enabled: true }),
 			appId: nextAppId.trim(),
+			credentialState: draft.appId !== undefined || draft.appSecret !== undefined ? "active" : feishuChannel?.credentialState ?? "active",
+			credentialInvalidatedAt: draft.appId !== undefined || draft.appSecret !== undefined ? undefined : feishuChannel?.credentialInvalidatedAt,
+			credentialInvalidatedReason: draft.appId !== undefined || draft.appSecret !== undefined ? undefined : feishuChannel?.credentialInvalidatedReason,
 			brand: nextBrand,
 			messageOutputMode: nextFeishuMessageOutputMode,
 		});
@@ -1321,7 +1379,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 			botUsername: draft.telegramBotUsername ?? telegramChannel?.botUsername,
 		});
 	}
-	const nextProfile = setProfileModel(nextProfileWithChannel, {
+	const nextProfileBase = setProfileModel(nextProfileWithChannel, {
 		...model,
 		provider: draft.provider ?? model.provider,
 		model: draft.model ?? model.model,
@@ -1330,13 +1388,34 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		outputToolCallImMaxLength: draft.outputToolCallImMaxLength ?? model.outputToolCallImMaxLength ?? 60,
 		outputThinkingToIm: nextOutputThinkingToIm,
 	});
+	const openClawModelRef = nextProfileBase.harness.kind === "openclaw"
+		? toOpenClawModelRef(nextProfileBase.harness.model?.provider, nextProfileBase.harness.model?.model)
+		: undefined;
+	const nextProfile = nextProfileBase.harness.kind === "openclaw"
+		? {
+				...nextProfileBase,
+				harness: {
+					...nextProfileBase.harness,
+					config: {
+						...(nextProfileBase.harness.config ?? {}),
+						modelRef: openClawModelRef,
+					},
+				},
+			}
+		: nextProfileBase;
 	writeProfileConfig(agent.home, {
 		...current,
 		version: 3,
 		profile: nextProfile,
 	});
+	if (nextProfile.harness.kind === "openclaw") {
+		ensureOpenClawModelState(join(agent.home, "openclaw", "state"), openClawModelRef);
+	}
 	if (hasFeishuUpdate) {
 		upsertAgentEnv({ FEISHU_APP_SECRET: nextAppSecret.trim() }, agent.home);
+		if (draft.appId !== undefined || draft.appSecret !== undefined) {
+			await invalidateFeishuCredentialsOwnedByOtherAgents(id, nextAppId);
+		}
 	}
 	if (hasWechatUpdate) {
 		const envUpdates: Record<string, string | undefined> = {};
@@ -1369,7 +1448,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	}
 	const nextProvider = draft.provider ?? model.provider;
 	const nextModel = draft.model ?? model.model;
-	if (hasModelUpdate && currentProfile?.backend.kind === "hermes" && nextProvider?.trim() && nextModel?.trim()) {
+	if (hasModelUpdate && currentProfile?.harness.kind === "hermes" && nextProvider?.trim() && nextModel?.trim()) {
 		upsertAgentEnv(writeHermesModelConfig(agent.home, id, nextProvider.trim(), nextModel.trim()), agent.home);
 	}
 	const apiKeyEnv = nextProvider ? getProviderCredentialEnv(nextProvider) : undefined;
@@ -1410,7 +1489,20 @@ async function startAgent(id: string): Promise<AgentDetails> {
 		return getAgent(id);
 	}
 	const existing = await getAgent(id);
-	if (existing.frameworkKind === "hermes") {
+	if (existing.feishuCredentialState === "invalidated") {
+		const message = "飞书凭证已失效，请重新授权后再启动这个 Agent。";
+		writeRuntimeStateRecord(existing.home, {
+			homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
+			workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
+			lifecycle: {
+				state: "failed",
+				updatedAt: new Date().toISOString(),
+				reason: message,
+			},
+		});
+		throw new Error(message);
+	}
+	if (existing.harnessKind === "hermes") {
 		const diagnostic = await checkHermesEnvironmentForDesktop();
 		if (!diagnostic.ready) {
 			const message = diagnostic.installed
@@ -1686,10 +1778,10 @@ function createWindow(): BrowserWindow {
 	const appRoot = app.getAppPath();
 	const preloadPath = join(appRoot, "out/preload/index.cjs");
 	const win = new BrowserWindow({
-		width: 960,
-		height: 680,
-		minWidth: 800,
-		minHeight: 480,
+		width: 1024,
+		height: 654,
+		minWidth: 1024,
+		minHeight: 576,
 		show: false,
 		title: "Pie",
 		transparent: true,
@@ -1989,6 +2081,9 @@ app.whenReady().then(() => {
 	ipcMain.handle("agents:create-complete", async (_event, draft: AgentCreationDraft) => {
 		try {
 			await completeCreationSession(draft);
+			if (draft.channels.includes("feishu") && draft.feishu?.appId) {
+				await invalidateFeishuCredentialsOwnedByOtherAgents(draft.sessionId, draft.feishu.appId);
+			}
 			const agent = await getAgent(draft.sessionId);
 			if (draft.feishu?.avatarUrl) {
 				await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);

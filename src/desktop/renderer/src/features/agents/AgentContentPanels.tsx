@@ -82,7 +82,12 @@ export function AgentContentPanels({
 	const { language, t } = useI18n();
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
 	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
+	const messageDirectionHint = t("messageDirectionCount", {
+		sent: formatCount(usage.total.outgoingMessages, language),
+		received: formatCount(usage.total.incomingMessages, language),
+	});
 	const hasFeishuChannel = Boolean(agent.channelKinds?.includes("feishu") || agent.appId);
+	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
 	const hasSlackChannel = Boolean(agent.channelKinds?.includes("slack") || agent.slack);
 	const hasDiscordChannel = Boolean(agent.channelKinds?.includes("discord") || agent.discord);
@@ -94,12 +99,15 @@ export function AgentContentPanels({
 		...(hasDiscordChannel ? ["discord"] : []),
 		...(hasTelegramChannel ? ["telegram"] : []),
 	];
-	const usesCodexCli = draft.provider === "codex-cli" || agent.frameworkKind === "codex";
-	const showsSystemPrompt = agent.frameworkKind === "ousia";
+	const usesCodexCli = draft.provider === "codex-cli" || agent.harnessKind === "codex";
+	const showsSystemPrompt = agent.harnessKind === "ousia";
 	const usesFeishuMessageCard = hasFeishuChannel && (channelDraft.feishuMessageOutputMode ?? "bubble") === "card";
 	const totalCacheTokens = usage.total.cacheReadTokens + usage.total.cacheWriteTokens;
 	const inputTokensWithCache = usage.total.inputTokens + totalCacheTokens;
-	const tokenUsageHint = `${formatTokenCount(inputTokensWithCache)} / ${formatTokenCount(usage.total.outputTokens)}`;
+	const hasTokenBreakdown = inputTokensWithCache > 0 || usage.total.outputTokens > 0;
+	const tokenUsageHint = hasTokenBreakdown
+		? `${formatTokenCount(inputTokensWithCache)} / ${formatTokenCount(usage.total.outputTokens)}`
+		: t("tokenTotalCount", { count: formatTokenCount(usage.total.tokens) });
 
 	return (
 		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
@@ -109,7 +117,7 @@ export function AgentContentPanels({
 						<UsageMetric
 							label={t("messageCount")}
 							value={formatCount(totalMessages, language)}
-							hint={t("turnCount", { count: formatCount(usage.total.turns, language) })}
+							hint={messageDirectionHint}
 						/>
 						<UsageMetric
 							label={t("tokenUsage")}
@@ -268,6 +276,11 @@ export function AgentContentPanels({
 									</Button>
 								</AceternityTooltip>
 							</div>
+							{isFeishuCredentialInvalidated ? (
+								<div className="rounded-2xl border border-[var(--amber-6)] bg-[var(--amber-3)] px-3 py-2 text-xs leading-5 text-[var(--amber-11)]">
+									{t("feishuCredentialInvalidatedDesc")}
+								</div>
+							) : null}
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="App ID">
 									<Input value={channelDraft.appId ?? ""} onChange={(event) => onUpdateChannelField("appId", event.target.value)} />
@@ -563,7 +576,7 @@ function ResourceChartCard({
 	const linePath = useMemo(() => createSmoothedChartPath(points, maxValue), [maxValue, points]);
 
 	return (
-		<div className={cn("pie-smooth-corner flex min-h-[8.5rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-3.5", className)}>
+		<div className={cn("pie-smooth-corner flex min-h-[13rem] min-w-0 flex-col overflow-hidden rounded-[36px] p-3.5", className)}>
 			<div className="flex flex-col gap-2 min-[980px]:flex-row min-[980px]:items-start min-[980px]:justify-between min-[980px]:gap-3">
 				<SectionTitle title={title} className="min-w-0" />
 				<div className="shrink-0 text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-right min-[980px]:text-2xl">{value}</div>
@@ -660,28 +673,28 @@ function StorageDetailCard({
 	];
 
 	return (
-		<div className={cn("pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] p-4", className)}>
+		<div className={cn("pie-smooth-corner flex min-w-0 flex-col rounded-[36px] bg-[var(--slate-2)] px-4 py-2.5", className)}>
 			<div className="min-w-0">
 				<div className="flex min-w-0 items-start justify-between gap-4">
-					<SectionTitle title={t("storage")} description={t("storageDesc")} />
+					<SectionTitle title={t("storage")} />
 					{diskTotalBytes && diskAvailableBytes !== undefined ? (
 						<div className="shrink-0 pt-0.5 text-right text-xs font-medium text-muted-foreground tabular-nums">
 							{formatPercent((diskAvailableBytes / diskTotalBytes) * 100)} {t("diskAvailable")}
 						</div>
 					) : null}
 				</div>
-				<div className="mt-5 grid grid-cols-3 gap-3 max-[760px]:grid-cols-1">
+				<div className="mt-2.5 grid grid-cols-3 gap-3 max-[760px]:grid-cols-1">
 					{storageMetrics.map((metric) => (
 						<div key={metric.label} className="min-w-0">
 							<div className="truncate text-xs font-medium uppercase text-muted-foreground">{metric.label}</div>
-							<div className="mt-2 truncate text-xl font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-2xl">
+							<div className="mt-1 truncate text-lg font-bold tracking-tight text-foreground tabular-nums min-[980px]:text-xl">
 								{metric.value}
 							</div>
 						</div>
 					))}
 				</div>
-				<div className="mt-5">
-					<div className="h-2 overflow-hidden rounded-full bg-[var(--slate-4)]">
+				<div className="mt-2.5">
+					<div className="h-1.5 overflow-hidden rounded-full bg-[var(--slate-4)]">
 						<div
 							className="h-full max-w-full rounded-full bg-[var(--slate-8)] transition-[width] duration-300"
 							style={{ width: `${barWidthPercent}%` }}

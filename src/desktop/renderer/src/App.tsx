@@ -5,6 +5,7 @@ import { AgentAvatar } from "./components/shared/agent-avatar";
 import { Spinner } from "./components/ui/spinner-1";
 import { Toaster, toast } from "./components/ui/sonner";
 import { runtimeLifecycleLabel, runtimeLifecycleTone, statusLabel, statusTone } from "./features/agents/agent-display";
+import { formatAgentSubtitle } from "./features/agents/agent-labels";
 import { AgentDetailPane } from "./layout/AgentDetailPane";
 import { AgentSidebar } from "./layout/AgentSidebar";
 import { cn } from "./lib/utils";
@@ -26,7 +27,7 @@ function agentSummaryFingerprint(agent: AgentSummary): string {
 		runtimeEnvironment: agent.runtimeEnvironment,
 		createdAt: agent.createdAt,
 		updatedAt: agent.updatedAt,
-		frameworkKind: agent.frameworkKind,
+		harnessKind: agent.harnessKind,
 		modelLabel: agent.modelLabel,
 		channelKinds: agent.channelKinds,
 		appId: agent.appId,
@@ -185,7 +186,7 @@ export function App(): JSX.Element {
 
 	return (
 		<I18nProvider language={settings.data?.language ?? "zh"}>
-			<main className="app-continuous-corner relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
+			<main className="app-continuous-corner app-shell-surface relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
 				<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
 				<AgentSidebar
 					agents={agents.data}
@@ -217,25 +218,21 @@ export function App(): JSX.Element {
 					}}
 				/>
 				<Toaster />
-				{quittingAgentIds?.length ? <QuitOverlay count={quittingAgentIds.length} /> : null}
+				{quittingAgentIds?.length ? <QuitOverlay /> : null}
 			</main>
 		</I18nProvider>
 	);
 }
 
-function QuitOverlay({ count }: { count: number }): JSX.Element {
+function QuitOverlay(): JSX.Element {
 	const { t } = useI18n();
 	return (
-		<div className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(248,250,252,0.74)] px-6 backdrop-blur-md">
-			<div className="pie-smooth-corner w-full max-w-[360px] rounded-[24px] border border-[var(--slate-5)] bg-white/95 px-6 py-5 text-center shadow-[0_18px_60px_rgba(15,23,42,0.16),0_2px_8px_rgba(15,23,42,0.08)]">
-				<div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-[var(--slate-3)]">
+		<div className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-white px-6 text-center">
+			<div className="flex items-center gap-2.5 text-base font-medium leading-6 text-foreground">
+				<span className="grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
 					<Spinner size={18} color="var(--slate-11)" />
-				</div>
-				<div className="mt-4 text-base font-semibold leading-snug text-foreground">{t("quittingTitle")}</div>
-				<div className="mt-2 text-sm leading-5 text-muted-foreground">{t("quittingDesc")}</div>
-				<div className="mt-4 rounded-md border border-[var(--slate-5)] bg-[var(--slate-2)] px-3 py-2 text-xs font-medium text-muted-foreground">
-					{t("quittingCount", { count })}
-				</div>
+				</span>
+				<span>{t("quittingTitle")}</span>
 			</div>
 		</div>
 	);
@@ -301,8 +298,7 @@ function MenuBarAgentItem({ agent }: { agent: AgentSummary }): JSX.Element {
 	const lifecycleTone = runtimeLifecycleTone(lifecycle?.state);
 	const statusText = lifecycle ? runtimeLifecycleLabel(lifecycle.state, language) : statusLabel(agent.status, language);
 	const tone = agent.runtimeEnvironment ? lifecycleTone : statusTone(agent.status);
-	const channels = agent.channelKinds?.length ? agent.channelKinds.join("+") : t("noChannel");
-	const framework = agent.frameworkKind ?? t("agent");
+	const subtitle = formatAgentSubtitle(agent, t);
 
 	return (
 		<button
@@ -314,7 +310,7 @@ function MenuBarAgentItem({ agent }: { agent: AgentSummary }): JSX.Element {
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-sm font-medium leading-5 text-foreground">{agent.name}</div>
 				<div className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
-					{framework} {t("on")} {channels}
+					{subtitle}
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5">

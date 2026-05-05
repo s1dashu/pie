@@ -22,7 +22,7 @@ function selectValueKey(value: unknown): string {
 function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
   const collectedLabels = React.useMemo(() => collectSelectLabels(props.children), [props.children])
   const [registeredLabels, setRegisteredLabels] = React.useState(() => new Map<string, React.ReactNode>())
-  const labels = React.useMemo(() => new Map([...collectedLabels, ...registeredLabels]), [collectedLabels, registeredLabels])
+  const labels = React.useMemo(() => new Map([...registeredLabels, ...collectedLabels]), [collectedLabels, registeredLabels])
   const register = React.useCallback((value: unknown, label: React.ReactNode) => {
     const key = selectValueKey(value)
     setRegisteredLabels((current) => {

@@ -3,10 +3,10 @@ import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
+import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../../core/agent-home.js";
 import {
-	type AgentBackendKind,
+	type AgentHarnessKind,
 	getPrimaryWechatChannel,
 	getProfileModel,
 	getStoredProfile,
@@ -35,8 +35,8 @@ export interface WechatChannelConfig {
 
 export interface WechatBotConfig {
 	homeDir: string;
-	backendKind: AgentBackendKind;
-	backendConfig?: Record<string, unknown>;
+	harnessKind: AgentHarnessKind;
+	harnessConfig?: Record<string, unknown>;
 	wechat: WechatChannelConfig;
 	model?: Model<any>;
 	modelId?: string;
@@ -112,22 +112,22 @@ function resolveTools(value: string | undefined): { tools: string[]; label: stri
 	return { tools: names, label: names.join(",") };
 }
 
-function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?: Model<any>; modelId?: string; label: string } {
+function resolveModel(env: RuntimeEnv, harnessKind: AgentHarnessKind): { model?: Model<any>; modelId?: string; label: string } {
 	const provider = env.WECHAT_BOT_PROVIDER;
 	const modelId = env.WECHAT_BOT_MODEL;
-	if (backendKind === "codex") {
+	if (harnessKind === "codex") {
 		return {
 			modelId: modelId?.trim() || undefined,
 			label: modelId?.trim() || "codex default",
 		};
 	}
-	if (backendKind === "hermes") {
+	if (harnessKind === "hermes") {
 		return {
 			modelId: modelId?.trim() || undefined,
 			label: modelId?.trim() || "hermes default",
 		};
 	}
-	if (backendKind === "openclaw") {
+	if (harnessKind === "openclaw") {
 		const requestedModel = modelId?.trim();
 		const requestedProvider = provider?.trim();
 		const openClawModel = requestedModel && requestedProvider && !requestedModel.includes("/")
@@ -152,9 +152,9 @@ function resolveModel(env: RuntimeEnv, backendKind: AgentBackendKind): { model?:
 }
 
 function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content: string } {
-	const backend = getAgentBackendDefinition(getStoredProfile(loadConfigStore())?.backend.kind ?? "pi");
-	const framework = backend.frameworkRuntime;
-	const filePath = resolve(env.WECHAT_BOT_SYSTEM_PROMPT_FILE ?? framework.systemPrompt?.defaultPath ?? "");
+	const harnessDefinition = getAgentHarnessDefinition(getStoredProfile(loadConfigStore())?.harness.kind ?? "pi");
+	const harness = harnessDefinition.harnessRuntime;
+	const filePath = resolve(env.WECHAT_BOT_SYSTEM_PROMPT_FILE ?? harness.systemPrompt?.defaultPath ?? "");
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
@@ -162,8 +162,8 @@ function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content:
 	return { path: filePath, content: readFileSync(filePath, "utf8").replaceAll("{{AGENT_HOME}}", homeDir).trim() };
 }
 
-function resolveBackendKind(store: AgentConfigStore): AgentBackendKind {
-	return getAgentBackendDefinition(getStoredProfile(store)?.backend.kind ?? "pi").kind;
+function resolveHarnessKind(store: AgentConfigStore): AgentHarnessKind {
+	return getAgentHarnessDefinition(getStoredProfile(store)?.harness.kind ?? "pi").kind;
 }
 
 function parseAgentHomeFromArgv(argv: string[]): string | undefined {
@@ -227,20 +227,20 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 	const store = loadConfigStore();
 	const env: RuntimeEnv = { ...process.env };
 	mergeStoredProfileIntoEnv(env, store);
-	const backendKind = resolveBackendKind(store);
+	const harnessKind = resolveHarnessKind(store);
 
 	const accountId = env.WECHAT_ACCOUNT_ID?.trim() || "wechat";
 	const homeDir = resolveAgentHomeDir();
-	const { model, modelId, label: modelLabel } = resolveModel(env, backendKind);
+	const { model, modelId, label: modelLabel } = resolveModel(env, harnessKind);
 	const { tools, label: toolLabel } = resolveTools(env.WECHAT_BOT_TOOLS);
-	const framework = getAgentBackendDefinition(backendKind).frameworkRuntime;
-	const assistantSystemPrompt = framework.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const harness = getAgentHarnessDefinition(harnessKind).harnessRuntime;
+	const assistantSystemPrompt = harness.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const debug = parseBooleanFlag(env.WECHAT_BOT_DEBUG, false);
 
 	return {
 		homeDir,
-		backendKind,
-		backendConfig: getStoredProfile(store)?.backend.config,
+		harnessKind,
+		harnessConfig: getStoredProfile(store)?.harness.config,
 		wechat: {
 			accountId,
 			token: env.WECHAT_BOT_TOKEN?.trim() || undefined,

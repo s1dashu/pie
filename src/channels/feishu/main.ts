@@ -3,7 +3,7 @@
 import process from "node:process";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import chalk from "chalk";
-import { getAgentBackendLabel } from "../../agents/backend-registry.js";
+import { getAgentHarnessLabel } from "../../agents/harness-registry.js";
 import {
 	createAgentSessionPool,
 	extractAssistantText,
@@ -30,8 +30,8 @@ import { loadConfig, type FeishuBotConfig } from "./config.js";
 import { type LarkMessageEvent, LarkClient } from "./platform/index.js";
 import { sendPlainReply } from "./progress-reporter.js";
 
-function formatRuntimeTitle(kind: FeishuBotConfig["backendKind"]): string {
-	return `${getAgentBackendLabel(kind)} Feishu channel ready`;
+function formatRuntimeTitle(kind: FeishuBotConfig["harnessKind"]): string {
+	return `${getAgentHarnessLabel(kind)} Feishu channel ready`;
 }
 
 function formatTaskPrompt(prompt: string): string {
@@ -55,13 +55,13 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	constructor(private readonly config: FeishuBotConfig) {
 		this.identity = {
-			backend: config.backendKind,
+			harness: config.harnessKind,
 			channel: "feishu" as const,
 			homeDir: config.homeDir,
 		};
 		this.sessionPool = createAgentSessionPool({
-			backendKind: config.backendKind,
-			backendConfig: config.backendConfig,
+			harnessKind: config.harnessKind,
+			harnessConfig: config.harnessConfig,
 			homeDir: config.homeDir,
 			model: config.model,
 			modelId: config.modelId,
@@ -119,7 +119,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const lines = [
-			chalk.bold(formatRuntimeTitle(this.config.backendKind)),
+			chalk.bold(formatRuntimeTitle(this.config.harnessKind)),
 			chalk.gray(`channel    Feishu`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),

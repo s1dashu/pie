@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentFrameworkRuntime } from "../../core/backend-framework.js";
+import type { AgentHarnessRuntime } from "../../core/agent-harness.js";
 import { ensureOusiaAgentHomeLayout } from "./agent-home-layout.js";
 import { createRuntimeTurnGatewayServer } from "./runtime/runtime-turn-gateway.js";
 import { createTaskEngineProcessManager } from "./runtime/task-engine-process.js";
@@ -17,7 +17,7 @@ export const OUSIA_SYSTEM_PROMPT_FILE = firstExistingPath([
 	join(process.cwd(), "src", "frameworks", "ousia", "prompts", "system-prompt.md"),
 ]);
 
-export const OUSIA_FRAMEWORK: AgentFrameworkRuntime = {
+export const OUSIA_HARNESS: AgentHarnessRuntime = {
 	kind: "ousia",
 	label: "Ousia",
 	systemPrompt: {

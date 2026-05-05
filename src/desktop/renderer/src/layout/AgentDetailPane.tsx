@@ -45,7 +45,7 @@ export function AgentDetailPane({
 }): JSX.Element {
 	const { t } = useI18n();
 	return (
-		<div className="agent-detail-corner relative z-10 ml-1 flex flex-1 flex-col overflow-hidden bg-white shadow-[0_4px_24px_rgba(0,0,0,0.04)]">
+		<div className="agent-detail-corner agent-detail-surface relative z-10 ml-1 flex flex-1 flex-col overflow-hidden bg-white">
 			<div className="relative min-h-0 flex-1 overflow-hidden bg-white">
 				<AnimatePresence initial={false} mode="wait">
 					{showCreateAgent ? (

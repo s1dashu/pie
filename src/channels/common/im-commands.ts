@@ -34,7 +34,7 @@ export function parseImCommand(text: string): ImCommand | undefined {
 export async function handleImCommand(command: ImCommand, options: HandleImCommandOptions): Promise<void> {
 	if (command.name === "compact") {
 		if (!options.sessionPool.compactSession) {
-			await options.reply("当前 backend 还不支持主动压缩。可以使用 /new 开一个新会话。");
+			await options.reply("当前 harness 还不支持主动压缩。可以使用 /new 开一个新会话。");
 			return;
 		}
 		await options.reply("正在压缩当前会话上下文...");
@@ -48,7 +48,7 @@ export async function handleImCommand(command: ImCommand, options: HandleImComma
 	}
 
 	if (!options.sessionPool.resetSession) {
-		await options.reply("当前 backend 还不支持 /new。");
+		await options.reply("当前 harness 还不支持 /new。");
 		return;
 	}
 	try {

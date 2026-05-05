@@ -41,6 +41,7 @@ export function AgentHeader({
 	isPausing,
 	onStart,
 	onPause,
+	showFeishuCredentialInvalidated,
 	showWechatReauthorize,
 	isReauthorizingWechat,
 	showRestartConfigHint,
@@ -58,6 +59,7 @@ export function AgentHeader({
 	isPausing: boolean;
 	onStart: () => void;
 	onPause: () => void;
+	showFeishuCredentialInvalidated: boolean;
 	showWechatReauthorize: boolean;
 	isReauthorizingWechat: boolean;
 	showRestartConfigHint: boolean;
@@ -142,7 +144,7 @@ export function AgentHeader({
 		reader.readAsDataURL(file);
 	};
 	const showRuntimeUnavailable =
-		agent.frameworkKind === "hermes" &&
+		agent.harnessKind === "hermes" &&
 		agent.desiredState === "running" &&
 		agent.runtimeEnvironment?.lifecycle.state === "failed" &&
 		agent.status !== "running" &&
@@ -241,7 +243,13 @@ export function AgentHeader({
 						</div>
 					</PopoverContent>
 					</Popover>
-					{showWechatReauthorize ? (
+					{showFeishuCredentialInvalidated ? (
+						<AceternityTooltip content={t("feishuCredentialInvalidated")} side="bottom">
+							<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)]">
+								{t("feishuCredentialInvalidatedShort")}
+							</span>
+						</AceternityTooltip>
+					) : showWechatReauthorize ? (
 						<AceternityTooltip content={t("wechatExpired")} side="bottom">
 							<Button
 								type="button"

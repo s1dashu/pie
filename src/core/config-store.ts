@@ -26,13 +26,16 @@ export {
 } from "./agent-home.js";
 
 export type ChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
-export type AgentBackendKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
+export type AgentHarnessKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 
 export interface FeishuChannelProfile {
 	kind: "feishu";
 	id: string;
 	enabled: boolean;
 	appId: string;
+	credentialState?: "active" | "invalidated";
+	credentialInvalidatedAt?: string;
+	credentialInvalidatedReason?: string;
 	brand?: "feishu" | "lark";
 	messageOutputMode?: FeishuMessageOutputMode;
 	encryptKey?: string;
@@ -87,8 +90,8 @@ export interface ModelProfile {
 	workDir?: string;
 }
 
-export interface AgentBackendProfile {
-	kind: AgentBackendKind;
+export interface AgentHarnessProfile {
+	kind: AgentHarnessKind;
 	model?: ModelProfile;
 	config?: Record<string, unknown>;
 }
@@ -103,7 +106,7 @@ export type ChannelProfile =
 /** Stored agent instance profile. One profile is one agent instance and may expose multiple channels. */
 export interface AgentProfile {
 	schemaVersion: 1;
-	backend: AgentBackendProfile;
+	harness: AgentHarnessProfile;
 	runtime?: {
 		workDir?: string;
 	};
@@ -161,6 +164,15 @@ function normalizeFeishuChannel(value: unknown): FeishuChannelProfile | undefine
 		id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : "feishu",
 		enabled: typeof value.enabled === "boolean" ? value.enabled : true,
 		appId,
+		credentialState: value.credentialState === "invalidated" ? "invalidated" : "active",
+		credentialInvalidatedAt:
+			typeof value.credentialInvalidatedAt === "string" && value.credentialInvalidatedAt.trim()
+				? value.credentialInvalidatedAt.trim()
+				: undefined,
+		credentialInvalidatedReason:
+			typeof value.credentialInvalidatedReason === "string" && value.credentialInvalidatedReason.trim()
+				? value.credentialInvalidatedReason.trim()
+				: undefined,
 		brand: value.brand === "lark" ? "lark" : "feishu",
 		messageOutputMode: isFeishuMessageOutputMode(value.messageOutputMode) ? value.messageOutputMode : undefined,
 		encryptKey: typeof value.encryptKey === "string" && value.encryptKey.trim() ? value.encryptKey.trim() : undefined,
@@ -268,7 +280,7 @@ function normalizeModelProfile(value: unknown): ModelProfile | undefined {
 	return Object.keys(out).length ? out : undefined;
 }
 
-function normalizeAgentBackend(value: unknown): AgentBackendProfile {
+function normalizeAgentHarness(value: unknown): AgentHarnessProfile {
 	if (isRecord(value)) {
 		const kind =
 			value.kind === "openclaw" ||
@@ -299,7 +311,8 @@ function normalizeAgentRuntime(value: unknown): AgentProfile["runtime"] {
 }
 
 export function createAgentProfile(opts: {
-	backend?: AgentBackendProfile;
+	harness?: AgentHarnessProfile;
+	backend?: AgentHarnessProfile;
 	runtime?: AgentProfile["runtime"];
 	model?: ModelProfile;
 	channels?: ChannelProfile[];
@@ -308,7 +321,7 @@ export function createAgentProfile(opts: {
 	const channels = opts.channels ?? (opts.feishu ? [opts.feishu] : []);
 	return {
 		schemaVersion: 1,
-		backend: opts.backend ?? {
+		harness: opts.harness ?? opts.backend ?? {
 			kind: "pi",
 			...(opts.model ? { model: opts.model } : {}),
 		},
@@ -340,7 +353,8 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 		return undefined;
 	}
 
-	if (!isRecord(value.backend) || !Array.isArray(value.channels)) {
+	const harnessValue = isRecord(value.harness) ? value.harness : isRecord(value.backend) ? value.backend : undefined;
+	if (!harnessValue || !Array.isArray(value.channels)) {
 		return undefined;
 	}
 
@@ -355,19 +369,19 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 		)
 		.filter((channel): channel is ChannelProfile => Boolean(channel));
 	return createAgentProfile({
-		backend: normalizeAgentBackend(value.backend),
+		harness: normalizeAgentHarness(harnessValue),
 		runtime: normalizeAgentRuntime(value.runtime),
 		channels,
 	});
 }
 
 export function getProfileModel(profile: AgentProfile | undefined): ModelProfile | undefined {
-	return profile?.backend.kind === "ousia" ||
-		profile?.backend.kind === "pi" ||
-		profile?.backend.kind === "codex" ||
-		profile?.backend.kind === "openclaw" ||
-		profile?.backend.kind === "hermes"
-		? profile.backend.model
+	return profile?.harness.kind === "ousia" ||
+		profile?.harness.kind === "pi" ||
+		profile?.harness.kind === "codex" ||
+		profile?.harness.kind === "openclaw" ||
+		profile?.harness.kind === "hermes"
+		? profile.harness.model
 		: undefined;
 }
 
@@ -375,9 +389,9 @@ export function setProfileModel(profile: AgentProfile | undefined, model: ModelP
 	const base = profile ?? createAgentProfile({});
 	return {
 		...base,
-		backend: {
-			...base.backend,
-			kind: base.backend.kind ?? "pi",
+		harness: {
+			...base.harness,
+			kind: base.harness.kind ?? "pi",
 			model,
 		},
 	};

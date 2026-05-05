@@ -12,9 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { applyAppearanceTheme, getAppearanceStepColor, getDefaultPreviewHue } from "../../lib/appearance-theme";
 import { useI18n } from "../../lib/i18n";
 
-const languageOptions: Array<{ value: DesktopLanguage; label: string }> = [
-	{ value: "zh", label: "简体中文" },
-	{ value: "en", label: "English" },
+const languageOptions: Array<{ value: DesktopLanguage; labelKey: "simplifiedChinese" | "english" }> = [
+	{ value: "zh", labelKey: "simplifiedChinese" },
+	{ value: "en", labelKey: "english" },
 ];
 
 const logRetentionOptions: Array<{ value: DesktopLogRetention; labelKey: "retention7d" | "retention30d" | "retention90d" | "retentionForever" }> = [
@@ -157,7 +157,7 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 									<SelectContent>
 										{languageOptions.map((item) => (
 											<SelectItem key={item.value} value={item.value}>
-												{item.value === "zh" ? t("simplifiedChinese") : item.label}
+												{t(item.labelKey)}
 											</SelectItem>
 										))}
 									</SelectContent>

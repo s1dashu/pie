@@ -160,7 +160,7 @@ export function AgentDetailView({
 	const credentialRequestRef = useRef(0);
 	const modelAutosaveReadyRef = useRef(false);
 	const channelAutosaveReadyRef = useRef(false);
-	const supportsSystemPrompt = agent.frameworkKind === "ousia";
+	const supportsSystemPrompt = agent.harnessKind === "ousia";
 	const isOverviewTab = activeTab === "overview";
 	const isModelTab = activeTab === "model";
 	const isSkillsTab = activeTab === "skills";
@@ -630,6 +630,7 @@ export function AgentDetailView({
 	};
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
 	const isWechatDegraded = hasWechatChannel && agent.runtimeEnvironment?.lifecycle.state === "degraded";
+	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
 	const isPreparingWechatQr = reauthorizeWechat.isPending && !wechatQrEvent?.url;
 	const openWechatReauthorizeDialog = () => {
 		setWechatAuthDialogOpen(true);
@@ -695,6 +696,7 @@ export function AgentDetailView({
 					isPausing={pause.isPending}
 					onStart={() => start.mutate()}
 					onPause={() => pause.mutate()}
+					showFeishuCredentialInvalidated={isFeishuCredentialInvalidated}
 					showWechatReauthorize={isWechatDegraded}
 					isReauthorizingWechat={isPreparingWechatQr}
 					showRestartConfigHint={hasPendingRestartConfig}

@@ -2,16 +2,17 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import WebSocket from "ws";
+import { normalizeOpenClawModelRef, toOpenClawModelRef } from "../openclaw-models.js";
 import { getAgentRoundInputText } from "../types.js";
 import type {
-	AgentBackendAdapter,
+	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
 	AgentRoundInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
-	BackendDiagnostic,
+	HarnessDiagnostic,
 } from "../types.js";
 
 const execFileAsync = promisify(execFile);
@@ -181,38 +182,38 @@ function createDeviceAuth(nonce: string, token: string | undefined): {
 }
 
 function resolveGatewayUrl(options: AgentSessionRuntimeOptions): string {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return asGatewayUrl(readString(config.gatewayUrl) ?? readString(config.url) ?? process.env.OPENCLAW_GATEWAY_URL);
 }
 
 function resolveGatewayToken(options: AgentSessionRuntimeOptions): string | undefined {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return readString(config.token) ?? (process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined);
 }
 
 function resolveGatewayPassword(options: AgentSessionRuntimeOptions): string | undefined {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return readString(config.password) ?? (process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined);
 }
 
 function resolveAgentId(options: AgentSessionRuntimeOptions): string | undefined {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	return readString(config.agentId) ?? (process.env.OPENCLAW_AGENT_ID?.trim() || undefined);
 }
 
 function resolveModelRef(options: AgentSessionRuntimeOptions): string | undefined {
-	const config = options.backendConfig ?? {};
+	const config = options.harnessConfig ?? {};
 	const configuredModel = readString(config.model) ?? readString(config.modelRef) ?? (process.env.PIE_OPENCLAW_MODEL?.trim() || undefined);
 	if (configuredModel) {
-		return configuredModel;
+		return normalizeOpenClawModelRef(configuredModel);
 	}
 	if (options.modelId?.trim()) {
-		return options.modelId.trim();
+		return normalizeOpenClawModelRef(options.modelId.trim());
 	}
 	const provider = typeof options.model?.provider === "string" ? options.model.provider.trim() : "";
 	const modelId = typeof options.model?.id === "string" ? options.model.id.trim() : "";
 	if (provider && modelId) {
-		return `${provider}/${modelId}`;
+		return toOpenClawModelRef(provider, modelId);
 	}
 	return modelId || undefined;
 }
@@ -831,7 +832,7 @@ async function resolveOpenClawExecutable(): Promise<string | undefined> {
 	return undefined;
 }
 
-async function checkOpenClawEnvironment(options: AgentSessionRuntimeOptions): Promise<BackendDiagnostic> {
+async function checkOpenClawEnvironment(options: AgentSessionRuntimeOptions): Promise<HarnessDiagnostic> {
 	const executablePath = await resolveOpenClawExecutable();
 	let version: string | undefined;
 	if (executablePath) {
@@ -866,7 +867,7 @@ async function checkOpenClawEnvironment(options: AgentSessionRuntimeOptions): Pr
 	}
 }
 
-export const openClawAgentBackendAdapter: AgentBackendAdapter = {
+export const openClawAgentHarnessAdapter: AgentHarnessAdapter = {
 	kind: "openclaw",
 	label: "OpenClaw",
 	capabilities: OPENCLAW_CAPABILITIES,

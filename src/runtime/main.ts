@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { getAgentBackendDefinition, type AgentBackendDefinition } from "../agents/backend-registry.js";
+import { getAgentHarnessDefinition, type AgentHarnessDefinition } from "../agents/harness-registry.js";
 import { ensureAgentHomeLayout } from "../core/agent-home-layout.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../core/agent-home.js";
 import { getStoredProfile, loadConfigStore, type ChannelKind } from "../core/config-store.js";
@@ -43,7 +43,7 @@ interface RuntimePlan {
 	homeDir: string;
 	environment: AgentRuntimeEnvironment;
 	lifecycle: RuntimeEnvironmentLifecycle;
-	backend: AgentBackendDefinition;
+	harnessDefinition: AgentHarnessDefinition;
 	channelRuntimes: ChannelRuntime[];
 }
 
@@ -81,9 +81,9 @@ function createRuntimePlan(): RuntimePlan {
 	const environment = createRuntimeEnvironment({ homeDir, profile, lifecycle });
 	ensureRuntimeEnvironment(environment);
 	ensureAgentHomeLayout(homeDir);
-	const backend = getAgentBackendDefinition(profile?.backend.kind ?? "pi");
-	const framework = backend.frameworkRuntime;
-	framework.ensureAgentHomeLayout?.(homeDir);
+	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
+	const harness = harnessDefinition.harnessRuntime;
+	harness.ensureAgentHomeLayout?.(homeDir);
 	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
 	const channelKinds: ChannelKind[] = enabledChannels.length
 		? enabledChannels.map((channel) => channel.kind)
@@ -92,13 +92,13 @@ function createRuntimePlan(): RuntimePlan {
 	if (!channelRuntimes.length) {
 		throw new Error("No enabled channel runtime is available for this profile.");
 	}
-	return { homeDir, environment, lifecycle, backend, channelRuntimes };
+	return { homeDir, environment, lifecycle, harnessDefinition, channelRuntimes };
 }
 
 export async function runPie(): Promise<number> {
 	const plan = createRuntimePlan();
-	const { homeDir, environment, lifecycle, backend, channelRuntimes } = plan;
-	const framework = backend.frameworkRuntime;
+	const { homeDir, environment, lifecycle, harnessDefinition, channelRuntimes } = plan;
+	const harness = harnessDefinition.harnessRuntime;
 	process.chdir(environment.workDir);
 	const primaryRuntime = channelRuntimes[0]!;
 	const persistLifecycle = (): void => {
@@ -123,8 +123,8 @@ export async function runPie(): Promise<number> {
 	const gatewaySecret =
 		process.env.PIE_GATEWAY_SECRET?.trim() ||
 		undefined;
-	const taskEngine = framework.createTaskEngineProcessManager
-		? framework.createTaskEngineProcessManager({
+	const taskEngine = harness.createTaskEngineProcessManager
+		? harness.createTaskEngineProcessManager({
 				homeDir,
 				environment,
 				channel: primaryRuntime.identity.channel,
@@ -133,16 +133,16 @@ export async function runPie(): Promise<number> {
 			})
 		: undefined;
 	const profile = getStoredProfile(loadConfigStore());
-	const backendService = backend.createManagedServiceManager
-		? backend.createManagedServiceManager({
+	const harnessService = harnessDefinition.createManagedHarnessServiceManager
+		? harnessDefinition.createManagedHarnessServiceManager({
 				homeDir,
 				environment,
-				config: profile?.backend.config,
-				model: profile?.backend.model,
+				config: profile?.harness.config,
+				model: profile?.harness.model,
 			})
 		: undefined;
-	const turnGateway = framework.createTurnGatewayServer
-		? framework.createTurnGatewayServer({
+	const turnGateway = harness.createTurnGatewayServer
+		? harness.createTurnGatewayServer({
 				homeDir,
 				environment,
 				port: gatewayPort,
@@ -156,7 +156,7 @@ export async function runPie(): Promise<number> {
 			runtime.setShutdownExitCode?.(code);
 		}
 		taskEngine?.stop();
-		backendService?.stop();
+		harnessService?.stop();
 		void turnGateway?.stop();
 		for (const runtime of channelRuntimes) {
 			void runtime.stop();
@@ -169,7 +169,7 @@ export async function runPie(): Promise<number> {
 	lifecycle.mark("starting");
 	persistLifecycle();
 	await turnGateway?.start();
-	await backendService?.start();
+	await harnessService?.start();
 	await taskEngine?.start();
 
 	let failure: unknown;
@@ -194,7 +194,7 @@ export async function runPie(): Promise<number> {
 		process.off("SIGINT", onSigint);
 		process.off("SIGTERM", onSigterm);
 		taskEngine?.stop();
-		backendService?.stop();
+		harnessService?.stop();
 		await turnGateway?.stop();
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
 		if (!failure) {

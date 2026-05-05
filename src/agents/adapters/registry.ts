@@ -1,11 +1,11 @@
-import type { AgentBackendKind } from "../../core/config-store.js";
-import { getAgentBackendDefinition, listAgentBackendDefinitions } from "../backend-registry.js";
-import type { AgentBackendAdapter } from "../types.js";
+import type { AgentHarnessKind } from "../../core/config-store.js";
+import { getAgentHarnessDefinition, listAgentHarnessDefinitions } from "../harness-registry.js";
+import type { AgentHarnessAdapter } from "../types.js";
 
-export function getAgentBackendAdapter(kind: AgentBackendKind): AgentBackendAdapter {
-	return getAgentBackendDefinition(kind).adapter;
+export function getAgentHarnessAdapter(kind: AgentHarnessKind): AgentHarnessAdapter {
+	return getAgentHarnessDefinition(kind).adapter;
 }
 
-export function listAgentBackendAdapters(): AgentBackendAdapter[] {
-	return listAgentBackendDefinitions().map((definition) => definition.adapter);
+export function listAgentHarnessAdapters(): AgentHarnessAdapter[] {
+	return listAgentHarnessDefinitions().map((definition) => definition.adapter);
 }

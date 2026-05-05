@@ -2,7 +2,7 @@
 
 import process from "node:process";
 import chalk from "chalk";
-import { getAgentBackendLabel } from "../../agents/backend-registry.js";
+import { getAgentHarnessLabel } from "../../agents/harness-registry.js";
 import {
 	canSteerSession,
 	createAgentSessionPool,
@@ -307,13 +307,13 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 
 	constructor(private config: WechatBotConfig) {
 		this.identity = {
-			backend: config.backendKind,
+			harness: config.harnessKind,
 			channel: "wechat" as const,
 			homeDir: config.homeDir,
 		};
 		this.sessionPool = createAgentSessionPool({
-			backendKind: config.backendKind,
-			backendConfig: config.backendConfig,
+			harnessKind: config.harnessKind,
+			harnessConfig: config.harnessConfig,
 			homeDir: config.homeDir,
 			model: config.model,
 			modelId: config.modelId,
@@ -443,7 +443,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private printStartupSummary(): void {
 		const sessionMode = this.config.resumeSessions ? "persistent" : "ephemeral";
 		const lines = [
-			chalk.bold(`${getAgentBackendLabel(this.config.backendKind)} Wechat channel ready`),
+			chalk.bold(`${getAgentHarnessLabel(this.config.harnessKind)} Wechat channel ready`),
 			chalk.gray(`account    ${this.config.wechat.accountId}`),
 			chalk.gray(`model      ${this.config.modelLabel}`),
 			chalk.gray(`tools      ${this.config.toolLabel}`),

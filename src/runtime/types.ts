@@ -1,9 +1,9 @@
-export type AgentBackendKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
+export type AgentHarnessKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 
 export type PieChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 
 export interface AgentRuntimeIdentity {
-	backend: AgentBackendKind;
+	harness: AgentHarnessKind;
 	channel: PieChannelKind;
 	homeDir: string;
 	workDir?: string;

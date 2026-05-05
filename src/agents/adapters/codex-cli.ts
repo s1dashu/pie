@@ -9,14 +9,14 @@ import chalk from "chalk";
 import { sanitizePathSegment } from "../../channels/feishu/messages.js";
 import { getAgentRoundInputText } from "../types.js";
 import type {
-	AgentBackendAdapter,
+	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
 	AgentRoundInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
-	BackendDiagnostic,
+	HarnessDiagnostic,
 } from "../types.js";
 
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -604,8 +604,8 @@ class CodexAppServerSessionPool implements AgentConversationSessionPool {
 			conversationKey,
 			model,
 			thinkingLevel: this.options.thinkingLevel,
-			sandboxMode: readCodexSandboxMode(this.options.backendConfig),
-			webSearchMode: readCodexWebSearchMode(this.options.backendConfig),
+			sandboxMode: readCodexSandboxMode(this.options.harnessConfig),
+			webSearchMode: readCodexWebSearchMode(this.options.harnessConfig),
 			systemPrompt: this.options.assistantSystemPrompt,
 			resumeSessions: this.options.resumeSessions,
 			verboseLogs: this.options.verboseLogs,
@@ -632,8 +632,8 @@ class CodexAppServerSessionPool implements AgentConversationSessionPool {
 			conversationKey,
 			model: this.resolveModel(requestedModel),
 			thinkingLevel: this.options.thinkingLevel,
-			sandboxMode: readCodexSandboxMode(this.options.backendConfig),
-			webSearchMode: readCodexWebSearchMode(this.options.backendConfig),
+			sandboxMode: readCodexSandboxMode(this.options.harnessConfig),
+			webSearchMode: readCodexWebSearchMode(this.options.harnessConfig),
 			systemPrompt: this.options.assistantSystemPrompt,
 			resumeSessions: this.options.resumeSessions,
 			verboseLogs: this.options.verboseLogs,
@@ -996,7 +996,7 @@ async function runCodexCommand(args: string[]): Promise<{ code: number | null; s
 	return runCommand(codexPath, args);
 }
 
-async function checkCodexEnvironment(): Promise<BackendDiagnostic> {
+async function checkCodexEnvironment(): Promise<HarnessDiagnostic> {
 	const codexPath = await resolveCodexExecutable();
 	if (!codexPath) {
 		return {
@@ -1032,7 +1032,7 @@ function diagnosticFromAccount(
 	codexPath: string,
 	version: string | undefined,
 	accountResult: unknown,
-): BackendDiagnostic {
+): HarnessDiagnostic {
 	const result = accountResult && typeof accountResult === "object" ? accountResult as Record<string, unknown> : {};
 	const account = result.account && typeof result.account === "object" ? result.account as Record<string, unknown> : undefined;
 	const authenticated = Boolean(account);
@@ -1048,7 +1048,7 @@ function diagnosticFromAccount(
 	};
 }
 
-export async function checkCodexAppServerEnvironment(): Promise<BackendDiagnostic> {
+export async function checkCodexAppServerEnvironment(): Promise<HarnessDiagnostic> {
 	const codexPath = await resolveCodexExecutable();
 	if (!codexPath) {
 		return {
@@ -1082,7 +1082,7 @@ export async function loginCodexWithAppServer(options: {
 	onAuthUrl?: (authUrl: string) => void | Promise<void>;
 	onCompleted?: (completion: CodexAppServerLoginCompletion) => void | Promise<void>;
 	debug?: boolean;
-} = {}): Promise<BackendDiagnostic> {
+} = {}): Promise<HarnessDiagnostic> {
 	const codexPath = await resolveCodexExecutable();
 	if (!codexPath) {
 		throw new Error("codex command not found in login shell PATH");
@@ -1108,7 +1108,7 @@ export async function loginCodexWithAppServer(options: {
 	}
 }
 
-export const codexCliAgentBackendAdapter: AgentBackendAdapter = {
+export const codexCliAgentHarnessAdapter: AgentHarnessAdapter = {
 	kind: "codex",
 	label: "Codex",
 	capabilities: CODEX_CAPABILITIES,

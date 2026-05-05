@@ -9,6 +9,7 @@ import { Spinner } from "../components/ui/spinner-1";
 import { useI18n } from "../lib/i18n";
 import { cn } from "../lib/utils";
 import { runtimeLifecycleLabel, runtimeLifecycleTone, statusTone } from "../features/agents/agent-display";
+import { formatAgentSubtitle } from "../features/agents/agent-labels";
 
 export function AgentSidebar({
 	agents,
@@ -130,33 +131,6 @@ export function AgentSidebar({
 			</div>
 		</div>
 	);
-}
-
-function formatFrameworkName(kind: string | undefined, t: ReturnType<typeof useI18n>["t"]): string {
-	if (!kind?.trim()) {
-		return t("agent");
-	}
-	return formatMetadataLabel(kind);
-}
-
-function formatChannelNames(kinds: string[] | undefined, t: ReturnType<typeof useI18n>["t"]): string {
-	const values = kinds?.map(formatMetadataLabel).filter(Boolean) ?? [];
-	return values.length ? values.join("+") : t("noChannel");
-}
-
-function formatMetadataLabel(value: string | undefined): string {
-	const normalized = value?.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ") ?? "";
-	return normalized
-		.split(" ")
-		.filter(Boolean)
-		.map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-		.join(" ");
-}
-
-function formatAgentSubtitle(agent: AgentSummary, t: ReturnType<typeof useI18n>["t"]): string {
-	const framework = formatFrameworkName(agent.frameworkKind, t);
-	const channels = formatChannelNames(agent.channelKinds, t);
-	return `${framework} ${t("on")} ${channels}`;
 }
 
 function formatRuntimeTooltip(agent: AgentSummary, language: ReturnType<typeof useI18n>["language"], t: ReturnType<typeof useI18n>["t"]): string {

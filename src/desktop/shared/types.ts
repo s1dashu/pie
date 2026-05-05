@@ -33,7 +33,7 @@ export interface AgentSummary {
 	runtimeEnvironment?: RuntimeEnvironmentSummary;
 	createdAt?: string;
 	updatedAt?: string;
-	frameworkKind?: string;
+	harnessKind?: string;
 	channelKinds?: string[];
 	modelLabel?: string;
 	appId?: string;
@@ -42,6 +42,8 @@ export interface AgentSummary {
 export interface AgentDetails extends AgentSummary {
 	brand?: "feishu" | "lark";
 	feishuMessageOutputMode?: DesktopFeishuMessageOutputMode;
+	feishuCredentialState?: "active" | "invalidated";
+	feishuCredentialInvalidatedReason?: string;
 	appSecret?: string;
 	wechat?: {
 		accountId?: string;
@@ -74,7 +76,7 @@ export interface AgentDetails extends AgentSummary {
 }
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type DesktopAgentFramework = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
+export type DesktopAgentHarness = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
 export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
@@ -139,6 +141,7 @@ export interface DesktopModelOption {
 	id: string;
 	name?: string;
 	provider: string;
+	modelRef?: string;
 }
 
 export interface DesktopCodexModelOption {
@@ -227,7 +230,7 @@ export interface DesktopWechatCredentials {
 
 export interface AgentCreationDraft {
 	sessionId: string;
-	framework: DesktopAgentFramework;
+	harness: DesktopAgentHarness;
 	name?: string;
 	avatarId?: string;
 	channels: DesktopChannelKind[];

@@ -22,6 +22,7 @@ export interface AgentProcessManagerOptions {
 	getNodeExecPath(): string;
 	getAgentHome(agentId: string): Promise<string>;
 	getAgentName?(agentId: string): Promise<string | undefined> | string | undefined;
+	getAgentStartLabel?(agentId: string): Promise<string | undefined> | string | undefined;
 	getRuntimeEnvironment(agentId: string): Promise<AgentRuntimeEnvironment>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
 	recordLogEntry?(entry: AgentLogEntry): Promise<void> | void;
@@ -240,7 +241,7 @@ export class AgentProcessManager {
 			lifecycle.mark("running");
 			this.persistRuntimeState(agentId, lifecycle.snapshot);
 			this.recordRuntimeEvent(agentId, "start");
-			console.log(`[agent:${agentId}] ${await this.getAgentLabel(agentId)} started`);
+			console.log(`[agent] started ${await this.getAgentStartLabel(agentId)}`);
 		} catch (error) {
 			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
@@ -325,6 +326,11 @@ export class AgentProcessManager {
 	private async getAgentLabel(agentId: string): Promise<string> {
 		const name = (await this.options.getAgentName?.(agentId))?.trim();
 		return name && name !== agentId ? `${name} (${agentId})` : agentId;
+	}
+
+	private async getAgentStartLabel(agentId: string): Promise<string> {
+		const label = (await this.options.getAgentStartLabel?.(agentId))?.trim();
+		return label || this.getAgentLabel(agentId);
 	}
 
 	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string): void {

@@ -10,7 +10,7 @@ import type {
 	AgentOnboardEvent,
 	AgentSummary,
 	BotAvatarOption,
-	DesktopAgentFramework,
+	DesktopAgentHarness,
 	DesktopCodexDiagnostic,
 	DesktopCodexWebSearchMode,
 	DesktopChannelKind,
@@ -58,7 +58,7 @@ function appendInstallStep(steps: InstallStep[], message: string, tone: InstallS
 	return [...steps, { id: Date.now() + steps.length, message: cleanMessage, tone }].slice(-6);
 }
 
-const frameworkOptions: Array<{ value: DesktopAgentFramework; label: string; enabled: boolean }> = [
+const harnessOptions: Array<{ value: DesktopAgentHarness; label: string; enabled: boolean }> = [
 	{ value: "pi", label: "Pi", enabled: true },
 	{ value: "codex", label: "Codex", enabled: true },
 	{ value: "ousia", label: "Ousia", enabled: true },
@@ -72,7 +72,7 @@ const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: st
 	{ value: "live", label: "Live" },
 ];
 
-const frameworkModelConfig = {
+const harnessModelConfig = {
 	pi: {
 		usesCodexCli: false,
 		showsProvider: true,
@@ -115,7 +115,7 @@ const frameworkModelConfig = {
 		showsCodexAccessMode: false,
 		showsCodexWebSearch: false,
 	},
-} satisfies Record<DesktopAgentFramework, {
+} satisfies Record<DesktopAgentHarness, {
 	usesCodexCli: boolean;
 	showsProvider: boolean;
 	showsApiKey: boolean;
@@ -157,7 +157,7 @@ export function CreateAgentView({
 	const [hermesInstallStatus, setHermesInstallStatus] = useState("");
 	const [hermesInstallSteps, setHermesInstallSteps] = useState<InstallStep[]>([]);
 	const [hermesRuntimeReady, setHermesRuntimeReady] = useState(false);
-	const [framework, setFramework] = useState<DesktopAgentFramework>("pi");
+	const [harness, setHarness] = useState<DesktopAgentHarness>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
 	const [thinkingLevel, setThinkingLevel] = useState<DesktopThinkingLevel>("off");
@@ -173,21 +173,21 @@ export function CreateAgentView({
 	const codexDiagnostic = useQuery({
 		queryKey: ["codex-diagnostic"],
 		queryFn: () => window.pie.checkCodexEnvironment(),
-		enabled: framework === "codex",
+		enabled: harness === "codex",
 		refetchOnWindowFocus: false,
 		retry: false,
 	});
 	const hermesDiagnostic = useQuery({
 		queryKey: ["hermes-diagnostic"],
 		queryFn: () => window.pie.checkHermesEnvironment(),
-		enabled: framework === "hermes",
+		enabled: harness === "hermes",
 		refetchOnWindowFocus: false,
 		retry: false,
 	});
 	const openClawCatalog = useQuery({
 		queryKey: ["openclaw-model-catalog"],
 		queryFn: () => window.pie.getOpenClawModelCatalog(),
-		enabled: framework === "openclaw",
+		enabled: harness === "openclaw",
 		refetchOnWindowFocus: false,
 		retry: false,
 		staleTime: 5 * 60_000,
@@ -302,15 +302,15 @@ export function CreateAgentView({
 			if (channels.includes("telegram") && !telegramBotToken.trim()) {
 				throw new Error(t("telegramTokenRequired"));
 			}
-			if (framework === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
+			if (harness === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
 				throw new Error(t("codexNeedInstalled"));
 			}
-			if (framework === "hermes" && !isHermesRuntimeReady) {
+			if (harness === "hermes" && !isHermesRuntimeReady) {
 				throw new Error(t("hermesNeedInstalled"));
 			}
 			return window.pie.completeAgentCreation({
 				sessionId: session.sessionId,
-				framework,
+				harness,
 				name,
 				avatarId: channels.includes("wechat") ? avatarId : undefined,
 				channels,
@@ -334,7 +334,7 @@ export function CreateAgentView({
 				model,
 				thinkingLevel,
 				apiKey,
-				...(framework === "codex"
+				...(harness === "codex"
 					? {
 							codexSandboxMode: "danger-full-access" as const,
 							codexWebSearchMode,
@@ -349,7 +349,7 @@ export function CreateAgentView({
 			const optimisticAgent = createOptimisticStartingAgent({
 				session,
 				name,
-				framework,
+				harness,
 				channels,
 				feishu,
 				wechat,
@@ -466,13 +466,13 @@ export function CreateAgentView({
 	}, [avatarId, botAvatars.data, channels]);
 
 	useEffect(() => {
-		if (framework === "hermes" && hermesDiagnostic.data?.ready) {
+		if (harness === "hermes" && hermesDiagnostic.data?.ready) {
 			setHermesRuntimeReady(true);
 		}
-	}, [framework, hermesDiagnostic.data?.ready]);
+	}, [harness, hermesDiagnostic.data?.ready]);
 
 	useEffect(() => {
-		if (framework !== "openclaw") {
+		if (harness !== "openclaw") {
 			return;
 		}
 		const openClawModels = openClawCatalog.data?.models ?? [];
@@ -488,7 +488,7 @@ export function CreateAgentView({
 		setProvider(defaultProvider);
 		setModel(openClawModels.find((item) => item.provider === defaultProvider)?.id ?? openClawModels[0]?.id ?? "");
 		void prefillProviderApiKey(defaultProvider, session?.profileId, true);
-	}, [framework, model, openClawCatalog.data?.models, provider, session?.profileId]);
+	}, [harness, model, openClawCatalog.data?.models, provider, session?.profileId]);
 
 	useEffect(() => {
 		return window.pie.onAgentOnboardEvent((event) => {
@@ -550,11 +550,11 @@ export function CreateAgentView({
 		return () => window.clearInterval(timer);
 	}, [qrExpiresAt]);
 
-	const modelConfig = frameworkModelConfig[framework];
+	const modelConfig = harnessModelConfig[harness];
 	const usesCodexCli = modelConfig.usesCodexCli;
-	const activeModelOptions = framework === "hermes"
+	const activeModelOptions = harness === "hermes"
 		? mergeModelOptions(session?.models ?? [], HERMES_MODEL_OPTIONS)
-		: framework === "openclaw"
+		: harness === "openclaw"
 			? openClawCatalog.data?.models ?? session?.openClawModels ?? []
 		: session?.models ?? [];
 	const modelsForProvider = activeModelOptions.filter((item) => item.provider === provider);
@@ -576,10 +576,10 @@ export function CreateAgentView({
 		setModel(activeModelOptions.find((item) => item.provider === nextProvider)?.id ?? "");
 		void prefillProviderApiKey(nextProvider, session?.profileId, true);
 	};
-	const updateFrameworkSelection = (nextFramework: DesktopAgentFramework) => {
-		setFramework(nextFramework);
-		setHermesRuntimeReady(nextFramework === "hermes" && hermesDiagnostic.data?.ready === true);
-		if (nextFramework === "codex") {
+	const updateHarnessSelection = (nextHarness: DesktopAgentHarness) => {
+		setHarness(nextHarness);
+		setHermesRuntimeReady(nextHarness === "hermes" && hermesDiagnostic.data?.ready === true);
+		if (nextHarness === "codex") {
 			const defaultCodexModel = session?.codexModels[0];
 			setProvider("codex-cli");
 			setModel(defaultCodexModel?.id ?? "gpt-5.5");
@@ -587,7 +587,7 @@ export function CreateAgentView({
 			setApiKey("");
 			return;
 		}
-		if (nextFramework === "hermes") {
+		if (nextHarness === "hermes") {
 			const hermesModels = mergeModelOptions(session?.models ?? [], HERMES_MODEL_OPTIONS);
 			const hermesProviders = providersFromModels(hermesModels);
 			const defaultProvider = hermesProviders.includes(hermesDefaultModel.provider)
@@ -599,7 +599,7 @@ export function CreateAgentView({
 			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
 			return;
 		}
-		if (nextFramework === "openclaw") {
+		if (nextHarness === "openclaw") {
 			const openClawModels = openClawCatalog.data?.models ?? session?.openClawModels ?? [];
 			const openClawProviders = providersFromModels(openClawModels);
 			const defaultProvider = openClawProviders.includes("kimi-coding") ? "kimi-coding" : openClawProviders[0] ?? "kimi-coding";
@@ -625,8 +625,8 @@ export function CreateAgentView({
 	const authPrompt = channels.includes("wechat")
 		? t("useWechatScan")
 		: t("useFeishuScan");
-	const isHermesRuntimeReady = framework === "hermes" && (hermesRuntimeReady || hermesDiagnostic.data?.ready === true);
-	const requiresRuntimeInstall = framework === "hermes" && !isHermesRuntimeReady;
+	const isHermesRuntimeReady = harness === "hermes" && (hermesRuntimeReady || hermesDiagnostic.data?.ready === true);
+	const requiresRuntimeInstall = harness === "hermes" && !isHermesRuntimeReady;
 	const visibleSteps = createAgentStepFlow({
 		requiresIdentity,
 		requiresQrAuth,
@@ -634,7 +634,7 @@ export function CreateAgentView({
 		requiresRuntimeInstall: requiresRuntimeInstall || step === "runtime",
 	});
 	const stepDescription = {
-		config: t("chooseFrameworkAndChannel"),
+		config: t("chooseHarnessAndChannel"),
 		identity: t("setWechatNameAvatar"),
 		auth: t("authSelectedChannels"),
 		credentials: t("fillChannelCredentials"),
@@ -690,7 +690,7 @@ export function CreateAgentView({
 		|| !session
 		|| (step === "config" && !channels.length)
 		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
-		|| (step === "model" && framework === "openclaw" && openClawCatalog.isLoading)
+		|| (step === "model" && harness === "openclaw" && openClawCatalog.isLoading)
 		|| (step === "model" && (complete.isPending || installCodex.isPending))
 		|| (step === "runtime" && (complete.isPending || installHermes.isPending || !isHermesRuntimeReady));
 	const currentStepIndex = visibleSteps.indexOf(step);
@@ -745,7 +745,7 @@ export function CreateAgentView({
 								<h2 className="text-center text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
 								{step === "config" ? (
 									<div className="space-y-6">
-										<FrameworkPicker selected={framework} onSelect={updateFrameworkSelection} />
+										<HarnessPicker selected={harness} onSelect={updateHarnessSelection} />
 										<ChannelPicker selected={channels[0]} onSelect={selectChannel} />
 									</div>
 								) : step === "identity" ? (
@@ -846,7 +846,7 @@ export function CreateAgentView({
 												</Field>
 											)}
 											<Field label={t("model")}>
-												{framework === "openclaw" && openClawCatalog.isLoading ? (
+												{harness === "openclaw" && openClawCatalog.isLoading ? (
 													<div className={cn("flex h-9 items-center rounded-md px-3 text-sm text-muted-foreground", controlSurfaceClass)}>
 														<AppIcon IconComponent={RestartCircleBoldDuotone} className="mr-2 h-4 w-4 animate-spin" />
 														{t("loadingCatalog")}
@@ -1016,7 +1016,7 @@ function createAgentStepFlow({
 function createOptimisticStartingAgent({
 	session,
 	name,
-	framework,
+	harness,
 	channels,
 	feishu,
 	wechat,
@@ -1026,7 +1026,7 @@ function createOptimisticStartingAgent({
 }: {
 	session: AgentCreationSession;
 	name: string;
-	framework: DesktopAgentFramework;
+	harness: DesktopAgentHarness;
 	channels: DesktopChannelKind[];
 	feishu: DesktopFeishuAppCredentials | undefined;
 	wechat: DesktopWechatCredentials | undefined;
@@ -1047,7 +1047,7 @@ function createOptimisticStartingAgent({
 		home: session.home,
 		createdAt: now,
 		updatedAt: now,
-		frameworkKind: framework,
+		harnessKind: harness,
 		channelKinds: channels,
 		modelLabel: model,
 		...(feishu ? { appId: feishu.appId, brand: feishu.brand, feishuMessageOutputMode: "bubble" as const, appSecret: feishu.appSecret } : {}),
@@ -1239,18 +1239,18 @@ function HermesDiagnosticPanel({
 	);
 }
 
-function FrameworkPicker({
+function HarnessPicker({
 	selected,
 	onSelect,
 }: {
-	selected: DesktopAgentFramework;
-	onSelect: (framework: DesktopAgentFramework) => void;
+	selected: DesktopAgentHarness;
+	onSelect: (harness: DesktopAgentHarness) => void;
 }): JSX.Element {
 	const { t } = useI18n();
 	return (
-		<Field label={t("framework")}>
-			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={t("framework")}>
-				{frameworkOptions.map((option) => {
+		<Field label={t("harness")}>
+			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={t("harness")}>
+				{harnessOptions.map((option) => {
 					const isSelected = selected === option.value;
 					return (
 						<button
@@ -1259,7 +1259,7 @@ function FrameworkPicker({
 							role="radio"
 							aria-checked={isSelected}
 							disabled={!option.enabled}
-							onClick={() => option.enabled && onSelect(option.value as DesktopAgentFramework)}
+							onClick={() => option.enabled && onSelect(option.value as DesktopAgentHarness)}
 							className={cn(
 								"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
 								isSelected

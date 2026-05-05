@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentProfile } from "../core/config-store.js";
-import { getAgentBackendDefinition } from "./backend-registry.js";
+import { getAgentHarnessDefinition } from "./harness-registry.js";
 
 export type AgentSkillSourceKind = "profile" | "agent-type" | "universal";
 
@@ -14,9 +14,9 @@ export interface ResolvedAgentSkillSource {
 }
 
 function resolveAgentTypeSkillSources(profile: AgentProfile | undefined): ResolvedAgentSkillSource[] {
-	const kind = profile?.backend.kind ?? "pi";
+	const kind = profile?.harness.kind ?? "pi";
 	try {
-		return getAgentBackendDefinition(kind).skillSources.map((source) => ({
+		return getAgentHarnessDefinition(kind).skillSources.map((source) => ({
 			id: source.id,
 			kind: "agent-type" as const,
 			label: source.label,

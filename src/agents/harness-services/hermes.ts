@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type {
-	AgentBackendManagedServiceManager,
-	AgentBackendManagedServiceManagerOptions,
-} from "../backend-service.js";
+	AgentHarnessManagedServiceManager,
+	AgentHarnessManagedServiceManagerOptions,
+} from "../harness-service.js";
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -96,8 +96,8 @@ function pipePrefixedLogs(
 }
 
 export function createHermesServiceProcessManager(
-	options: AgentBackendManagedServiceManagerOptions,
-): AgentBackendManagedServiceManager {
+	options: AgentHarnessManagedServiceManagerOptions,
+): AgentHarnessManagedServiceManager {
 	let child: ChildProcess | undefined;
 	const config = options.config ?? {};
 	const command = asString(config.command) ?? process.env.HERMES_COMMAND?.trim() ?? "hermes";

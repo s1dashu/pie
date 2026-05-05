@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import type { AgentBackendKind } from "../core/config-store.js";
+import type { AgentHarnessKind } from "../core/config-store.js";
 
 export type PiAgentSessionEvent = Parameters<AgentSession["subscribe"]>[0] extends (event: infer TEvent) => void
 	? TEvent
@@ -179,8 +179,8 @@ export interface AgentConversationSessionPool {
 }
 
 export interface AgentSessionRuntimeOptions {
-	backendKind: AgentBackendKind;
-	backendConfig?: Record<string, unknown>;
+	harnessKind: AgentHarnessKind;
+	harnessConfig?: Record<string, unknown>;
 	homeDir: string;
 	model?: Model<any>;
 	modelId?: string;
@@ -192,7 +192,7 @@ export interface AgentSessionRuntimeOptions {
 	resumeSessions: boolean;
 }
 
-export interface BackendDiagnostic {
+export interface HarnessDiagnostic {
 	installed: boolean;
 	authenticated: boolean;
 	executablePath?: string;
@@ -202,11 +202,11 @@ export interface BackendDiagnostic {
 	loginCommand?: string[];
 }
 
-export interface AgentBackendAdapter {
-	readonly kind: AgentBackendKind;
+export interface AgentHarnessAdapter {
+	readonly kind: AgentHarnessKind;
 	readonly label: string;
 	readonly capabilities: AgentSessionCapabilities;
-	checkEnvironment?(options: AgentSessionRuntimeOptions): Promise<BackendDiagnostic>;
+	checkEnvironment?(options: AgentSessionRuntimeOptions): Promise<HarnessDiagnostic>;
 	createSessionPool(options: AgentSessionRuntimeOptions): AgentConversationSessionPool;
 	explainError?(error: unknown): string;
 }

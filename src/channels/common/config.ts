@@ -3,10 +3,10 @@ import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { getAgentBackendDefinition } from "../../agents/backend-registry.js";
+import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../../core/agent-home.js";
 import {
-	type AgentBackendKind,
+	type AgentHarnessKind,
 	getProfileModel,
 	getStoredProfile,
 	loadConfigStore,
@@ -27,8 +27,8 @@ const VALID_TOOL_NAMES = new Set<BuiltinToolName>(ALL_BUILTIN_TOOL_NAMES);
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 export interface CommonChannelRuntimeConfig {
 	homeDir: string;
-	backendKind: AgentBackendKind;
-	backendConfig?: Record<string, unknown>;
+	harnessKind: AgentHarnessKind;
+	harnessConfig?: Record<string, unknown>;
 	channelKind: PieChannelKind;
 	model?: Model<any>;
 	modelId?: string;
@@ -134,23 +134,23 @@ function resolveModel(
 	env: RuntimeEnv,
 	providerKey: string,
 	modelKey: string,
-	backendKind: AgentBackendKind,
+	harnessKind: AgentHarnessKind,
 ): { model?: Model<any>; modelId?: string; label: string } {
 	const provider = env[providerKey];
 	const modelId = env[modelKey];
-	if (backendKind === "codex") {
+	if (harnessKind === "codex") {
 		return {
 			modelId: modelId?.trim() || undefined,
 			label: modelId?.trim() || "codex default",
 		};
 	}
-	if (backendKind === "hermes") {
+	if (harnessKind === "hermes") {
 		return {
 			modelId: modelId?.trim() || undefined,
 			label: modelId?.trim() || "hermes default",
 		};
 	}
-	if (backendKind === "openclaw") {
+	if (harnessKind === "openclaw") {
 		const requestedModel = modelId?.trim();
 		const requestedProvider = provider?.trim();
 		const openClawModel = requestedModel && requestedProvider && !requestedModel.includes("/")
@@ -222,24 +222,24 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	}
 	mergeStoredModelIntoEnv(env, options.envPrefix, store);
 
-	const backend = getAgentBackendDefinition(profile?.backend.kind ?? "pi");
-	const framework = backend.frameworkRuntime;
-	const backendKind = backend.kind;
+	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
+	const harness = harnessDefinition.harnessRuntime;
+	const harnessKind = harnessDefinition.kind;
 	const { model, modelId, label: modelLabel } = resolveModel(
 		env,
 		`${options.envPrefix}_BOT_PROVIDER`,
 		`${options.envPrefix}_BOT_MODEL`,
-		backendKind,
+		harnessKind,
 	);
 	const { tools, label: toolLabel } = resolveTools(env[`${options.envPrefix}_BOT_TOOLS`], `${options.envPrefix}_BOT_TOOLS`);
 	const assistantSystemPrompt =
-		framework.systemPrompt
-			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, framework.systemPrompt.defaultPath)
+		harness.systemPrompt
+			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, harness.systemPrompt.defaultPath)
 			: undefined;
 	return {
 		homeDir: resolveAgentHomeDir(),
-		backendKind,
-		backendConfig: profile?.backend.config,
+		harnessKind,
+		harnessConfig: profile?.harness.config,
 		channelKind: options.channelKind,
 		model,
 		modelId,

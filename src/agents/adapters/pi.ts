@@ -1,7 +1,7 @@
 import { SessionPool as PiSessionPool } from "./pi/session.js";
 import { getAgentRoundInputText } from "../types.js";
 import type {
-	AgentBackendAdapter,
+	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
 	AgentRoundInputLike,
@@ -70,7 +70,7 @@ class PiAdapterSessionPool implements AgentConversationSessionPool {
 	}
 }
 
-export const piAgentBackendAdapter: AgentBackendAdapter = {
+export const piAgentHarnessAdapter: AgentHarnessAdapter = {
 	kind: "pi",
 	label: "Pi Coding Agent",
 	capabilities: PI_CAPABILITIES,
@@ -79,8 +79,8 @@ export const piAgentBackendAdapter: AgentBackendAdapter = {
 	},
 };
 
-export const ousiaAgentBackendAdapter: AgentBackendAdapter = {
-	...piAgentBackendAdapter,
+export const ousiaAgentHarnessAdapter: AgentHarnessAdapter = {
+	...piAgentHarnessAdapter,
 	kind: "ousia",
 	label: "Ousia",
 };
