@@ -45,6 +45,7 @@ export interface AgentUsageStats {
 	total: UsageBucket;
 	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
+	tokenUsageSource: "actual" | "estimated" | "none";
 	averageTtfsMs?: number;
 	runningSince?: string;
 	updatedAt: string;
@@ -134,6 +135,8 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 	let currentRunActualTokens = 0;
 	let currentRunEstimatedTokens = 0;
 	let activeRuntimeStart: number | undefined;
+	let hasActualTokens = false;
+	let hasEstimatedTokens = false;
 
 	function bucketFor(timestamp: string): UsageBucket {
 		const key = dateKey(timestamp);
@@ -182,6 +185,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 			const key = dateKey(event.timestamp);
 			const actualTokens = typeof event.actualTokens === "number" && Number.isFinite(event.actualTokens) ? event.actualTokens : undefined;
 			if (actualTokens !== undefined) {
+				hasActualTokens = true;
 				actualTokensByDate.set(key, (actualTokensByDate.get(key) ?? 0) + actualTokens);
 				const inputTokens = typeof event.inputTokens === "number" && Number.isFinite(event.inputTokens) ? event.inputTokens : 0;
 				const outputTokens = typeof event.outputTokens === "number" && Number.isFinite(event.outputTokens) ? event.outputTokens : 0;
@@ -204,6 +208,9 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 				}
 			} else {
 				const estimatedTokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
+				if (estimatedTokens > 0) {
+					hasEstimatedTokens = true;
+				}
 				estimatedTokensByDate.set(key, (estimatedTokensByDate.get(key) ?? 0) + estimatedTokens);
 				if (inCurrentRun) {
 					currentRunEstimatedTokens += estimatedTokens;
@@ -216,6 +223,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 			const key = dateKey(event.timestamp);
 			const actualTokens = typeof event.actualTokens === "number" && Number.isFinite(event.actualTokens) ? event.actualTokens : undefined;
 			if (actualTokens !== undefined) {
+				hasActualTokens = true;
 				actualTokensByDate.set(key, (actualTokensByDate.get(key) ?? 0) + actualTokens);
 				const inputTokens = typeof event.inputTokens === "number" && Number.isFinite(event.inputTokens) ? event.inputTokens : 0;
 				const outputTokens = typeof event.outputTokens === "number" && Number.isFinite(event.outputTokens) ? event.outputTokens : 0;
@@ -310,6 +318,7 @@ export function summarizeAgentUsage(events: AgentUsageEvent[], options?: { runni
 			.sort(([left], [right]) => left.localeCompare(right))
 			.slice(-14)
 			.map(([date, bucket]) => ({ date, ...bucket })),
+		tokenUsageSource: hasActualTokens ? "actual" : hasEstimatedTokens ? "estimated" : "none",
 		averageTtfsMs,
 		runningSince: options?.runningSince !== undefined ? new Date(options.runningSince).toISOString() : undefined,
 		updatedAt: new Date(now).toISOString(),

@@ -25,7 +25,8 @@ import { useI18n } from "../../lib/i18n";
 const MAX_RESOURCE_HISTORY_POINTS = 30;
 const MIN_PAUSE_LOADING_MS = 500;
 const resourceHistoryByAgent = new Map<string, ResourceChartHistory>();
-type WechatAuthPhase = "preparing" | "qr" | "done";
+type ChannelAuthKind = "feishu" | "wechat";
+type ChannelAuthPhase = "preparing" | "qr" | "done";
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -125,6 +126,7 @@ export function AgentDetailView({
 		provider: agent.model?.provider ?? "kimi-coding",
 		model: agent.model?.model ?? "k2p6",
 		thinkingLevel: agent.model?.thinkingLevel as DesktopThinkingLevel ?? "off",
+		resumeSessions: agent.model?.resumeSessions ?? false,
 		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 		outputToolCallImMaxLength: agent.model?.outputToolCallImMaxLength ?? 60,
 		outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
@@ -150,12 +152,17 @@ export function AgentDetailView({
 		outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
 	});
 	const [hasPendingRestartConfig, setHasPendingRestartConfig] = useState(false);
+	const [feishuAuthStatus, setFeishuAuthStatus] = useState<string | undefined>();
+	const [feishuQrEvent, setFeishuQrEvent] = useState<AgentOnboardEvent | undefined>();
+	const [feishuQrExpiresAt, setFeishuQrExpiresAt] = useState<number | undefined>();
+	const [feishuQrExpired, setFeishuQrExpired] = useState(false);
+	const [feishuAuthPhase, setFeishuAuthPhase] = useState<ChannelAuthPhase>("preparing");
 	const [wechatAuthStatus, setWechatAuthStatus] = useState<string | undefined>();
 	const [wechatQrEvent, setWechatQrEvent] = useState<AgentOnboardEvent | undefined>();
 	const [wechatQrExpiresAt, setWechatQrExpiresAt] = useState<number | undefined>();
 	const [wechatQrExpired, setWechatQrExpired] = useState(false);
-	const [wechatAuthPhase, setWechatAuthPhase] = useState<WechatAuthPhase>("preparing");
-	const [wechatAuthDialogOpen, setWechatAuthDialogOpen] = useState(false);
+	const [wechatAuthPhase, setWechatAuthPhase] = useState<ChannelAuthPhase>("preparing");
+	const [authDialogKind, setAuthDialogKind] = useState<ChannelAuthKind | undefined>();
 	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
 	const credentialRequestRef = useRef(0);
 	const modelAutosaveReadyRef = useRef(false);
@@ -219,14 +226,16 @@ export function AgentDetailView({
 		provider: agent.model?.provider ?? "kimi-coding",
 		model: agent.model?.model ?? "k2p6",
 		thinkingLevel: agent.model?.thinkingLevel as DesktopThinkingLevel ?? "off",
+		resumeSessions: agent.model?.resumeSessions ?? false,
 		apiKey: agent.model?.apiKey ?? "",
-	}), [agent.model?.apiKey, agent.model?.model, agent.model?.provider, agent.model?.thinkingLevel]);
+	}), [agent.model?.apiKey, agent.model?.model, agent.model?.provider, agent.model?.resumeSessions, agent.model?.thinkingLevel]);
 	const nextModelDraft = useMemo(() => ({
 		provider: draft.provider,
 		model: draft.model,
 		thinkingLevel: draft.thinkingLevel,
+		resumeSessions: draft.resumeSessions,
 		apiKey: draft.apiKey,
-	}), [draft.apiKey, draft.model, draft.provider, draft.thinkingLevel]);
+	}), [draft.apiKey, draft.model, draft.provider, draft.resumeSessions, draft.thinkingLevel]);
 	const savedChannelDraft = useMemo(() => ({
 		appId: agent.appId ?? "",
 		appSecret: agent.appSecret ?? "",
@@ -292,6 +301,7 @@ export function AgentDetailView({
 			provider: agent.model?.provider ?? "kimi-coding",
 			model: agent.model?.model ?? "k2p6",
 			thinkingLevel: agent.model?.thinkingLevel as DesktopThinkingLevel ?? "off",
+			resumeSessions: agent.model?.resumeSessions ?? false,
 			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 			outputToolCallImMaxLength: agent.model?.outputToolCallImMaxLength ?? 60,
 			outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
@@ -325,17 +335,48 @@ export function AgentDetailView({
 	}, [agent.id]);
 
 	useEffect(() => {
+		setFeishuAuthStatus(undefined);
+		setFeishuQrEvent(undefined);
+		setFeishuQrExpiresAt(undefined);
+		setFeishuQrExpired(false);
+		setFeishuAuthPhase("preparing");
 		setWechatAuthStatus(undefined);
 		setWechatQrEvent(undefined);
 		setWechatQrExpiresAt(undefined);
 		setWechatQrExpired(false);
 		setWechatAuthPhase("preparing");
-		setWechatAuthDialogOpen(false);
+		setAuthDialogKind(undefined);
 	}, [agent.id]);
 
 	useEffect(() => {
 		return window.pie.onAgentOnboardEvent((event) => {
-			if (event.sessionId !== agent.id || event.source !== "wechat") {
+			if (event.sessionId !== agent.id) {
+				return;
+			}
+			const isFeishuOnboardEvent = event.source === "feishu" || (!event.source && (event.type === "qr" || Boolean(event.feishu)));
+			if (isFeishuOnboardEvent) {
+				if (event.type === "qr") {
+					setFeishuQrEvent(event);
+					setFeishuQrExpiresAt(event.expiresIn ? Date.now() + event.expiresIn * 1000 : undefined);
+					setFeishuQrExpired(false);
+					setFeishuAuthPhase("qr");
+				}
+				if (event.message) {
+					setFeishuAuthStatus(event.message);
+				}
+				if (event.type === "done") {
+					setFeishuQrEvent(undefined);
+					setFeishuQrExpiresAt(undefined);
+					setFeishuQrExpired(false);
+					setFeishuAuthPhase("done");
+				}
+				if (event.type === "done" || event.type === "error") {
+					void queryClient.invalidateQueries({ queryKey: ["agents"] });
+					void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+				}
+				return;
+			}
+			if (event.source !== "wechat") {
 				return;
 			}
 			if (event.type === "qr") {
@@ -359,6 +400,17 @@ export function AgentDetailView({
 			}
 		});
 	}, [agent.id, queryClient]);
+
+	useEffect(() => {
+		if (!feishuQrExpiresAt) {
+			setFeishuQrExpired(false);
+			return;
+		}
+		const updateExpired = () => setFeishuQrExpired(Date.now() >= feishuQrExpiresAt);
+		updateExpired();
+		const timer = window.setInterval(updateExpired, 1000);
+		return () => window.clearInterval(timer);
+	}, [feishuQrExpiresAt]);
 
 	useEffect(() => {
 		if (!wechatQrExpiresAt) {
@@ -454,7 +506,7 @@ export function AgentDetailView({
 	const reauthorizeWechat = useMutation({
 		mutationFn: () => window.pie.reauthorizeWechat(agent.id),
 		onMutate: () => {
-			setWechatAuthDialogOpen(true);
+			setAuthDialogKind("wechat");
 			setWechatAuthStatus(t("preparingQr"));
 			setWechatQrEvent(undefined);
 			setWechatQrExpiresAt(undefined);
@@ -488,6 +540,44 @@ export function AgentDetailView({
 			onError(err.message);
 		},
 	});
+	const reauthorizeFeishu = useMutation({
+		mutationFn: () => window.pie.reauthorizeFeishu(agent.id),
+		onMutate: () => {
+			setAuthDialogKind("feishu");
+			setFeishuAuthStatus(t("preparingQr"));
+			setFeishuQrEvent(undefined);
+			setFeishuQrExpiresAt(undefined);
+			setFeishuQrExpired(false);
+			setFeishuAuthPhase("preparing");
+		},
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setChannelDraft((current) => ({
+				...current,
+				appId: updated.appId ?? current.appId,
+				appSecret: updated.appSecret ?? current.appSecret,
+				brand: updated.brand ?? current.brand,
+			}));
+			setDraft((current) => ({ ...current, name: updated.name }));
+			setFeishuQrEvent(undefined);
+			setFeishuQrExpiresAt(undefined);
+			setFeishuQrExpired(false);
+			setFeishuAuthPhase("done");
+			setHasPendingRestartConfig(false);
+		},
+		onError: (err: Error) => {
+			if (err.message.includes("二维码已失效") || err.message.includes("expired")) {
+				setFeishuQrExpired(true);
+				setFeishuAuthStatus(t("qrExpiredRefresh"));
+				setFeishuAuthPhase(feishuQrEvent?.url ? "qr" : "preparing");
+				return;
+			}
+			setFeishuAuthStatus(undefined);
+			setFeishuAuthPhase("preparing");
+			onError(err.message);
+		},
+	});
 	const syncFeishuAppProfile = useMutation({
 		mutationFn: () => window.pie.syncFeishuAppProfile(agent.id),
 		onSuccess: async (updated) => {
@@ -502,10 +592,46 @@ export function AgentDetailView({
 			onError(err.message);
 		},
 	});
+	const syncDiscordBotProfile = useMutation({
+		mutationFn: () => window.pie.syncDiscordBotProfile(agent.id, channelDraft.discordBotToken),
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setDraft((current) => ({ ...current, name: updated.name }));
+			setChannelDraft((current) => ({
+				...current,
+				discordBotToken: updated.discord?.botToken ?? current.discordBotToken,
+				discordApplicationId: updated.discord?.applicationId ?? current.discordApplicationId,
+				discordGuildId: updated.discord?.guildId ?? current.discordGuildId,
+			}));
+			if (agent.status === "running" || agent.status === "starting") {
+				setHasPendingRestartConfig(true);
+			}
+		},
+		onError: (err: Error) => {
+			onError(err.message);
+		},
+	});
 	const start = useMutation({
 		mutationFn: () => window.pie.startAgent(agent.id),
 		onMutate: () => {
 			setAgentStatusInCache(queryClient, agent.id, "starting");
+		},
+		onSuccess: async (updated) => {
+			await queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.setQueryData(["agent", agent.id], updated);
+			setHasPendingRestartConfig(false);
+		},
+		onError: (err: Error) => {
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent", agent.id] });
+			onError(getFriendlyStartError(err.message, t));
+		},
+	});
+	const restart = useMutation({
+		mutationFn: () => withMinimumDuration(() => window.pie.restartAgent(agent.id), MIN_PAUSE_LOADING_MS),
+		onMutate: () => {
+			setAgentStatusInCache(queryClient, agent.id, "starting", "stopping");
 		},
 		onSuccess: async (updated) => {
 			await queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -631,12 +757,27 @@ export function AgentDetailView({
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
 	const isWechatDegraded = hasWechatChannel && agent.runtimeEnvironment?.lifecycle.state === "degraded";
 	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
+	const isPreparingFeishuQr = reauthorizeFeishu.isPending && !feishuQrEvent?.url;
 	const isPreparingWechatQr = reauthorizeWechat.isPending && !wechatQrEvent?.url;
+	const openFeishuReauthorizeDialog = () => {
+		setAuthDialogKind("feishu");
+		if (!reauthorizeFeishu.isPending && !feishuQrEvent?.url) {
+			reauthorizeFeishu.mutate();
+		}
+	};
 	const openWechatReauthorizeDialog = () => {
-		setWechatAuthDialogOpen(true);
+		setAuthDialogKind("wechat");
 		if (!reauthorizeWechat.isPending && !wechatQrEvent?.url) {
 			reauthorizeWechat.mutate();
 		}
+	};
+	const refreshFeishuQr = () => {
+		setFeishuQrEvent(undefined);
+		setFeishuQrExpiresAt(undefined);
+		setFeishuQrExpired(false);
+		setFeishuAuthStatus(t("preparingQr"));
+		setFeishuAuthPhase("preparing");
+		reauthorizeFeishu.mutate();
 	};
 	const refreshWechatQr = () => {
 		setWechatQrEvent(undefined);
@@ -683,6 +824,14 @@ export function AgentDetailView({
 		return () => window.clearTimeout(timer);
 	}, [hasUnsavedChannelConfig, nextChannelDraft, saveChannel.mutate]);
 
+	const isFeishuAuthDialog = authDialogKind === "feishu";
+	const authQrEvent = isFeishuAuthDialog ? feishuQrEvent : wechatQrEvent;
+	const authQrExpired = isFeishuAuthDialog ? feishuQrExpired : wechatQrExpired;
+	const authPhase = isFeishuAuthDialog ? feishuAuthPhase : wechatAuthPhase;
+	const authStatus = isFeishuAuthDialog ? feishuAuthStatus : wechatAuthStatus;
+	const isAuthPending = isFeishuAuthDialog ? reauthorizeFeishu.isPending : reauthorizeWechat.isPending;
+	const refreshAuthQr = isFeishuAuthDialog ? refreshFeishuQr : refreshWechatQr;
+
 	return (
 		<>
 			<Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AgentTab)} className="flex h-full flex-col bg-white">
@@ -698,9 +847,13 @@ export function AgentDetailView({
 					onPause={() => pause.mutate()}
 					showFeishuCredentialInvalidated={isFeishuCredentialInvalidated}
 					showWechatReauthorize={isWechatDegraded}
+					isReauthorizingFeishu={isPreparingFeishuQr}
 					isReauthorizingWechat={isPreparingWechatQr}
 					showRestartConfigHint={hasPendingRestartConfig}
+					isRestartingConfig={restart.isPending}
+					onOpenFeishuReauthorize={openFeishuReauthorizeDialog}
 					onOpenWechatReauthorize={openWechatReauthorizeDialog}
+					onRestartConfig={() => restart.mutate()}
 					onReveal={() => revealFinder.mutate()}
 					onDelete={() => remove.mutate()}
 					deleteError={remove.error instanceof Error ? remove.error.message : undefined}
@@ -747,6 +900,8 @@ export function AgentDetailView({
 							isLoadingSkillSources={skillSourcesQuery.isLoading}
 							openingSkillSourceId={openSkillSource.isPending ? openSkillSource.variables : undefined}
 							isSyncingFeishu={syncFeishuAppProfile.isPending}
+							isSyncingDiscord={syncDiscordBotProfile.isPending}
+							isReauthorizingFeishu={isPreparingFeishuQr}
 							isReauthorizingWechat={isPreparingWechatQr}
 							onUpdateField={updateField}
 							onUpdateProviderSelection={updateProviderSelection}
@@ -755,36 +910,40 @@ export function AgentDetailView({
 							onOpenSkillFolder={(sourceId, skillName) => openSkillFolder.mutate({ sourceId, skillName })}
 							onUpdateChannelField={updateChannelField}
 							onSyncFeishu={() => syncFeishuAppProfile.mutate()}
+							onSyncDiscord={() => syncDiscordBotProfile.mutate()}
+							onReauthorizeFeishu={openFeishuReauthorizeDialog}
 							onReauthorizeWechat={openWechatReauthorizeDialog}
 						/>
 					</div>
 				</div>
 			</Tabs>
-			<Dialog open={wechatAuthDialogOpen} onOpenChange={setWechatAuthDialogOpen}>
+			<Dialog open={Boolean(authDialogKind)} onOpenChange={(open) => setAuthDialogKind(open ? authDialogKind : undefined)}>
 				<DialogContent className="pie-smooth-corner max-w-[360px] gap-5 p-7 text-center sm:max-w-[360px]">
 					<DialogHeader className="items-center gap-2">
-						<DialogTitle className="text-xl font-semibold leading-7 text-balance">{t("wechatReauthTitle")}</DialogTitle>
+						<DialogTitle className="text-xl font-semibold leading-7 text-balance">
+							{isFeishuAuthDialog ? t("feishuReauthTitle") : t("wechatReauthTitle")}
+						</DialogTitle>
 						<DialogDescription className="max-w-[260px] text-center leading-relaxed text-pretty">
-							{t("wechatReauthDesc")}
+							{isFeishuAuthDialog ? t("feishuReauthDesc") : t("wechatReauthDesc")}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex min-h-[220px] items-center justify-center">
-						{wechatAuthPhase === "done" ? (
+						{authPhase === "done" ? (
 							<div className="flex h-[220px] w-[220px] items-center justify-center">
 								<AppIcon IconComponent={CheckCircleBoldDuotone} className="size-24 text-[var(--lime-10)]" />
 							</div>
-						) : wechatQrEvent?.url ? (
+						) : authQrEvent?.url ? (
 							<div className="relative flex h-[220px] w-[220px] items-center justify-center overflow-hidden">
-								<QRCodeSVG value={wechatQrEvent.url} size={220} level="M" includeMargin={false} />
-								{wechatQrExpired ? (
+								<QRCodeSVG value={authQrEvent.url} size={220} level="M" includeMargin={false} />
+								{authQrExpired ? (
 									<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/88 text-center backdrop-blur-[1px]">
 										<div className="text-xs font-medium text-foreground">{t("qrExpired")}</div>
 										<Button
 											variant="unstyled"
 											size="inline"
 											className="mt-2 h-5 px-1 text-[11px] font-medium text-[var(--lime-11)] transition-colors hover:text-[var(--lime-12)]"
-											disabled={reauthorizeWechat.isPending}
-											onClick={refreshWechatQr}
+											disabled={isAuthPending}
+											onClick={refreshAuthQr}
 										>
 											{t("refreshQr")}
 										</Button>
@@ -796,7 +955,7 @@ export function AgentDetailView({
 						)}
 					</div>
 					<div className="min-h-5 text-sm leading-relaxed text-muted-foreground">
-						{wechatAuthStatus ?? t("confirmInWechat")}
+						{authStatus ?? (isFeishuAuthDialog ? t("confirmInFeishu") : t("confirmInWechat"))}
 					</div>
 				</DialogContent>
 			</Dialog>

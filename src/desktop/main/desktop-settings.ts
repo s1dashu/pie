@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
 	restoreRunningAgentsOnLaunch: true,
 	openAtLogin: false,
 	keepAwakeWhileOpen: false,
+	developerMode: false,
 	runtimeLogRetention: "30d",
 	usageEventRetention: "90d",
 };
@@ -75,6 +76,7 @@ function normalizeDesktopSettings(raw: Partial<DesktopSettings>): DesktopSetting
 			typeof raw.keepAwakeWhileOpen === "boolean"
 				? raw.keepAwakeWhileOpen
 				: DEFAULT_SETTINGS.keepAwakeWhileOpen,
+		developerMode: typeof raw.developerMode === "boolean" ? raw.developerMode : DEFAULT_SETTINGS.developerMode,
 		runtimeLogRetention: isLogRetention(raw.runtimeLogRetention) ? raw.runtimeLogRetention : DEFAULT_SETTINGS.runtimeLogRetention,
 		usageEventRetention: isLogRetention(raw.usageEventRetention) ? raw.usageEventRetention : DEFAULT_SETTINGS.usageEventRetention,
 		appearanceGrayHue: normalizeHue(raw.appearanceGrayHue),

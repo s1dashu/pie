@@ -28,6 +28,7 @@ export interface AgentTaskSpec {
 	prompt: string;
 	enabled?: boolean;
 	sessionKey?: string;
+	deliveryMode?: "owner" | "silent";
 	projectId?: string;
 	taskId?: string;
 	deleteAfterRun?: boolean;
@@ -175,6 +176,7 @@ export function parseAgentTaskSpec(raw: unknown): AgentTaskSpec {
 		prompt: normalizePrompt(raw),
 		enabled: normalizeEnabled(raw),
 		sessionKey: typeof raw.sessionKey === "string" ? raw.sessionKey : undefined,
+		deliveryMode: raw.deliveryMode === "silent" ? "silent" : undefined,
 		projectId: typeof raw.projectId === "string" ? raw.projectId : undefined,
 		taskId: typeof raw.taskId === "string" ? raw.taskId : undefined,
 		deleteAfterRun: raw.deleteAfterRun !== false,

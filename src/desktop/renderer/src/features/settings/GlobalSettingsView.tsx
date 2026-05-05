@@ -233,6 +233,12 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 						</SettingsSection>
 
 						<SettingsSection title={t("advancedFeatures")} contentClassName="space-y-4">
+							<SettingToggle
+								title={t("developerMode")}
+								description={t("developerModeDesc")}
+								checked={data.developerMode}
+								onCheckedChange={(checked) => updateField("developerMode", checked)}
+							/>
 							<div className="px-1">
 								<div className="text-sm font-medium text-foreground">{t("versionManagement")}</div>
 								<div className="mt-1 text-xs leading-5 text-muted-foreground">{t("versionManagementDesc")}</div>
@@ -319,8 +325,8 @@ function RuntimeVersionRow({
 			<div className="flex shrink-0 items-center gap-2">
 				<Button
 					variant="secondary"
-					size="xs"
-					className="!h-6 rounded-full px-2.5 !text-[11px] !font-medium !leading-none"
+					size="small"
+					className="rounded-full"
 					onClick={onUpgrade}
 					disabled={isLoading || isUpgrading || isUninstalling || (kind === "openclaw" && !installed)}
 				>
@@ -328,8 +334,8 @@ function RuntimeVersionRow({
 				</Button>
 				<Button
 					variant="destructive"
-					size="xs"
-					className="!h-6 rounded-full px-2.5 !text-[11px] !font-medium !leading-none"
+					size="small"
+					className="rounded-full"
 					onClick={onUninstall}
 					disabled={isLoading || isUpgrading || isUninstalling || !installed}
 				>
@@ -426,8 +432,8 @@ function GrayHuePicker({
 				<Button
 					type="button"
 					variant="ghost"
-					size="sm"
-					className="h-8 shrink-0 px-3 transition-[background-color,transform] active:scale-[0.96]"
+					size="small"
+					className="shrink-0 transition-[background-color,transform] active:scale-[0.96]"
 					onClick={onReset}
 					disabled={!isCustom}
 				>

@@ -1,4 +1,5 @@
 import type { LarkMessageEvent } from "./platform/index.js";
+import type { ChannelMessagePart } from "../common/channel-model.js";
 
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
 
@@ -183,4 +184,67 @@ export function extractPromptText(event: LarkMessageEvent, botOpenId: string | u
 		default:
 			return null;
 	}
+}
+
+function readStringField(record: Record<string, unknown>, names: string[]): string | undefined {
+	for (const name of names) {
+		const value = record[name];
+		if (typeof value === "string" && value.trim()) {
+			return value.trim();
+		}
+	}
+	return undefined;
+}
+
+function collectResourceParts(value: unknown, parts: ChannelMessagePart[]): void {
+	if (!value || typeof value !== "object") {
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			collectResourceParts(item, parts);
+		}
+		return;
+	}
+	const record = value as Record<string, unknown>;
+	const imageKey = readStringField(record, ["image_key", "imageKey", "img_key", "imgKey"]);
+	const fileKey = readStringField(record, ["file_key", "fileKey"]);
+	const url = readStringField(record, ["url", "image_url", "imageUrl", "download_url", "downloadUrl"]);
+	const mimeType = readStringField(record, ["mime_type", "mimeType", "content_type", "contentType"]);
+	const name = readStringField(record, ["file_name", "fileName", "name"]);
+	if (imageKey || url) {
+		parts.push({
+			type: "image",
+			url: url ?? (imageKey ? `feishu://image/${imageKey}` : undefined),
+			mimeType,
+			altText: imageKey ? `image_key=${imageKey}` : undefined,
+		});
+	}
+	if (fileKey) {
+		parts.push({
+			type: "file",
+			url: `feishu://file/${fileKey}`,
+			name: name ?? fileKey,
+			mimeType,
+		});
+	}
+	for (const child of Object.values(record)) {
+		if (child && typeof child === "object") {
+			collectResourceParts(child, parts);
+		}
+	}
+}
+
+export function extractMessageParts(event: LarkMessageEvent, botOpenId: string | undefined): ChannelMessagePart[] {
+	const parts: ChannelMessagePart[] = [];
+	const text = extractPromptText(event, botOpenId);
+	if (text) {
+		parts.push({ type: "text", text });
+	}
+	try {
+		collectResourceParts(JSON.parse(event.message.content), parts);
+	} catch {
+		// Plain text message content has no structured resources.
+	}
+	return parts;
 }

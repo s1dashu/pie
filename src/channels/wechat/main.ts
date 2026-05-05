@@ -10,6 +10,7 @@ import {
 	extractLastAssistantError,
 	type AgentConversationSessionPool,
 } from "../../agents/session-runtime.js";
+import { getAgentRoundInputText, type AgentRoundInputLike } from "../../agents/types.js";
 import {
 	getOwnerSessionBinding,
 	loadConfigStore,
@@ -18,12 +19,16 @@ import {
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
 import { handleImCommand, parseImCommand } from "../common/im-commands.js";
+import { getPresentationRules } from "../common/presentation-rules.js";
 import { formatToolImErrorLine, formatToolImLine } from "../common/tool-call-im.js";
+import { resolveWechatMessageAttachments } from "./attachments.js";
 import { loadConfig, type WechatBotConfig } from "./config.js";
 import { loginWechatWithQr } from "./login.js";
 import {
 	buildTextMessageReq,
+	extractMessageParts,
 	extractPromptText,
 	getConversationKey,
 	getWechatMessageId,
@@ -47,6 +52,7 @@ const SESSION_EXPIRED_RETRY_DELAYS_MS = [
 	3 * 60 * 1000,
 	60 * 60 * 1000,
 ];
+const WECHAT_TOOL_LINES_PER_MESSAGE = getPresentationRules({ channel: "wechat" }).toolCalls.linesPerMessage;
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -68,6 +74,10 @@ function formatTaskPrompt(prompt: string): string {
 		throw new Error("Task prompt is empty.");
 	}
 	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
+}
+
+function isSilentAgentTask(request: AgentTurnInput): boolean {
+	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
 }
 
 function formatThinkingForIm(text: string): string {
@@ -101,6 +111,7 @@ function formatDelay(ms: number): string {
 interface QueuedWechatTurn {
 	message: WechatMessage;
 	promptText: string;
+	promptInput: AgentRoundInputLike;
 	resolve: (result: { assistantText: string; interrupted: boolean }) => void;
 	reject: (error: unknown) => void;
 }
@@ -114,7 +125,8 @@ class WechatConversationController {
 		private readonly runtime: WechatBotRuntime,
 	) {}
 
-	async submit(message: WechatMessage, promptText: string): Promise<{ assistantText: string; interrupted: boolean }> {
+	async submit(message: WechatMessage, promptInput: AgentRoundInputLike): Promise<{ assistantText: string; interrupted: boolean }> {
+		const promptText = getAgentRoundInputText(promptInput);
 		let resolvePromise: (result: { assistantText: string; interrupted: boolean }) => void = () => undefined;
 		let rejectPromise: (error: unknown) => void = () => undefined;
 		const completion = new Promise<{ assistantText: string; interrupted: boolean }>((resolve, reject) => {
@@ -127,6 +139,7 @@ class WechatConversationController {
 		this.pendingRequest = {
 			message,
 			promptText,
+			promptInput,
 			resolve: resolvePromise,
 			reject: rejectPromise,
 		};
@@ -194,7 +207,7 @@ class WechatConversationController {
 		};
 		const appendToolLine = (line: string): void => {
 			pendingToolLines.push(line);
-			if (pendingToolLines.length >= 10) {
+			if (pendingToolLines.length >= WECHAT_TOOL_LINES_PER_MESSAGE) {
 				void flushToolLines();
 			}
 		};
@@ -203,12 +216,11 @@ class WechatConversationController {
 			if (!trimmed) {
 				return assistantSendQueue;
 			}
-			sentAssistantText = true;
 			assistantSendQueue = assistantSendQueue
 				.then(async () => {
 					await flushThinkingText();
-					await flushToolLines();
 					await this.runtime.sendPlainReply(request.message, trimmed);
+					sentAssistantText = true;
 				})
 				.catch((error) => console.warn(chalk.gray(`Wechat assistant update skipped: ${formatError(error)}`)));
 			return assistantSendQueue;
@@ -216,7 +228,7 @@ class WechatConversationController {
 		const flushThinkingText = (): Promise<void> => {
 			const nextText = thinkingText.slice(flushedThinkingLength);
 			if (!nextText.trim()) {
-				return assistantSendQueue;
+				return Promise.resolve();
 			}
 			flushedThinkingLength = thinkingText.length;
 			return this.runtime.sendPlainReply(request.message, formatThinkingForIm(nextText));
@@ -261,7 +273,7 @@ class WechatConversationController {
 						}
 					}
 			});
-			await session.prompt(request.promptText);
+			await session.prompt(request.promptInput);
 			const providerError = extractLastAssistantError(session);
 			if (providerError) {
 				throw new Error(providerError);
@@ -302,7 +314,6 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	private readonly scheduledTurnQueues = new Map<string, Promise<void>>();
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly contextTokens: ContextTokenStore;
-	private sendQueue = Promise.resolve();
 	private shutdownExitCode = 0;
 
 	constructor(private config: WechatBotConfig) {
@@ -364,16 +375,14 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			throw new Error("Cannot reply to Wechat message without from_user_id.");
 		}
 		const contextToken = message.context_token ?? this.contextTokens.get(to);
-		const task = this.sendQueue
-			.catch(() => undefined)
-			.then(async () => {
-				for (const chunk of splitWechatText(text)) {
-					await this.sendReplyChunk({ to, text: chunk, contextToken });
-					await sleep(WECHAT_SEND_INTERVAL_MS, this.abortController.signal);
-				}
-			});
-		this.sendQueue = task.then(() => undefined, () => undefined);
-		await task;
+		const chunks = splitWechatText(text);
+		for (let index = 0; index < chunks.length; index += 1) {
+			const chunk = chunks[index]!;
+			await this.sendReplyChunk({ to, text: chunk, contextToken });
+			if (index < chunks.length - 1) {
+				await sleep(WECHAT_SEND_INTERVAL_MS, this.abortController.signal);
+			}
+		}
 	}
 
 	private async sendReplyChunk(params: {
@@ -500,8 +509,10 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			this.contextTokens.set(fromUserId, message.context_token);
 		}
 		this.rememberOwnerSessionBinding(message);
-		const promptText = extractPromptText(message);
-		if (!promptText) {
+		const messageParts = await resolveWechatMessageAttachments(this.config, message, extractMessageParts(message));
+		const promptInput = await buildAgentRoundInputFromMessageParts(messageParts);
+		const promptText = promptInput.text;
+		if (!promptText && !promptInput.images?.length) {
 			await this.sendPlainReply(message, "Only text messages are supported.");
 			return;
 		}
@@ -516,7 +527,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 			return;
 		}
 		console.log(chalk.cyan(`Wechat message received: ${conversationKey} ${promptText.slice(0, 120)}`));
-		await this.getConversationController(conversationKey).submit(message, promptText);
+		await this.getConversationController(conversationKey).submit(message, promptInput);
 	}
 
 	private async monitorWechatProvider(): Promise<void> {
@@ -614,6 +625,14 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		sessionKey: string;
 		assistantText: string;
 	}> {
+		if (isSilentAgentTask(request)) {
+			const session = await this.sessionPool.getSession(request.sessionKey);
+			await session.prompt(request.prompt);
+			return {
+				sessionKey: request.sessionKey,
+				assistantText: extractAssistantText(session),
+			};
+		}
 		if (request.kind === "agent_task") {
 			const ownerSession = getOwnerSessionBinding(loadConfigStore());
 			if (!ownerSession) {
@@ -638,6 +657,9 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 	}
 
 	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
+		if (isSilentAgentTask(request)) {
+			return request.sessionKey;
+		}
 		if (request.kind !== "agent_task") {
 			return request.sessionKey;
 		}

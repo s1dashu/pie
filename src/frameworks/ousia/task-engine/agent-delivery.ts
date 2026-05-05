@@ -130,6 +130,7 @@ async function deliverAgentTask(params: {
 					scheduledFor: due.scheduledFor,
 					runId,
 					filePath: entry.filePath,
+					deliveryMode: entry.spec.deliveryMode,
 				},
 			}),
 		});

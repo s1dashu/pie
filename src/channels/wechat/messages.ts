@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
+import type { ChannelMessagePart } from "../common/channel-model.js";
+import { getPresentationRules } from "../common/presentation-rules.js";
 import { MessageItemType, MessageState, MessageType, type MessageItem, type SendMessageReq, type WechatMessage } from "./platform/types.js";
 
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
-const DEFAULT_MAX_WECHAT_TEXT_BYTES = 6000;
-const WECHAT_TEXT_NATURAL_SPLIT_AFTER_CHARS = 3000;
+const WECHAT_PRESENTATION_RULES = getPresentationRules({ channel: "wechat" });
+const DEFAULT_MAX_WECHAT_TEXT_BYTES = WECHAT_PRESENTATION_RULES.text.maxBytes ?? 6000;
+const WECHAT_TEXT_NATURAL_SPLIT_AFTER_CHARS = WECHAT_PRESENTATION_RULES.text.naturalSplitAfterChars ?? 3000;
 
 export class MessageDedup {
 	private readonly ids = new Set<string>();
@@ -60,6 +63,39 @@ export function extractPromptText(message: WechatMessage): string | null {
 	return text || null;
 }
 
+function firstString(...values: Array<string | undefined>): string | undefined {
+	return values.find((value) => value?.trim())?.trim();
+}
+
+export function extractMessageParts(message: WechatMessage): ChannelMessagePart[] {
+	const parts: ChannelMessagePart[] = [];
+	const text = extractPromptText(message);
+	if (text) {
+		parts.push({ type: "text", text });
+	}
+	for (const item of message.item_list ?? []) {
+		if (item.type === MessageItemType.IMAGE && item.image_item) {
+			const id = firstString(item.image_item.file_key, item.image_item.file_id, item.image_item.media_id);
+			parts.push({
+				type: "image",
+				url: firstString(item.image_item.url, item.image_item.image_url, item.image_item.file_url) ?? (id ? `wechat://image/${id}` : undefined),
+				mimeType: item.image_item.mime_type,
+				altText: id ? `image_id=${id}` : undefined,
+			});
+		}
+		if (item.type === MessageItemType.FILE && item.file_item) {
+			const id = firstString(item.file_item.file_key, item.file_item.file_id, item.file_item.media_id);
+			parts.push({
+				type: "file",
+				url: firstString(item.file_item.url, item.file_item.file_url) ?? (id ? `wechat://file/${id}` : undefined),
+				name: firstString(item.file_item.file_name, item.file_item.name, id) ?? "wechat-file",
+				mimeType: item.file_item.mime_type,
+			});
+		}
+	}
+	return parts;
+}
+
 export function isRecentMessage(message: WechatMessage, startedAtMs: number): boolean {
 	const createdAt = message.create_time_ms;
 	if (!Number.isFinite(createdAt)) {
@@ -92,7 +128,7 @@ function utf8Bytes(text: string): number {
 }
 
 function isSentenceEnd(char: string): boolean {
-	return char === "。" || char === "." || char === "！" || char === "!" || char === "？" || char === "?";
+	return WECHAT_PRESENTATION_RULES.text.sentenceEndChars.includes(char);
 }
 
 function splitOversizedText(text: string, maxBytes: number): string[] {

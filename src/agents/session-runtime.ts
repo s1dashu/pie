@@ -33,6 +33,28 @@ function normalizeConversationKey(conversationKey: string | undefined): string {
 	return key || "conversation";
 }
 
+const PI_IDLE_COMPACT_AFTER_MS = 2 * 60 * 60 * 1000;
+const SESSION_MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+	const raw = process.env[name]?.trim();
+	if (!raw) {
+		return fallback;
+	}
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function shouldRunIdleCompact(options: AgentSessionRuntimeOptions): boolean {
+	if (options.harnessKind !== "pi") {
+		return false;
+	}
+	if (process.env.PIE_DISABLE_IDLE_COMPACT === "1") {
+		return false;
+	}
+	return true;
+}
+
 class LoggedAgentSession implements AgentConversationSession {
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
 	private readonly normalizer: AgentEventNormalizer;
@@ -44,6 +66,7 @@ class LoggedAgentSession implements AgentConversationSession {
 		private readonly inner: AgentConversationSession,
 		private readonly homeDir: string,
 		private readonly conversationKey: string,
+		private readonly recordPromptLifecycle: (runPrompt: () => Promise<void>) => Promise<void>,
 	) {
 		this.normalizer = new AgentEventNormalizer(this);
 		this.eventSink = createProfileAgentEventSink({ homeDir: this.homeDir, conversationKey: this.conversationKey });
@@ -82,7 +105,7 @@ class LoggedAgentSession implements AgentConversationSession {
 		logAgentPrompt(this.homeDir, text);
 		this.promptStartedAt = Date.now();
 		this.hasRecordedTtfs = false;
-		await this.inner.prompt(input);
+		await this.recordPromptLifecycle(() => this.inner.prompt(input));
 	}
 
 	async abort(): Promise<void> {
@@ -119,12 +142,34 @@ class LoggedAgentSession implements AgentConversationSession {
 class LoggedAgentSessionPool implements AgentConversationSessionPool {
 	readonly capabilities;
 	private readonly sessions = new WeakMap<AgentConversationSession, LoggedAgentSession>();
+	private readonly trackedSessions = new Map<
+		string,
+		{
+			session: AgentConversationSession;
+			lastPromptAt?: number;
+			lastFinishedAt?: number;
+			lastCompactedAt?: number;
+			turnsSinceCompact: number;
+			compacting: boolean;
+		}
+	>();
+	private readonly idleCompactAfterMs: number;
+	private readonly maintenanceTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
 		private readonly inner: AgentConversationSessionPool,
 		private readonly homeDir: string,
+		private readonly options: AgentSessionRuntimeOptions,
 	) {
 		this.capabilities = inner.capabilities;
+		this.idleCompactAfterMs = readPositiveIntEnv("PIE_IDLE_COMPACT_AFTER_MS", PI_IDLE_COMPACT_AFTER_MS);
+		if (shouldRunIdleCompact(options) && inner.compactSession) {
+			const intervalMs = readPositiveIntEnv("PIE_SESSION_MAINTENANCE_INTERVAL_MS", SESSION_MAINTENANCE_INTERVAL_MS);
+			this.maintenanceTimer = setInterval(() => {
+				void this.runIdleCompactMaintenance();
+			}, intervalMs);
+			this.maintenanceTimer.unref?.();
+		}
 	}
 
 	async getSession(conversationKey: string): Promise<AgentConversationSession> {
@@ -134,9 +179,34 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		if (existing) {
 			return existing;
 		}
-		const logged = new LoggedAgentSession(session, this.homeDir, normalizedConversationKey);
+		const logged = new LoggedAgentSession(session, this.homeDir, normalizedConversationKey, (runPrompt) =>
+			this.recordPromptLifecycle(normalizedConversationKey, runPrompt),
+		);
 		this.sessions.set(session, logged);
+		if (!this.trackedSessions.has(normalizedConversationKey)) {
+			this.trackedSessions.set(normalizedConversationKey, {
+				session: logged,
+				turnsSinceCompact: 0,
+				compacting: false,
+			});
+		}
 		return logged;
+	}
+
+	async recordPromptLifecycle(conversationKey: string, runPrompt: () => Promise<void>): Promise<void> {
+		const normalizedConversationKey = normalizeConversationKey(conversationKey);
+		const entry = this.trackedSessions.get(normalizedConversationKey);
+		if (entry) {
+			entry.lastPromptAt = Date.now();
+		}
+		try {
+			await runPrompt();
+		} finally {
+			if (entry) {
+				entry.lastFinishedAt = Date.now();
+				entry.turnsSinceCompact += 1;
+			}
+		}
 	}
 
 	async compactSession(conversationKey: string): Promise<{ summary?: string }> {
@@ -144,7 +214,14 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		if (!compactSession) {
 			throw new Error("This agent harness does not support /compact yet. Use /new to start a fresh session.");
 		}
-		return compactSession.call(this.inner, normalizeConversationKey(conversationKey));
+		const normalizedConversationKey = normalizeConversationKey(conversationKey);
+		const result = await compactSession.call(this.inner, normalizedConversationKey);
+		const entry = this.trackedSessions.get(normalizedConversationKey);
+		if (entry) {
+			entry.lastCompactedAt = Date.now();
+			entry.turnsSinceCompact = 0;
+		}
+		return result;
 	}
 
 	async resetSession(conversationKey: string): Promise<void> {
@@ -152,7 +229,43 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		if (!resetSession) {
 			throw new Error("This agent harness does not support /new yet.");
 		}
-		await resetSession.call(this.inner, normalizeConversationKey(conversationKey));
+		const normalizedConversationKey = normalizeConversationKey(conversationKey);
+		await resetSession.call(this.inner, normalizedConversationKey);
+		this.trackedSessions.delete(normalizedConversationKey);
+	}
+
+	private async runIdleCompactMaintenance(): Promise<void> {
+		const compactSession = this.inner.compactSession;
+		if (!compactSession) {
+			return;
+		}
+		const now = Date.now();
+		for (const [conversationKey, entry] of this.trackedSessions) {
+			if (entry.compacting || entry.session.isStreaming || entry.turnsSinceCompact <= 0 || !entry.lastFinishedAt) {
+				continue;
+			}
+			if (now - entry.lastFinishedAt < this.idleCompactAfterMs) {
+				continue;
+			}
+			if (entry.lastCompactedAt && entry.lastCompactedAt >= entry.lastFinishedAt) {
+				continue;
+			}
+			entry.compacting = true;
+			try {
+				await compactSession.call(this.inner, conversationKey);
+				entry.lastCompactedAt = Date.now();
+				entry.turnsSinceCompact = 0;
+				if (this.options.verboseLogs) {
+					console.log(`> session_idle_compact ${conversationKey}`);
+				}
+			} catch (error) {
+				if (this.options.verboseLogs) {
+					console.warn(`> session_idle_compact_failed ${conversationKey} ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} finally {
+				entry.compacting = false;
+			}
+		}
 	}
 }
 
@@ -160,7 +273,8 @@ export { extractAssistantText, extractLastAssistantError, wasLastAssistantMessag
 
 export function createAgentSessionPool(options: AgentSessionRuntimeOptions): AgentConversationSessionPool {
 	const adapter = getAgentHarnessDefinition(options.harnessKind).adapter;
-	return new LoggedAgentSessionPool(adapter.createSessionPool(options), options.homeDir);
+	const pool = new LoggedAgentSessionPool(adapter.createSessionPool(options), options.homeDir, options);
+	return pool;
 }
 
 export function canSteerSession(session: AgentConversationSession): boolean {

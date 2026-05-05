@@ -80,7 +80,7 @@ The most complete path today is:
 Desktop app -> Pi Agent Harness -> Feishu/Lark channel
 ```
 
-WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Slack, Discord, Telegram, Codex, Hermes, and Openclaw have integration surfaces in the repo, but are not first-class stable release paths yet.
+WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Overseas IM channels, Hermes, and OpenClaw are still in development. Codex has integration surfaces in the repo, but is not a first-class stable release path yet.
 
 Ousia's Task Engine is prototype-level. It is useful for exploring scheduled or longer-running Agent work, but should not be used for critical automation.
 

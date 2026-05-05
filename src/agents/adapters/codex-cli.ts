@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import chalk from "chalk";
 import { sanitizePathSegment } from "../../channels/feishu/messages.js";
-import { getAgentRoundInputText } from "../types.js";
+import { getAgentRoundInputText, normalizeAgentRoundInput } from "../types.js";
 import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
@@ -42,6 +42,23 @@ interface ActiveTurn {
 	assistantText: string;
 	resolve: () => void;
 	reject: (error: Error) => void;
+}
+
+type CodexUserInput =
+	| { type: "text"; text: string }
+	| { type: "image"; url: string };
+
+function buildCodexUserInput(input: AgentRoundInputLike): { prompt: string; items: CodexUserInput[] } {
+	const content = normalizeAgentRoundInput(input);
+	const prompt = content.text.trim();
+	const items: CodexUserInput[] = [];
+	if (prompt) {
+		items.push({ type: "text", text: prompt });
+	}
+	for (const image of content.images ?? []) {
+		items.push({ type: "image", url: `data:${image.mimeType};base64,${image.data}` });
+	}
+	return { prompt, items };
 }
 
 interface CodexAppServerLoginResult {
@@ -155,8 +172,8 @@ class CodexAppServerSession implements AgentConversationSession {
 	}
 
 	async prompt(input: AgentRoundInputLike): Promise<void> {
-		const prompt = getAgentRoundInputText(input).trim();
-		if (!prompt) {
+		const { prompt, items } = buildCodexUserInput(input);
+		if (!items.length) {
 			throw new Error("Prompt is empty.");
 		}
 		if (this.activeTurn) {
@@ -177,7 +194,7 @@ class CodexAppServerSession implements AgentConversationSession {
 			this.activeTurn = { prompt, startedAt, assistantText: "", resolve, reject };
 			this.request("turn/start", {
 				threadId,
-				input: [{ type: "text", text: prompt }],
+				input: items,
 			}).catch((error) => {
 				this.activeTurn = undefined;
 				reject(error);

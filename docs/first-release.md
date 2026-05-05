@@ -20,9 +20,10 @@ This document describes the intended first public release scope for Pie.
 1. Ousia Task Engine: scheduled work, exec tasks, agent tasks, heartbeat, and observability.
 2. Ousia internal turn gateway.
 3. WeChat channel stability, especially login expiry, send rate limits, long message splitting, and multiple WeChat Agents.
-4. Slack, Discord, and Telegram adapters/config surfaces.
-5. Restore enabled Agents on desktop launch.
-6. Runtime lifecycle persistence for crash/restart visibility.
+4. Overseas IM channel adapters are still in development and are not exposed in the release UI.
+5. Hermes and OpenClaw adapters are still in development and are not exposed in the release UI.
+6. Restore enabled Agents on desktop launch.
+7. Runtime lifecycle persistence for crash/restart visibility.
 
 Experimental features can be used for local testing, but should not be presented as stable automation or production channel support.
 
@@ -31,12 +32,13 @@ Experimental features can be used for local testing, but should not be presented
 1. Runtime Environment is not a security sandbox. It sets the runtime working directory and tracks lifecycle state only.
 2. Shell/file/network permissions are still controlled by the underlying agent runtime and provider behavior.
 3. Ousia Task Engine is prototype-level and should not be used for critical scheduled work.
-4. Slack, Discord, and Telegram are not first-class release channels yet.
-5. Multi-channel per Agent is part of the architecture, but the first release should still treat channel setup conservatively.
-6. Restore-on-launch supports multiple enabled profiles, but still lacks polished recovery UI, backoff controls, and detailed failure remediation.
-7. Config writes are not fully atomic yet. Avoid editing the same profile from multiple Pie processes at once.
-8. Runtime lifecycle state can report stale processes after crashes; Pie clears stale process records on the next desktop read.
-9. There is no migration guarantee for pre-release local profile data.
+4. Slack, Discord, and Telegram are not release channels yet.
+5. Hermes and OpenClaw are not release harnesses yet.
+6. Multi-channel per Agent is part of the architecture, but the first release should still treat channel setup conservatively.
+7. Restore-on-launch supports multiple enabled profiles, but still lacks polished recovery UI, backoff controls, and detailed failure remediation.
+8. Config writes are not fully atomic yet. Avoid editing the same profile from multiple Pie processes at once.
+9. Runtime lifecycle state can report stale processes after crashes; Pie clears stale process records on the next desktop read.
+10. There is no migration guarantee for pre-release local profile data.
 
 ## Logs And Debugging
 

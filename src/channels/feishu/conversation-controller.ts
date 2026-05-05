@@ -8,6 +8,7 @@ import {
 	type AgentConversationSessionPool,
 	wasLastAssistantMessageAborted,
 } from "../../agents/session-runtime.js";
+import { getAgentRoundInputText, type AgentRoundInputLike } from "../../agents/types.js";
 import type { LarkMessageEvent } from "./platform/index.js";
 import {
 	formatLarkError,
@@ -24,6 +25,7 @@ export interface ConversationResult {
 interface ConversationRequest {
 	event: LarkMessageEvent;
 	promptText: string;
+	promptInput: AgentRoundInputLike;
 	reporter: LarkProgressReporter;
 	receivedAtMs: number;
 	interrupted: boolean;
@@ -52,7 +54,8 @@ export class ConversationController {
 		this.sessionPool = options.sessionPool;
 	}
 
-	async submit(event: LarkMessageEvent, promptText: string): Promise<ConversationResult> {
+	async submit(event: LarkMessageEvent, promptInput: AgentRoundInputLike): Promise<ConversationResult> {
+		const promptText = getAgentRoundInputText(promptInput);
 		const reporter = new LarkProgressReporter(
 			event,
 			this.config.feishu,
@@ -71,6 +74,7 @@ export class ConversationController {
 		const request: ConversationRequest = {
 			event,
 			promptText,
+			promptInput,
 			reporter,
 			receivedAtMs: Date.now(),
 			interrupted: false,
@@ -197,7 +201,7 @@ export class ConversationController {
 		let failure: unknown;
 		try {
 			this.logTurnTiming("prompt_start", promptStartedAt - request.receivedAtMs);
-			await session.prompt(request.promptText);
+			await session.prompt(request.promptInput);
 			if (!request.interrupted && !wasLastAssistantMessageAborted(session)) {
 				const providerError = extractLastAssistantError(session);
 				if (providerError) {

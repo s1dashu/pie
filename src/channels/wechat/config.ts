@@ -259,7 +259,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): WechatBotCon
 		runMode: env.PIE_RUN_MODE === "dev" ? "dev" : "start",
 		debug,
 		verboseLogs: debug,
-		resumeSessions: parseBooleanFlag(env.WECHAT_BOT_RESUME_SESSIONS, true),
+		resumeSessions: parseBooleanFlag(env.WECHAT_BOT_RESUME_SESSIONS, false),
 		outputToolCallsToIm: parseBooleanFlag(env.WECHAT_BOT_IM_TOOL_CALLS, true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env.WECHAT_BOT_IM_TOOL_CALL_MAX_LENGTH),
 		outputThinkingToIm: parseBooleanFlag(env.WECHAT_BOT_IM_THINKING, false),

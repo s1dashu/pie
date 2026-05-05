@@ -301,7 +301,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 		runMode,
 		debug,
 		verboseLogs: debug,
-		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, true),
+		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, false),
 		outputToolCallsToIm: parseBooleanFlag(env.FEISHU_BOT_IM_TOOL_CALLS, true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH),
 		outputThinkingToIm: messageOutputMode === "card" ? false : parseBooleanFlag(env.FEISHU_BOT_IM_THINKING, false),

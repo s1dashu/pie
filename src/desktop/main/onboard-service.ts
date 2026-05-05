@@ -1,4 +1,5 @@
 import * as lark from "@larksuiteoapi/node-sdk";
+import { REST, Routes } from "discord.js";
 import type { Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
@@ -46,6 +47,7 @@ import type {
 	AgentOnboardEvent,
 	DesktopManagedRuntimeKind,
 	DesktopManagedRuntimeStatus,
+	DesktopDiscordBotProfile,
 	DesktopFeishuAppCredentials,
 	DesktopCodexDiagnostic,
 	DesktopCodexModelOption,
@@ -59,6 +61,7 @@ import {
 	mergeModelOptions,
 	providersFromModels,
 } from "../shared/model-catalog.js";
+import { readDesktopSettings } from "./desktop-settings.js";
 
 type EmitOnboardEvent = (event: AgentOnboardEvent) => void;
 
@@ -1048,7 +1051,7 @@ export async function createFeishuAppForSession(
 	emit: EmitOnboardEvent,
 ): Promise<DesktopFeishuAppCredentials> {
 	try {
-		emit({ sessionId, type: "status", message: "正在准备扫码授权..." });
+		emit({ sessionId, type: "status", source: "feishu", message: "正在准备扫码授权..." });
 		const result = await lark.registerApp({
 			source: "pie",
 			onQRCodeReady(info) {
@@ -1056,6 +1059,7 @@ export async function createFeishuAppForSession(
 					emit({
 						sessionId,
 						type: "qr",
+						source: "feishu",
 						message: "请使用飞书或 Lark 扫码授权创建 bot",
 						url: info.url,
 						qr,
@@ -1065,9 +1069,9 @@ export async function createFeishuAppForSession(
 			},
 			onStatusChange(info) {
 				if (info.status === "domain_switched") {
-					emit({ sessionId, type: "status", message: "检测到 Lark 租户，已切换注册域名。" });
+					emit({ sessionId, type: "status", source: "feishu", message: "检测到 Lark 租户，已切换注册域名。" });
 				} else if (info.status === "slow_down") {
-					emit({ sessionId, type: "status", message: `授权轮询已放慢${info.interval ? `到 ${info.interval}s` : ""}。` });
+					emit({ sessionId, type: "status", source: "feishu", message: `授权轮询已放慢${info.interval ? `到 ${info.interval}s` : ""}。` });
 				}
 			},
 		});
@@ -1076,7 +1080,7 @@ export async function createFeishuAppForSession(
 			appSecret: result.client_secret,
 			brand: result.user_info?.tenant_brand === "lark" ? "lark" as const : "feishu" as const,
 		};
-		emit({ sessionId, type: "status", message: "正在读取飞书应用名称和头像..." });
+		emit({ sessionId, type: "status", source: "feishu", message: "正在读取飞书应用名称和头像..." });
 		const probe = await LarkClient.fromCredentials({
 			accountId: `desktop-onboard-${sessionId}`,
 			appId: feishu.appId,
@@ -1095,6 +1099,7 @@ export async function createFeishuAppForSession(
 		emit({
 			sessionId,
 			type: "done",
+			source: "feishu",
 			message: syncParts.length
 				? `已创建 ${syncedFeishu.brand === "lark" ? "Lark" : "飞书"} 应用，并同步${syncParts.join("和")}`
 				: `已创建 ${syncedFeishu.brand === "lark" ? "Lark" : "飞书"} 应用，但未从开放平台读取到名称和头像`,
@@ -1103,7 +1108,7 @@ export async function createFeishuAppForSession(
 		return syncedFeishu;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		emit({ sessionId, type: "error", message });
+		emit({ sessionId, type: "error", source: "feishu", message });
 		throw error;
 	}
 }
@@ -1188,6 +1193,57 @@ export async function createWechatLoginForSession(
 	}
 }
 
+function parseDiscordAvatarUrl(userId: string, avatarHash: string | undefined): string | undefined {
+	if (!userId || !avatarHash) {
+		return undefined;
+	}
+	return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.png?size=256`;
+}
+
+export async function fetchDiscordBotProfileForSession(
+	sessionId: string,
+	botToken: string,
+	emit: EmitOnboardEvent,
+): Promise<DesktopDiscordBotProfile> {
+	const token = botToken.trim();
+	if (!token) {
+		throw new Error("Discord Bot Token 必填");
+	}
+	try {
+		emit({ sessionId, type: "status", source: "discord", message: "正在读取 Discord Bot 资料..." });
+		const rest = new REST({ version: "10" }).setToken(token);
+		const user = await rest.get(Routes.user("@me")) as Record<string, unknown>;
+		const id = typeof user.id === "string" ? user.id.trim() : "";
+		const username = typeof user.username === "string" ? user.username.trim() : "";
+		const globalName = typeof user.global_name === "string" ? user.global_name.trim() : "";
+		const avatar = typeof user.avatar === "string" ? user.avatar.trim() : "";
+		const profile: DesktopDiscordBotProfile = {
+			botToken: token,
+			applicationId: id || undefined,
+			botName: globalName || username || undefined,
+			avatarUrl: parseDiscordAvatarUrl(id, avatar),
+		};
+		const syncParts = [
+			profile.botName ? "名称" : undefined,
+			profile.avatarUrl ? "头像" : undefined,
+		].filter(Boolean);
+		emit({
+			sessionId,
+			type: "done",
+			source: "discord",
+			message: syncParts.length
+				? `已同步 Discord Bot ${syncParts.join("和")}`
+				: "Discord Bot Token 可用，但未读取到名称和头像",
+			discord: profile,
+		});
+		return profile;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		emit({ sessionId, type: "error", source: "discord", message });
+		throw error;
+	}
+}
+
 function parseOpenClawGatewayPort(value: unknown): number | undefined {
 	if (typeof value !== "string" || !value.trim()) {
 		return undefined;
@@ -1258,15 +1314,24 @@ async function resolveOpenClawGatewayUrl(): Promise<string> {
 export async function completeAgentCreation(draft: AgentCreationDraft): Promise<void> {
 	const profileId = draft.sessionId;
 	const homeDir = getProfileHomeDir(profileId);
+	const developerMode = readDesktopSettings().developerMode;
 	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
+	if (!developerMode && (draft.harness === "hermes" || draft.harness === "openclaw")) {
+		throw new Error("Hermes 和 OpenClaw 仍在开发中，当前 release 暂不开放。");
+	}
 	const channels = Array.from(new Set(draft.channels)).filter(
 		(channel) =>
 			channel === "feishu" ||
 			channel === "wechat" ||
-			channel === "slack" ||
 			channel === "discord" ||
-			channel === "telegram",
+			(developerMode && (channel === "slack" || channel === "telegram")),
 	);
+	const disabledChannels = draft.channels.filter(
+		(channel) => channel === "slack" || channel === "telegram",
+	);
+	if (!developerMode && disabledChannels.length) {
+		throw new Error("Slack、Telegram 渠道仍在开发中，当前 release 暂不开放。");
+	}
 	if (!channels.length) {
 		throw new Error("至少选择一个 IM 渠道");
 	}
@@ -1303,8 +1368,6 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	const model =
 		draft.harness === "codex"
 			? codexModels.find((item) => item.id === requestedModel)?.id ?? codexModels[0]?.id ?? "gpt-5.5"
-			: draft.harness === "hermes"
-				? requestedModel
 			: requestedModel;
 	const apiKey = draft.apiKey?.trim();
 	if (provider === "pie-openai-proxy") {
@@ -1334,11 +1397,11 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 					}
 				: draft.harness === "hermes"
 					? {
-								config: {
-									endpoint: `http://127.0.0.1:${hermesApiServerPort}`,
-									runPath: "/v1/runs",
-									healthPath: "/health",
-									command: "hermes",
+							config: {
+								endpoint: `http://127.0.0.1:${hermesApiServerPort}`,
+								runPath: "/v1/runs",
+								healthPath: "/health",
+								command: "hermes",
 								args: ["gateway", "run", "--replace"],
 								managed: true,
 							},
@@ -1357,7 +1420,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 				thinkingLevel: draft.thinkingLevel as ThinkingLevel,
 				tools: exModel?.tools ?? "coding",
 				debug: exModel?.debug ?? false,
-				resumeSessions: false,
+				resumeSessions: draft.resumeSessions ?? false,
 				outputToolCallsToIm: true,
 				outputToolCallImMaxLength: 60,
 				outputThinkingToIm: false,
@@ -1462,7 +1525,12 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	}
 	upsertAgentEnv(savedEnv, homeDir);
 	registerProfileHome(profileId, {
-		displayName: draft.feishu?.appName?.trim() || draft.telegram?.botUsername?.trim() || draft.name?.trim() || profileId,
+		displayName:
+			draft.feishu?.appName?.trim() ||
+			draft.discord?.botName?.trim() ||
+			draft.telegram?.botUsername?.trim() ||
+			draft.name?.trim() ||
+			profileId,
 		desiredState: "paused",
 		selected: true,
 	});

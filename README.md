@@ -1,13 +1,13 @@
 # Pie
 
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
-![Desktop first](https://img.shields.io/badge/focus-desktop%20first-4F7A8A)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
+![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat-4F7A8A)
 
 Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels.
 
-The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel, while Ousia, WeChat, Codex, Hermes, Slack, Discord, Telegram, and Openclaw remain early or experimental integration surfaces.
+The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel. WeChat is early, overseas IM channels are still in development, Hermes and OpenClaw are not exposed in the release UI yet, and Ousia/Codex remain experimental integration surfaces.
 
 [![Pie product demo](docs/assets/pie-product-demo-cover.png)](docs/assets/pie-product-demo.mp4)
 
@@ -36,7 +36,7 @@ Pie is organized around a small set of boundaries:
 1. **Desktop app**: manage Agents, channels, models, logs, folders, Skills, and global preferences.
 2. **Runtime**: start one profile/Agent instance with its selected channels and harness capability.
 3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, Openclaw, and future backends into Pie's session and event surface.
-4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, Slack, Discord, Telegram, and future adapters.
+4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, and future adapters.
 
 ## Status
 
@@ -48,7 +48,7 @@ The most complete path today is:
 Desktop app -> Pi Agent Harness -> Feishu/Lark channel
 ```
 
-WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Slack, Discord, Telegram, Codex, Hermes, and Openclaw have integration surfaces in the repo, but are not first-class stable release paths yet.
+WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Overseas IM channels, Hermes, and OpenClaw are still in development. Codex has integration surfaces in the repo, but is not a first-class stable release path yet.
 
 Ousia's Task Engine is prototype-level. It is useful for exploring scheduled or longer-running Agent work, but should not be used for critical automation.
 

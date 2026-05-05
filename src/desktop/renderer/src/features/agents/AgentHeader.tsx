@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	AltArrowDownLineDuotone,
 	CheckCircleBoldDuotone,
@@ -43,9 +43,13 @@ export function AgentHeader({
 	onPause,
 	showFeishuCredentialInvalidated,
 	showWechatReauthorize,
+	isReauthorizingFeishu,
 	isReauthorizingWechat,
 	showRestartConfigHint,
+	isRestartingConfig,
+	onOpenFeishuReauthorize,
 	onOpenWechatReauthorize,
+	onRestartConfig,
 	onReveal,
 	onDelete,
 	deleteError,
@@ -61,9 +65,13 @@ export function AgentHeader({
 	onPause: () => void;
 	showFeishuCredentialInvalidated: boolean;
 	showWechatReauthorize: boolean;
+	isReauthorizingFeishu: boolean;
 	isReauthorizingWechat: boolean;
 	showRestartConfigHint: boolean;
+	isRestartingConfig: boolean;
+	onOpenFeishuReauthorize: () => void;
 	onOpenWechatReauthorize: () => void;
+	onRestartConfig: () => void;
 	onReveal: () => void;
 	onDelete: () => void;
 	deleteError?: string;
@@ -76,10 +84,48 @@ export function AgentHeader({
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const triggerRef = useRef<HTMLElement | null>(null);
 	const contentRef = useRef<HTMLDivElement | null>(null);
+	const onSaveNameRef = useRef(onSaveName);
+	const openRef = useRef(open);
+
+	useEffect(() => {
+		onSaveNameRef.current = onSaveName;
+	}, [onSaveName]);
+
+	useEffect(() => {
+		openRef.current = open;
+	}, [open]);
+
+	const commitNameDraft = useCallback(() => {
+		const nextName = nameDraft.trim();
+		if (!nextName) {
+			setNameDraft(agent.name);
+			return;
+		}
+		if (nextName !== agent.name) {
+			onSaveNameRef.current(nextName);
+		}
+	}, [agent.name, nameDraft]);
+
+	const setAgentInfoOpen = useCallback((nextOpen: boolean) => {
+		if (!nextOpen && !openRef.current) {
+			return;
+		}
+		if (!nextOpen) {
+			commitNameDraft();
+		}
+		openRef.current = nextOpen;
+		setOpen(nextOpen);
+	}, [commitNameDraft]);
 
 	useEffect(() => {
 		setNameDraft(agent.name);
-	}, [agent.id, agent.name]);
+	}, [agent.id]);
+
+	useEffect(() => {
+		if (!open) {
+			setNameDraft(agent.name);
+		}
+	}, [agent.name, open]);
 
 	useEffect(() => {
 		return window.pie.onAgentDeleteEvent((event) => {
@@ -108,7 +154,7 @@ export function AgentHeader({
 			if (triggerRef.current?.contains(target) || contentRef.current?.contains(target)) {
 				return;
 			}
-			setOpen(false);
+			setAgentInfoOpen(false);
 		};
 		window.addEventListener("pointerdown", closeOnOutsideInteraction, true);
 		window.addEventListener("click", closeOnOutsideInteraction, true);
@@ -118,19 +164,28 @@ export function AgentHeader({
 			window.removeEventListener("click", closeOnOutsideInteraction, true);
 			window.removeEventListener("focusin", closeOnOutsideInteraction, true);
 		};
-	}, [open]);
+	}, [open, setAgentInfoOpen]);
 
 	const saveName = () => {
-		const nextName = nameDraft.trim();
-		if (!nextName) {
-			setNameDraft(agent.name);
+		commitNameDraft();
+	};
+
+	useEffect(() => {
+		if (!open || isSaving) {
 			return;
 		}
-		if (nextName !== agent.name) {
-			onSaveName(nextName);
+		const nextName = nameDraft.trim();
+		if (!nextName || nextName === agent.name) {
+			return;
 		}
-		setOpen(false);
-	};
+		const timer = window.setTimeout(() => {
+			onSaveNameRef.current(nextName);
+		}, 600);
+		return () => window.clearTimeout(timer);
+	}, [agent.name, isSaving, nameDraft, open]);
+
+	const trimmedNameDraft = nameDraft.trim();
+	const hasPendingName = Boolean(trimmedNameDraft) && trimmedNameDraft !== agent.name;
 	const handleAvatarFile = (file: File | undefined) => {
 		if (!file) {
 			return;
@@ -149,6 +204,8 @@ export function AgentHeader({
 		agent.runtimeEnvironment?.lifecycle.state === "failed" &&
 		agent.status !== "running" &&
 		agent.status !== "starting";
+	const statusActionClassName =
+		"no-drag min-w-16 rounded-full bg-[var(--amber-3)] text-[var(--amber-11)] shadow-none transition-[background-color,color,transform] hover:bg-[var(--amber-4)] hover:text-[var(--amber-12)] active:scale-[0.96]";
 
 	return (
 		<div className={`${open ? "no-drag" : "drag-region"} shrink-0 bg-white px-7 pb-2 pt-5`}>
@@ -164,7 +221,7 @@ export function AgentHeader({
 			/>
 			<div className="flex items-center justify-between gap-4">
 				<div className="flex min-w-0 items-center gap-2">
-					<Popover open={open} onOpenChange={setOpen}>
+					<Popover open={open} onOpenChange={setAgentInfoOpen}>
 						<PopoverTrigger
 							render={
 								<Button
@@ -219,6 +276,7 @@ export function AgentHeader({
 											onChange={(event) => setNameDraft(event.target.value)}
 											onKeyDown={(event) => {
 												if (event.key === "Enter") {
+													event.currentTarget.blur();
 													saveName();
 												}
 												if (event.key === "Escape") {
@@ -229,33 +287,39 @@ export function AgentHeader({
 										/>
 									</label>
 								</div>
-							<div className="flex justify-end">
-								<Button
-									size="sm"
-									className="rounded-2xl"
-									onClick={saveName}
-									disabled={isSaving || !nameDraft.trim()}
-								>
-									{isSaving && <AppIcon IconComponent={RestartCircleBoldDuotone} className="size-4 animate-spin" />}
-									{t("saveName")}
-								</Button>
+							<div className="flex justify-end text-xs font-medium text-muted-foreground">
+								{isSaving || hasPendingName ? (
+									<span className="inline-flex items-center gap-1.5">
+										<AppIcon IconComponent={RestartCircleBoldDuotone} className="size-3.5 animate-spin" />
+										{t("savingChanges")}
+									</span>
+								) : (
+									<span>{t("autoSaveName")}</span>
+								)}
 							</div>
 						</div>
 					</PopoverContent>
 					</Popover>
 					{showFeishuCredentialInvalidated ? (
 						<AceternityTooltip content={t("feishuCredentialInvalidated")} side="bottom">
-							<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)]">
+							<Button
+								type="button"
+								variant="unstyled"
+								size="small"
+								className={statusActionClassName}
+								onClick={onOpenFeishuReauthorize}
+								disabled={isReauthorizingFeishu}
+							>
 								{t("feishuCredentialInvalidatedShort")}
-							</span>
+							</Button>
 						</AceternityTooltip>
 					) : showWechatReauthorize ? (
 						<AceternityTooltip content={t("wechatExpired")} side="bottom">
 							<Button
 								type="button"
 								variant="unstyled"
-								size="inline"
-								className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)] shadow-none transition-[background-color,color,transform] hover:bg-[var(--amber-4)] hover:text-[var(--amber-12)] active:scale-[0.96]"
+								size="small"
+								className={statusActionClassName}
 								onClick={onOpenWechatReauthorize}
 								disabled={isReauthorizingWechat}
 							>
@@ -263,9 +327,17 @@ export function AgentHeader({
 							</Button>
 						</AceternityTooltip>
 					) : showRestartConfigHint ? (
-						<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--amber-3)] px-2.5 text-[11px] font-medium text-[var(--amber-11)]">
+						<Button
+							type="button"
+							variant="unstyled"
+							size="small"
+							className="no-drag rounded-full bg-[var(--amber-3)] text-[var(--amber-11)] shadow-none transition-[background-color,color,transform] hover:bg-[var(--amber-4)] hover:text-[var(--amber-12)] active:scale-[0.96]"
+							onClick={onRestartConfig}
+							disabled={isRestartingConfig}
+						>
+							{isRestartingConfig ? <AppIcon IconComponent={RestartCircleBoldDuotone} className="size-3 animate-spin" /> : null}
 							{t("restartAppliesLatestConfig")}
-						</span>
+						</Button>
 					) : showRuntimeUnavailable ? (
 						<span className="no-drag inline-flex h-7 shrink-0 items-center rounded-full bg-[var(--red-3)] px-2.5 text-[11px] font-medium text-[var(--red-11)]">
 							{t("runtimeUnavailable")}

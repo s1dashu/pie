@@ -20,16 +20,39 @@
     "SECURITY.md",
     "LICENSE"
   ],
+  "build": {
+    "files": [
+      "dist/**/*.js",
+      "dist/frameworks/ousia/docs/**",
+      "dist/frameworks/ousia/prompts/**",
+      "out/**",
+      "resources/**",
+      "package.json",
+      "!src/**",
+      "!docs/**",
+      "!tasks/**",
+      "!AGENTS.md",
+      "!DESIGN.md",
+      "!README.md",
+      "!CODE_OF_CONDUCT.md",
+      "!CONTRIBUTING.md",
+      "!SECURITY.md",
+      "!config.json",
+      "!electron.vite.config.ts",
+      "!package-lock.json",
+      "!tsconfig*.json"
+    ]
+  },
   "scripts": {
     "clean": "shx rm -rf dist",
     "check": "tsc --noEmit -p tsconfig.json",
-    "build": "tsc -p tsconfig.json && shx mkdir -p dist/frameworks/ousia && shx cp -r src/frameworks/ousia/prompts dist/frameworks/ousia/ && shx cp -r src/frameworks/ousia/docs dist/frameworks/ousia/ && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js && shx chmod +x dist/channels/wechat/main.js && shx chmod +x dist/channels/slack/main.js && shx chmod +x dist/channels/discord/main.js && shx chmod +x dist/channels/telegram/main.js",
+    "build": "shx rm -rf dist && tsc -p tsconfig.json && shx mkdir -p dist/frameworks/ousia && shx cp -r src/frameworks/ousia/prompts dist/frameworks/ousia/ && shx cp -r src/frameworks/ousia/docs dist/frameworks/ousia/ && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js && shx chmod +x dist/channels/wechat/main.js && shx chmod +x dist/channels/slack/main.js && shx chmod +x dist/channels/discord/main.js && shx chmod +x dist/channels/telegram/main.js",
     "start": "tsx src/cli/index.ts",
     "start:onboard": "tsx src/cli/index.ts --onboard",
     "dev": "PIE_RUN_MODE=dev tsx src/cli/index.ts",
     "dev:onboard": "PIE_RUN_MODE=dev tsx src/cli/index.ts --onboard",
     "desktop:dev": "electron-vite dev",
-    "desktop:build": "electron-vite build",
+    "desktop:build": "npm run build && electron-vite build",
     "desktop:start": "electron ."
   },
   "dependencies": {

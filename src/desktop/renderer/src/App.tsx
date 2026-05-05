@@ -227,7 +227,7 @@ export function App(): JSX.Element {
 function QuitOverlay(): JSX.Element {
 	const { t } = useI18n();
 	return (
-		<div className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-white px-6 text-center">
+		<div className="app-shell-overlay no-drag inset-0 flex items-center justify-center bg-white px-6 text-center">
 			<div className="flex items-center gap-2.5 text-base font-medium leading-6 text-foreground">
 				<span className="grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
 					<Spinner size={18} color="var(--slate-11)" />

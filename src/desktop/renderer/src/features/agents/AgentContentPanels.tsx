@@ -41,6 +41,8 @@ export function AgentContentPanels({
 	isLoadingSkillSources,
 	openingSkillSourceId,
 	isSyncingFeishu,
+	isSyncingDiscord,
+	isReauthorizingFeishu,
 	isReauthorizingWechat,
 	onUpdateField,
 	onUpdateProviderSelection,
@@ -49,6 +51,8 @@ export function AgentContentPanels({
 	onOpenSkillFolder,
 	onUpdateChannelField,
 	onSyncFeishu,
+	onSyncDiscord,
+	onReauthorizeFeishu,
 	onReauthorizeWechat,
 }: {
 	activeTab: AgentTab;
@@ -69,6 +73,8 @@ export function AgentContentPanels({
 	isLoadingSkillSources: boolean;
 	openingSkillSourceId?: string;
 	isSyncingFeishu: boolean;
+	isSyncingDiscord: boolean;
+	isReauthorizingFeishu: boolean;
 	isReauthorizingWechat: boolean;
 	onUpdateField: (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => void;
 	onUpdateProviderSelection: (provider: string) => void;
@@ -77,6 +83,8 @@ export function AgentContentPanels({
 	onOpenSkillFolder: (sourceId: string, skillName: string) => void;
 	onUpdateChannelField: (field: keyof AgentDraft, value: AgentDraft[keyof AgentDraft]) => void;
 	onSyncFeishu: () => void;
+	onSyncDiscord: () => void;
+	onReauthorizeFeishu: () => void;
 	onReauthorizeWechat: () => void;
 }): JSX.Element {
 	const { language, t } = useI18n();
@@ -104,26 +112,33 @@ export function AgentContentPanels({
 	const usesFeishuMessageCard = hasFeishuChannel && (channelDraft.feishuMessageOutputMode ?? "bubble") === "card";
 	const totalCacheTokens = usage.total.cacheReadTokens + usage.total.cacheWriteTokens;
 	const inputTokensWithCache = usage.total.inputTokens + totalCacheTokens;
+	const showsTokenUsage = supportsTokenUsage(agent.harnessKind);
 	const hasTokenBreakdown = inputTokensWithCache > 0 || usage.total.outputTokens > 0;
 	const tokenUsageHint = hasTokenBreakdown
 		? `${formatTokenCount(inputTokensWithCache)} / ${formatTokenCount(usage.total.outputTokens)}`
-		: t("tokenTotalCount", { count: formatTokenCount(usage.total.tokens) });
+		: usage.tokenUsageSource === "actual"
+			? t("reportedByModel")
+			: usage.tokenUsageSource === "estimated"
+				? t("estimatedTokenUsage")
+				: t("noUsageData");
 
 	return (
 		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
 			{activeTab === "overview" ? (
 				<div className="mx-auto max-w-6xl space-y-4">
-					<div className="grid grid-cols-4 gap-4 max-[760px]:gap-3 max-[560px]:grid-cols-2">
+					<div className={cn("grid gap-4 max-[760px]:gap-3 max-[560px]:grid-cols-2", showsTokenUsage ? "grid-cols-4" : "grid-cols-3")}>
 						<UsageMetric
 							label={t("messageCount")}
 							value={formatCount(totalMessages, language)}
 							hint={messageDirectionHint}
 						/>
-						<UsageMetric
-							label={t("tokenUsage")}
-							value={formatTokenCountCompact(usage.total.tokens)}
-							hint={tokenUsageHint}
-						/>
+						{showsTokenUsage ? (
+							<UsageMetric
+								label={t("tokenUsage")}
+								value={formatTokenCountCompact(usage.total.tokens)}
+								hint={tokenUsageHint}
+							/>
+						) : null}
 						<UsageMetric
 							label={t("runDuration")}
 							value={formatDuration(usage.total.runDurationMs)}
@@ -214,6 +229,17 @@ export function AgentContentPanels({
 								</SelectContent>
 							</Select>
 						</Field>
+						<label className="flex cursor-pointer items-start gap-3 py-2.5">
+							<Checkbox
+								checked={!(draft.resumeSessions ?? false)}
+								onCheckedChange={(checked) => onUpdateField("resumeSessions", !checked)}
+								className="mt-0.5"
+							/>
+							<span className="min-w-0 flex-1">
+								<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("startFreshOnRestart")}</span>
+								<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("startFreshOnRestartDesc")}</span>
+							</span>
+						</label>
 						{!usesCodexCli ? (
 							<Field label="API Key">
 								<SecretInput
@@ -266,8 +292,8 @@ export function AgentContentPanels({
 									<Button
 										type="button"
 										variant="secondary"
-										size="sm"
-										className="h-9 shrink-0 gap-1.5 rounded-4xl transition-[background-color,box-shadow,transform] active:scale-[0.96]"
+										size="small"
+										className="shrink-0 rounded-full transition-[background-color,box-shadow,transform] active:scale-[0.96]"
 										disabled={isSyncingFeishu}
 										onClick={onSyncFeishu}
 									>
@@ -277,9 +303,16 @@ export function AgentContentPanels({
 								</AceternityTooltip>
 							</div>
 							{isFeishuCredentialInvalidated ? (
-								<div className="rounded-2xl border border-[var(--amber-6)] bg-[var(--amber-3)] px-3 py-2 text-xs leading-5 text-[var(--amber-11)]">
+								<Button
+									type="button"
+									variant="unstyled"
+									size="inline"
+									className="h-auto w-full justify-start rounded-2xl border border-[var(--amber-6)] bg-[var(--amber-3)] px-3 py-2 text-left text-xs leading-5 text-[var(--amber-11)] transition-[background-color,border-color,color,transform] hover:border-[var(--amber-7)] hover:bg-[var(--amber-4)] hover:text-[var(--amber-12)] active:scale-[0.99]"
+									onClick={onReauthorizeFeishu}
+									disabled={isReauthorizingFeishu}
+								>
 									{t("feishuCredentialInvalidatedDesc")}
-								</div>
+								</Button>
 							) : null}
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="App ID">
@@ -312,8 +345,8 @@ export function AgentContentPanels({
 									<Button
 										type="button"
 										variant="secondary"
-										size="sm"
-										className="h-9 shrink-0 gap-1.5 rounded-4xl transition-[background-color,box-shadow,transform] active:scale-[0.96]"
+										size="small"
+										className="shrink-0 rounded-full transition-[background-color,box-shadow,transform] active:scale-[0.96]"
 										disabled={isReauthorizingWechat}
 										onClick={onReauthorizeWechat}
 									>
@@ -353,7 +386,22 @@ export function AgentContentPanels({
 					) : null}
 					{hasDiscordChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
-							<SectionTitle title="Discord" description={t("discordDesc")} />
+							<div className="flex items-start justify-between gap-4">
+								<SectionTitle title="Discord" description={t("discordDesc")} />
+								<AceternityTooltip content={t("syncDiscordProfile")}>
+									<Button
+										type="button"
+										variant="secondary"
+										size="small"
+										className="shrink-0 rounded-full transition-[background-color,box-shadow,transform] active:scale-[0.96]"
+										disabled={isSyncingDiscord || !channelDraft.discordBotToken?.trim()}
+										onClick={onSyncDiscord}
+									>
+										<AppIcon IconComponent={RestartCircleBoldDuotone} className={cn("size-4", isSyncingDiscord ? "animate-spin" : "")} />
+										<span>{isSyncingDiscord ? t("fetching") : t("fetch")}</span>
+									</Button>
+								</AceternityTooltip>
+							</div>
 							<Field label="Bot Token">
 								<SecretInput value={channelDraft.discordBotToken ?? ""} onChange={(event) => onUpdateChannelField("discordBotToken", event.target.value)} />
 							</Field>
@@ -458,6 +506,10 @@ export function AgentContentPanels({
 			) : null}
 		</div>
 	);
+}
+
+function supportsTokenUsage(harnessKind: AgentDetails["harnessKind"]): boolean {
+	return harnessKind !== "openclaw";
 }
 
 function SystemPromptCard({

@@ -252,7 +252,7 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		runMode: env.PIE_RUN_MODE === "dev" ? "dev" : "start",
 		debug: parseBooleanFlag(env[`${options.envPrefix}_BOT_DEBUG`], false),
 		verboseLogs: parseBooleanFlag(env[`${options.envPrefix}_BOT_DEBUG`], false),
-		resumeSessions: parseBooleanFlag(env[`${options.envPrefix}_BOT_RESUME_SESSIONS`], true),
+		resumeSessions: parseBooleanFlag(env[`${options.envPrefix}_BOT_RESUME_SESSIONS`], false),
 		outputToolCallsToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_TOOL_CALLS`], true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env[`${options.envPrefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`]),
 		outputThinkingToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_THINKING`], false),

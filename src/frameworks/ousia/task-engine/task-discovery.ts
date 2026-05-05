@@ -127,6 +127,7 @@ export function parseTaskSpec(raw: unknown): { execTask?: ExecTaskSpec; agentTas
 				...record,
 				prompt,
 				sessionKey: typeof action?.sessionKey === "string" ? action.sessionKey : record.sessionKey,
+				deliveryMode: action?.deliveryMode ?? record.deliveryMode,
 				deleteAfterRun: action?.deleteAfterRun ?? record.deleteAfterRun,
 			}),
 		};

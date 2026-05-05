@@ -67,6 +67,7 @@ export interface AgentDetails extends AgentSummary {
 		provider?: string;
 		model?: string;
 		thinkingLevel?: string;
+		resumeSessions?: boolean;
 		outputToolCallsToIm?: boolean;
 		outputToolCallImMaxLength?: 60 | 100 | 200 | "none";
 		outputThinkingToIm?: boolean;
@@ -92,6 +93,7 @@ export interface DesktopSettings {
 	restoreRunningAgentsOnLaunch: boolean;
 	openAtLogin: boolean;
 	keepAwakeWhileOpen: boolean;
+	developerMode: boolean;
 	runtimeLogRetention: DesktopLogRetention;
 	usageEventRetention: DesktopLogRetention;
 	appearanceGrayHue?: number;
@@ -106,6 +108,7 @@ export type DesktopSettingsDraft = Partial<
 		| "restoreRunningAgentsOnLaunch"
 		| "openAtLogin"
 		| "keepAwakeWhileOpen"
+		| "developerMode"
 		| "runtimeLogRetention"
 		| "usageEventRetention"
 		| "appearanceGrayHue"
@@ -117,6 +120,7 @@ export interface AgentDraft {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: DesktopThinkingLevel;
+	resumeSessions?: boolean;
 	outputToolCallsToIm?: boolean;
 	outputToolCallImMaxLength?: 60 | 100 | 200 | "none";
 	outputThinkingToIm?: boolean;
@@ -228,6 +232,13 @@ export interface DesktopWechatCredentials {
 	userId?: string;
 }
 
+export interface DesktopDiscordBotProfile {
+	botToken: string;
+	applicationId?: string;
+	botName?: string;
+	avatarUrl?: string;
+}
+
 export interface AgentCreationDraft {
 	sessionId: string;
 	harness: DesktopAgentHarness;
@@ -244,6 +255,8 @@ export interface AgentCreationDraft {
 		botToken: string;
 		applicationId?: string;
 		guildId?: string;
+		botName?: string;
+		avatarUrl?: string;
 	};
 	telegram?: {
 		botToken: string;
@@ -252,6 +265,7 @@ export interface AgentCreationDraft {
 	provider: string;
 	model: string;
 	thinkingLevel: DesktopThinkingLevel;
+	resumeSessions?: boolean;
 	apiKey?: string;
 	codexSandboxMode?: DesktopCodexSandboxMode;
 	codexWebSearchMode?: DesktopCodexWebSearchMode;
@@ -260,13 +274,14 @@ export interface AgentCreationDraft {
 export interface AgentOnboardEvent {
 	sessionId: string;
 	type: AgentOnboardEventType;
-	source?: "codex-install" | "codex-login" | "feishu" | "hermes-install" | "wechat";
+	source?: "codex-install" | "codex-login" | "discord" | "feishu" | "hermes-install" | "wechat";
 	message?: string;
 	url?: string;
 	qr?: string;
 	expiresIn?: number;
 	feishu?: DesktopFeishuAppCredentials;
 	wechat?: DesktopWechatCredentials;
+	discord?: DesktopDiscordBotProfile;
 }
 
 export interface AgentDeleteEvent {
@@ -312,6 +327,7 @@ export interface AgentUsageStats {
 	total: UsageBucket;
 	currentRun: UsageBucket;
 	recentDays: AgentUsageDailyPoint[];
+	tokenUsageSource: "actual" | "estimated" | "none";
 	averageTtfsMs?: number;
 	runningSince?: string;
 	updatedAt: string;
@@ -372,12 +388,16 @@ export interface PieDesktopApi {
 	uninstallManagedRuntime(kind: DesktopManagedRuntimeKind): Promise<DesktopManagedRuntimeStatus>;
 	createFeishuApp(sessionId: string): Promise<DesktopFeishuAppCredentials>;
 	createWechatLogin(sessionId: string): Promise<DesktopWechatCredentials>;
+	fetchDiscordBotProfile(sessionId: string, botToken: string): Promise<DesktopDiscordBotProfile>;
 	syncFeishuAppProfile(id: string): Promise<AgentDetails>;
+	syncDiscordBotProfile(id: string, botToken?: string): Promise<AgentDetails>;
+	reauthorizeFeishu(id: string): Promise<AgentDetails>;
 	reauthorizeWechat(id: string): Promise<AgentDetails>;
 	completeAgentCreation(draft: AgentCreationDraft): Promise<AgentDetails>;
 	getAgent(id: string): Promise<AgentDetails>;
 	updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>;
 	startAgent(id: string): Promise<AgentDetails>;
+	restartAgent(id: string): Promise<AgentDetails>;
 	pauseAgent(id: string): Promise<AgentDetails>;
 	deleteAgent(id: string): Promise<void>;
 	openAgentInEditor(id: string): Promise<void>;

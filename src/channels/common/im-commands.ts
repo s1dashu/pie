@@ -53,7 +53,7 @@ export async function handleImCommand(command: ImCommand, options: HandleImComma
 	}
 	try {
 		await options.sessionPool.resetSession(options.conversationKey);
-		await options.reply("已开启新会话。下一条消息会从干净上下文开始。");
+		await options.reply("已开启新会话。");
 	} catch (error) {
 		await options.reply(`开启新会话失败：${formatError(error)}`);
 	}

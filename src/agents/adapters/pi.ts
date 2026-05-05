@@ -1,5 +1,5 @@
 import { SessionPool as PiSessionPool } from "./pi/session.js";
-import { getAgentRoundInputText } from "../types.js";
+import { forwardPiPrompt } from "./pi/prompt-input.js";
 import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
@@ -27,7 +27,7 @@ function withCapabilities(session: AgentConversationSession): AgentConversationS
 			return session.state;
 		},
 		prompt(input: AgentRoundInputLike) {
-			return session.prompt(getAgentRoundInputText(input));
+			return forwardPiPrompt(session, input);
 		},
 		abort() {
 			return session.abort();
@@ -42,6 +42,7 @@ function withCapabilities(session: AgentConversationSession): AgentConversationS
 class PiAdapterSessionPool implements AgentConversationSessionPool {
 	readonly capabilities = PI_CAPABILITIES;
 	private readonly pool: PiSessionPool;
+	private readonly wrappedSessions = new WeakMap<AgentConversationSession, AgentConversationSession>();
 
 	constructor(options: AgentSessionRuntimeOptions) {
 		this.pool = new PiSessionPool({
@@ -58,7 +59,13 @@ class PiAdapterSessionPool implements AgentConversationSessionPool {
 
 	async getSession(conversationKey: string): Promise<AgentConversationSession> {
 		const session = (await this.pool.getSession(conversationKey)) as unknown as AgentConversationSession;
-		return session.capabilities ? session : withCapabilities(session);
+		const existing = this.wrappedSessions.get(session);
+		if (existing) {
+			return existing;
+		}
+		const wrapped = withCapabilities(session);
+		this.wrappedSessions.set(session, wrapped);
+		return wrapped;
 	}
 
 	compactSession(conversationKey: string): Promise<{ summary?: string }> {

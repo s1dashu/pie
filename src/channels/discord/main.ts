@@ -9,16 +9,23 @@ import {
 	Partials,
 	type Message,
 } from "discord.js";
+import chalk from "chalk";
 import { TextChannelRuntime } from "../common/text-channel-runtime.js";
 import type { IncomingChannelMessage, TextChannelAdapter } from "../common/channel-model.js";
 import { ChannelTokenLock } from "../common/token-lock.js";
 import { loadConfig, type DiscordBotConfig } from "./config.js";
+import { buildDiscordMessageParts } from "./messages.js";
 
-function stripDiscordMention(text: string, botId: string | undefined): string {
-	if (!botId) {
-		return text.trim();
+function mentionedBotRole(message: Message, botId: string | undefined): string[] {
+	if (!botId || !message.guild) {
+		return [];
 	}
-	return text.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
+	const botRoleIds = new Set(
+		message.guild.members.me?.roles.cache
+			.filter((role) => role.tags?.botId === botId)
+			.map((role) => role.id) ?? [],
+	);
+	return [...message.mentions.roles.keys()].filter((roleId) => botRoleIds.has(roleId));
 }
 
 class DiscordAdapter implements TextChannelAdapter {
@@ -72,29 +79,36 @@ class DiscordAdapter implements TextChannelAdapter {
 	}
 
 	private toIncomingMessage(message: Message): IncomingChannelMessage | undefined {
-		if (message.author.bot) {
-			return undefined;
-		}
 		const botId = this.client.user?.id;
-		const isDirectMessage = message.channel.type === ChannelType.DM;
-		const mentioned = botId ? message.mentions.users.has(botId) : false;
-		if (!isDirectMessage && !mentioned) {
+		if (message.author.bot) {
+			if (this.config.verboseLogs && message.author.id !== botId) {
+				this.logIgnoredMessage(message, "author_bot");
+			}
 			return undefined;
 		}
-		const text = stripDiscordMention(message.content, botId);
-		const parts: IncomingChannelMessage["parts"] = text ? [{ type: "text", text }] : [];
-		for (const attachment of message.attachments.values()) {
-			if (attachment.contentType?.startsWith("image/")) {
-				parts.push({ type: "image", url: attachment.url, mimeType: attachment.contentType });
-			} else {
-				parts.push({
-					type: "file",
-					url: attachment.url,
-					name: attachment.name,
-					mimeType: attachment.contentType ?? undefined,
-				});
-			}
+		const isDirectMessage = message.channel.type === ChannelType.DM;
+		const botRoleIds = mentionedBotRole(message, botId);
+		const mentioned = botId ? message.mentions.users.has(botId) || botRoleIds.length > 0 : false;
+		if (this.config.discord.guildId && message.guildId && message.guildId !== this.config.discord.guildId) {
+			this.logIgnoredMessage(message, "guild_mismatch");
+			return undefined;
 		}
+		if (!isDirectMessage && !mentioned) {
+			if (this.config.verboseLogs) {
+				this.logIgnoredMessage(message, "not_mentioned");
+			}
+			return undefined;
+		}
+		const parts = buildDiscordMessageParts({
+			content: message.content,
+			botId,
+			botRoleIds,
+			attachments: [...message.attachments.values()].map((attachment) => ({
+				name: attachment.name,
+				url: attachment.url,
+				contentType: attachment.contentType,
+			})),
+		});
 		return {
 			id: `discord:${message.id}`,
 			channel: "discord",
@@ -105,6 +119,14 @@ class DiscordAdapter implements TextChannelAdapter {
 			isDirectMessage,
 			senderId: message.author.id,
 		};
+	}
+
+	private logIgnoredMessage(message: Message, reason: string): void {
+		const guild = message.guildId ?? "dm";
+		const channel = message.channel.id;
+		const author = message.author.id;
+		const mentions = [...message.mentions.users.keys()].join(",") || "none";
+		console.log(chalk.gray(`Discord message ignored: ${reason} guild=${guild} channel=${channel} author=${author} mentions=${mentions}`));
 	}
 }
 

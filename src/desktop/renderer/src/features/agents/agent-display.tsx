@@ -130,6 +130,7 @@ export function emptyUsage(): AgentUsageStats {
 		total: { ...emptyBucket },
 		currentRun: { ...emptyBucket },
 		recentDays: [],
+		tokenUsageSource: "none",
 		averageTtfsMs: undefined,
 		updatedAt: new Date(0).toISOString(),
 	};

@@ -17,6 +17,8 @@ import { loadConfig as loadDiscordConfig } from "../channels/discord/config.js";
 import { createDiscordBotRuntime } from "../channels/discord/main.js";
 import { loadConfig as loadTelegramConfig } from "../channels/telegram/config.js";
 import { createTelegramBotRuntime } from "../channels/telegram/main.js";
+import { readDesktopSettings } from "../desktop/main/desktop-settings.js";
+import { ensureDailySessionDistillationTask } from "../frameworks/ousia/runtime/session-distillation.js";
 import type { AgentTurnPort, ManagedRuntime } from "./types.js";
 
 function readPort(value: string | undefined, defaultValue: number): number {
@@ -49,6 +51,7 @@ interface RuntimePlan {
 
 function createChannelRuntimes(channelKinds: ChannelKind[]): ChannelRuntime[] {
 	const runtimes: ChannelRuntime[] = [];
+	const developerMode = readDesktopSettings().developerMode;
 	for (const kind of channelKinds) {
 		if (kind === "feishu") {
 			runtimes.push(createFeishuBotRuntime(loadConfig()));
@@ -58,16 +61,20 @@ function createChannelRuntimes(channelKinds: ChannelKind[]): ChannelRuntime[] {
 			runtimes.push(createWechatBotRuntime(loadWechatConfig()));
 			continue;
 		}
-		if (kind === "slack") {
+		if (developerMode && kind === "slack") {
 			runtimes.push(createSlackBotRuntime(loadSlackConfig()));
 			continue;
 		}
-		if (kind === "discord") {
+		if (developerMode && kind === "discord") {
 			runtimes.push(createDiscordBotRuntime(loadDiscordConfig()));
 			continue;
 		}
-		if (kind === "telegram") {
+		if (developerMode && kind === "telegram") {
 			runtimes.push(createTelegramBotRuntime(loadTelegramConfig()));
+			continue;
+		}
+		if (kind === "slack" || kind === "discord" || kind === "telegram") {
+			console.warn(`[runtime] ${kind} channel is still in development and is disabled for this release.`);
 		}
 	}
 	return runtimes;
@@ -84,6 +91,9 @@ function createRuntimePlan(): RuntimePlan {
 	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
 	const harness = harnessDefinition.harnessRuntime;
 	harness.ensureAgentHomeLayout?.(homeDir);
+	if (harnessDefinition.kind === "ousia") {
+		ensureDailySessionDistillationTask(homeDir);
+	}
 	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
 	const channelKinds: ChannelKind[] = enabledChannels.length
 		? enabledChannels.map((channel) => channel.kind)
@@ -150,6 +160,7 @@ export async function runPie(): Promise<number> {
 				onTurn: (request) => primaryRuntime.deliverTurn(request),
 			})
 		: undefined;
+	const keepAlive = setInterval(() => undefined, 60_000);
 
 	const stopRuntime = (code: number): void => {
 		for (const runtime of channelRuntimes) {
@@ -193,6 +204,7 @@ export async function runPie(): Promise<number> {
 		}
 		process.off("SIGINT", onSigint);
 		process.off("SIGTERM", onSigterm);
+		clearInterval(keepAlive);
 		taskEngine?.stop();
 		harnessService?.stop();
 		await turnGateway?.stop();

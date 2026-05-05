@@ -27,6 +27,37 @@ export interface VoiceItem {
 	text?: string;
 }
 
+export interface CdnMedia {
+	encrypt_query_param?: string;
+	aes_key?: string;
+	encrypt_type?: number;
+}
+
+export interface ImageItem {
+	media?: CdnMedia;
+	thumb_media?: CdnMedia;
+	aeskey?: string;
+	url?: string;
+	image_url?: string;
+	file_url?: string;
+	file_id?: string;
+	file_key?: string;
+	media_id?: string;
+	mime_type?: string;
+}
+
+export interface FileItem {
+	media?: CdnMedia;
+	url?: string;
+	file_url?: string;
+	file_id?: string;
+	file_key?: string;
+	media_id?: string;
+	file_name?: string;
+	name?: string;
+	mime_type?: string;
+}
+
 export interface RefMessage {
 	message_item?: MessageItem;
 	title?: string;
@@ -35,6 +66,8 @@ export interface RefMessage {
 export interface MessageItem {
 	type?: number;
 	text_item?: TextItem;
+	image_item?: ImageItem;
+	file_item?: FileItem;
 	voice_item?: VoiceItem;
 	ref_msg?: RefMessage;
 }

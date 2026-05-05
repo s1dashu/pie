@@ -14,6 +14,7 @@ import type {
 	DesktopCodexDiagnostic,
 	DesktopCodexWebSearchMode,
 	DesktopChannelKind,
+	DesktopDiscordBotProfile,
 	DesktopFeishuAppCredentials,
 	DesktopRuntimeDiagnostic,
 	DesktopThinkingLevel,
@@ -24,6 +25,7 @@ import { AppIcon } from "../../components/shared/app-icon";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Spinner } from "../../components/ui/spinner-1";
@@ -33,11 +35,11 @@ import { thinkingLevelOptions } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
 
 const channelOptions = [
-	{ value: "feishu", labelKey: "feishu", enabled: true },
-	{ value: "wechat", labelKey: "wechat", enabled: true },
-	{ value: "telegram", label: "Telegram", enabled: true },
-	{ value: "discord", label: "Discord", enabled: true },
-	{ value: "slack", label: "Slack", enabled: true },
+	{ value: "feishu", labelKey: "feishu", enabled: true, developerOnly: false },
+	{ value: "wechat", labelKey: "wechat", enabled: true, developerOnly: false },
+	{ value: "telegram", label: "Telegram", enabled: false, developerOnly: true },
+	{ value: "discord", label: "Discord", enabled: true, developerOnly: false },
+	{ value: "slack", label: "Slack", enabled: false, developerOnly: true },
 ] as const;
 
 const manualChannelKinds: DesktopChannelKind[] = ["discord", "telegram", "slack"];
@@ -58,12 +60,12 @@ function appendInstallStep(steps: InstallStep[], message: string, tone: InstallS
 	return [...steps, { id: Date.now() + steps.length, message: cleanMessage, tone }].slice(-6);
 }
 
-const harnessOptions: Array<{ value: DesktopAgentHarness; label: string; enabled: boolean }> = [
-	{ value: "pi", label: "Pi", enabled: true },
-	{ value: "codex", label: "Codex", enabled: true },
-	{ value: "ousia", label: "Ousia", enabled: true },
-	{ value: "hermes", label: "Hermes", enabled: true },
-	{ value: "openclaw", label: "OpenClaw", enabled: true },
+const harnessOptions: Array<{ value: DesktopAgentHarness; label: string; enabled: boolean; developerOnly: boolean }> = [
+	{ value: "codex", label: "Codex", enabled: true, developerOnly: false },
+	{ value: "pi", label: "Pi", enabled: true, developerOnly: false },
+	{ value: "ousia", label: "Ousia", enabled: true, developerOnly: false },
+	{ value: "hermes", label: "Hermes", enabled: false, developerOnly: true },
+	{ value: "openclaw", label: "OpenClaw", enabled: false, developerOnly: true },
 ];
 
 const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: string }> = [
@@ -146,6 +148,8 @@ export function CreateAgentView({
 	const [discordBotToken, setDiscordBotToken] = useState("");
 	const [discordApplicationId, setDiscordApplicationId] = useState("");
 	const [discordGuildId, setDiscordGuildId] = useState("");
+	const [discordProfile, setDiscordProfile] = useState<DesktopDiscordBotProfile | undefined>();
+	const [discordSyncStatus, setDiscordSyncStatus] = useState("");
 	const [telegramBotToken, setTelegramBotToken] = useState("");
 	const [telegramBotUsername, setTelegramBotUsername] = useState("");
 	const [qrEvent, setQrEvent] = useState<AgentOnboardEvent | undefined>();
@@ -161,14 +165,20 @@ export function CreateAgentView({
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
 	const [thinkingLevel, setThinkingLevel] = useState<DesktopThinkingLevel>("off");
+	const [startFreshOnRestart, setStartFreshOnRestart] = useState(true);
 	const [codexWebSearchMode, setCodexWebSearchMode] = useState<DesktopCodexWebSearchMode>("cached");
 	const [apiKey, setApiKey] = useState("");
 	const credentialRequestRef = useRef(0);
 	const queryClient = useQueryClient();
+	const settings = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => window.pie.getSettings(),
+	});
+	const developerMode = settings.data?.developerMode === true;
 	const botAvatars = useQuery({
 		queryKey: ["bot-avatars"],
 		queryFn: () => window.pie.listBotAvatars(),
-		enabled: channels.includes("wechat"),
+		enabled: channels.includes("wechat") || channels.includes("discord"),
 	});
 	const codexDiagnostic = useQuery({
 		queryKey: ["codex-diagnostic"],
@@ -279,6 +289,33 @@ export function CreateAgentView({
 			onError(err.message);
 		},
 	});
+	const syncDiscordProfile = useMutation({
+		mutationFn: async () => {
+			if (!session) {
+				throw new Error(t("creationNotInitialized"));
+			}
+			if (!discordBotToken.trim()) {
+				throw new Error(t("discordTokenRequired"));
+			}
+			setDiscordSyncStatus(t("fetching"));
+			return window.pie.fetchDiscordBotProfile(session.sessionId, discordBotToken);
+		},
+		onSuccess: (profile) => {
+			setDiscordProfile(profile);
+			setDiscordBotToken(profile.botToken);
+			if (profile.applicationId) {
+				setDiscordApplicationId(profile.applicationId);
+			}
+			if (profile.botName?.trim()) {
+				setName(profile.botName.trim());
+			}
+			setDiscordSyncStatus(t("discordProfileFetched"));
+		},
+		onError: (err: Error) => {
+			setDiscordSyncStatus(err.message);
+			onError(err.message);
+		},
+	});
 	const complete = useMutation({
 		mutationFn: () => {
 			if (!session) {
@@ -312,7 +349,7 @@ export function CreateAgentView({
 				sessionId: session.sessionId,
 				harness,
 				name,
-				avatarId: channels.includes("wechat") ? avatarId : undefined,
+				avatarId: channels.includes("wechat") || channels.includes("discord") ? avatarId : undefined,
 				channels,
 				...(feishu ? { feishu } : {}),
 				...(wechat ? { wechat } : {}),
@@ -325,7 +362,15 @@ export function CreateAgentView({
 						}
 					: {}),
 				...(channels.includes("discord")
-					? { discord: { botToken: discordBotToken, applicationId: discordApplicationId, guildId: discordGuildId } }
+					? {
+							discord: {
+								botToken: discordBotToken,
+								applicationId: discordApplicationId,
+								guildId: discordGuildId,
+								botName: name,
+								avatarUrl: discordProfile?.avatarUrl,
+							},
+						}
 					: {}),
 				...(channels.includes("telegram")
 					? { telegram: { botToken: telegramBotToken, botUsername: telegramBotUsername } }
@@ -333,6 +378,7 @@ export function CreateAgentView({
 				provider,
 				model,
 				thinkingLevel,
+				resumeSessions: !startFreshOnRestart,
 				apiKey,
 				...(harness === "codex"
 					? {
@@ -349,13 +395,16 @@ export function CreateAgentView({
 			const optimisticAgent = createOptimisticStartingAgent({
 				session,
 				name,
+				avatarUrl: botAvatars.data?.find((avatar) => avatar.id === avatarId)?.dataUrl,
 				harness,
 				channels,
 				feishu,
 				wechat,
+				discordProfile,
 				provider,
 				model,
 				thinkingLevel,
+				resumeSessions: !startFreshOnRestart,
 			});
 			await queryClient.cancelQueries({ queryKey: ["agents"] });
 			await queryClient.cancelQueries({ queryKey: ["agent", session.sessionId] });
@@ -460,7 +509,7 @@ export function CreateAgentView({
 	}, []);
 
 	useEffect(() => {
-		if (channels.includes("wechat") && !avatarId && botAvatars.data?.[0]) {
+		if ((channels.includes("wechat") || channels.includes("discord")) && !avatarId && botAvatars.data?.[0]) {
 			setAvatarId(botAvatars.data[0].id);
 		}
 	}, [avatarId, botAvatars.data, channels]);
@@ -535,6 +584,15 @@ export function CreateAgentView({
 			}
 			if (event.wechat) {
 				setWechat(event.wechat);
+			}
+			if (event.discord) {
+				setDiscordProfile(event.discord);
+				if (event.discord.applicationId) {
+					setDiscordApplicationId(event.discord.applicationId);
+				}
+				if (event.discord.botName?.trim()) {
+					setName(event.discord.botName.trim());
+				}
 			}
 		});
 	}, [queryClient, session?.sessionId]);
@@ -620,7 +678,7 @@ export function CreateAgentView({
 		setChannels([channel]);
 	};
 	const requiresQrAuth = channels.includes("feishu") || channels.includes("wechat");
-	const requiresIdentity = channels.includes("wechat") && !channels.some((channel) => channel === "feishu");
+	const requiresIdentity = (channels.includes("wechat") && !channels.some((channel) => channel === "feishu")) || channels.includes("discord");
 	const requiresManualCredentials = channels.some((channel) => manualChannelKinds.includes(channel));
 	const authPrompt = channels.includes("wechat")
 		? t("useWechatScan")
@@ -629,13 +687,14 @@ export function CreateAgentView({
 	const requiresRuntimeInstall = harness === "hermes" && !isHermesRuntimeReady;
 	const visibleSteps = createAgentStepFlow({
 		requiresIdentity,
+		identityAfterCredentials: channels.includes("discord"),
 		requiresQrAuth,
 		requiresManualCredentials,
 		requiresRuntimeInstall: requiresRuntimeInstall || step === "runtime",
 	});
 	const stepDescription = {
 		config: t("chooseHarnessAndChannel"),
-		identity: t("setWechatNameAvatar"),
+		identity: channels.includes("discord") ? t("setDiscordNameAvatar") : t("setWechatNameAvatar"),
 		auth: t("authSelectedChannels"),
 		credentials: t("fillChannelCredentials"),
 		model: t("configureModelAndKey"),
@@ -655,7 +714,9 @@ export function CreateAgentView({
 			setQrEvent(undefined);
 			setQrExpiresAt(undefined);
 			setQrExpired(false);
-			if (requiresIdentity) {
+			if (channels.includes("discord") && requiresManualCredentials) {
+				goToStep("credentials");
+			} else if (requiresIdentity) {
 				goToStep("identity");
 			} else if (requiresQrAuth) {
 				goToStep("auth");
@@ -672,11 +733,19 @@ export function CreateAgentView({
 			setQrEvent(undefined);
 			setQrExpiresAt(undefined);
 			setQrExpired(false);
+			if (channels.includes("discord")) {
+				goToStep("model");
+				return;
+			}
 			goToStep("auth");
 			authenticateChannels.mutate();
 			return;
 		}
 		if (step === "credentials") {
+			if (requiresIdentity) {
+				goToStep("identity");
+				return;
+			}
 			goToStep("model");
 			return;
 		}
@@ -745,8 +814,8 @@ export function CreateAgentView({
 								<h2 className="text-center text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
 								{step === "config" ? (
 									<div className="space-y-6">
-										<HarnessPicker selected={harness} onSelect={updateHarnessSelection} />
-										<ChannelPicker selected={channels[0]} onSelect={selectChannel} />
+										<HarnessPicker selected={harness} developerMode={developerMode} onSelect={updateHarnessSelection} />
+										<ChannelPicker selected={channels[0]} developerMode={developerMode} onSelect={selectChannel} />
 									</div>
 								) : step === "identity" ? (
 									<div className="space-y-6">
@@ -804,6 +873,9 @@ export function CreateAgentView({
 											discordBotToken={discordBotToken}
 											discordApplicationId={discordApplicationId}
 											discordGuildId={discordGuildId}
+											discordProfile={discordProfile}
+											discordSyncStatus={discordSyncStatus}
+											isSyncingDiscord={syncDiscordProfile.isPending}
 											telegramBotToken={telegramBotToken}
 											telegramBotUsername={telegramBotUsername}
 											setSlackBotToken={setSlackBotToken}
@@ -811,6 +883,7 @@ export function CreateAgentView({
 											setDiscordBotToken={setDiscordBotToken}
 											setDiscordApplicationId={setDiscordApplicationId}
 											setDiscordGuildId={setDiscordGuildId}
+											onSyncDiscordProfile={() => syncDiscordProfile.mutate()}
 											setTelegramBotToken={setTelegramBotToken}
 											setTelegramBotUsername={setTelegramBotUsername}
 										/>
@@ -897,9 +970,9 @@ export function CreateAgentView({
 												</Field>
 											</>
 										)}
-										{usesCodexCli && (
-											<>
-												<CodexDiagnosticPanel
+											{usesCodexCli && (
+												<>
+													<CodexDiagnosticPanel
 													diagnostic={codexDiagnostic.data}
 													isLoading={codexDiagnostic.isFetching}
 													error={codexDiagnostic.error instanceof Error ? codexDiagnostic.error.message : undefined}
@@ -944,10 +1017,21 @@ export function CreateAgentView({
 														)}
 													</div>
 												)}
-											</>
-										)}
-									</div>
-								)}
+												</>
+											)}
+											<label className="flex cursor-pointer items-start gap-3 py-2.5">
+												<Checkbox
+													checked={startFreshOnRestart}
+													onCheckedChange={(checked) => setStartFreshOnRestart(Boolean(checked))}
+													className="mt-0.5"
+												/>
+												<span className="min-w-0 flex-1">
+													<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("startFreshOnRestart")}</span>
+													<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("startFreshOnRestartDesc")}</span>
+												</span>
+											</label>
+										</div>
+									)}
 							</div>
 						)}
 					</div>
@@ -994,20 +1078,23 @@ export function CreateAgentView({
 
 function createAgentStepFlow({
 	requiresIdentity,
+	identityAfterCredentials,
 	requiresQrAuth,
 	requiresManualCredentials,
 	requiresRuntimeInstall,
 }: {
 	requiresIdentity: boolean;
+	identityAfterCredentials: boolean;
 	requiresQrAuth: boolean;
 	requiresManualCredentials: boolean;
 	requiresRuntimeInstall: boolean;
 }): CreateAgentStep[] {
 	return [
 		"config",
-		...(requiresIdentity ? ["identity" as const] : []),
+		...(requiresIdentity && !identityAfterCredentials ? ["identity" as const] : []),
 		...(requiresQrAuth ? ["auth" as const] : []),
 		...(requiresManualCredentials ? ["credentials" as const] : []),
+		...(requiresIdentity && identityAfterCredentials ? ["identity" as const] : []),
 		"model",
 		...(requiresRuntimeInstall ? ["runtime" as const] : []),
 	];
@@ -1016,23 +1103,29 @@ function createAgentStepFlow({
 function createOptimisticStartingAgent({
 	session,
 	name,
+	avatarUrl,
 	harness,
 	channels,
 	feishu,
 	wechat,
+	discordProfile,
 	provider,
 	model,
 	thinkingLevel,
+	resumeSessions,
 }: {
 	session: AgentCreationSession;
 	name: string;
+	avatarUrl: string | undefined;
 	harness: DesktopAgentHarness;
 	channels: DesktopChannelKind[];
 	feishu: DesktopFeishuAppCredentials | undefined;
 	wechat: DesktopWechatCredentials | undefined;
+	discordProfile: DesktopDiscordBotProfile | undefined;
 	provider: string;
 	model: string;
 	thinkingLevel: DesktopThinkingLevel;
+	resumeSessions: boolean;
 }): AgentDetails {
 	const now = new Date().toISOString();
 	const displayName = feishu?.appName?.trim() || name.trim() || session.name;
@@ -1041,7 +1134,7 @@ function createOptimisticStartingAgent({
 		name: displayName,
 		status: "starting",
 		avatarSeed: session.sessionId,
-		...(feishu?.avatarUrl ? { avatarUrl: feishu.avatarUrl } : {}),
+		...(feishu?.avatarUrl || avatarUrl || discordProfile?.avatarUrl ? { avatarUrl: feishu?.avatarUrl || avatarUrl || discordProfile?.avatarUrl } : {}),
 		desiredState: "running",
 		selected: true,
 		home: session.home,
@@ -1054,9 +1147,10 @@ function createOptimisticStartingAgent({
 		...(wechat ? { wechat } : {}),
 		model: {
 			provider,
-			model,
-			thinkingLevel,
-			outputToolCallsToIm: true,
+				model,
+				thinkingLevel,
+				resumeSessions,
+				outputToolCallsToIm: true,
 			outputToolCallImMaxLength: 60,
 			outputThinkingToIm: false,
 		},
@@ -1200,8 +1294,8 @@ function HermesDiagnosticPanel({
 				<div className="flex shrink-0 flex-col gap-2">
 					<Button
 						variant="secondary"
-						size="xs"
-						className="h-6 px-2.5 text-xs font-normal leading-none text-muted-foreground hover:text-[var(--slate-12)]"
+						size="small"
+						className="text-muted-foreground hover:text-[var(--slate-12)]"
 						onClick={onRefresh}
 						disabled={isLoading || isInstalling}
 					>
@@ -1210,8 +1304,7 @@ function HermesDiagnosticPanel({
 					{!ready && (
 						<Button
 							variant={isInstalling ? "destructive" : "default"}
-							size="sm"
-							className="h-8 px-3 text-xs font-medium"
+							size="small"
 							onClick={isInstalling ? onCancelInstall : onInstall}
 						>
 							{isInstalling ? t("cancelInstall") : t("hermesInstall")}
@@ -1241,9 +1334,11 @@ function HermesDiagnosticPanel({
 
 function HarnessPicker({
 	selected,
+	developerMode,
 	onSelect,
 }: {
 	selected: DesktopAgentHarness;
+	developerMode: boolean;
 	onSelect: (harness: DesktopAgentHarness) => void;
 }): JSX.Element {
 	const { t } = useI18n();
@@ -1252,24 +1347,31 @@ function HarnessPicker({
 			<div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={t("harness")}>
 				{harnessOptions.map((option) => {
 					const isSelected = selected === option.value;
+					const isEnabled = option.enabled || (developerMode && option.developerOnly);
 					return (
 						<button
 							key={option.value}
 							type="button"
 							role="radio"
 							aria-checked={isSelected}
-							disabled={!option.enabled}
-							onClick={() => option.enabled && onSelect(option.value as DesktopAgentHarness)}
+							disabled={!isEnabled}
+							onClick={() => isEnabled && onSelect(option.value as DesktopAgentHarness)}
 							className={cn(
 								"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
 								isSelected
 									? "border-[var(--slate-8)] bg-[var(--slate-2)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
 									: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
-								option.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
+								isEnabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 							)}
 						>
-							<span className="line-clamp-2 min-w-0">{option.label}</span>
-							{!option.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">{t("inDevelopment")}</span>}
+							<span className="flex min-w-0 flex-col items-center gap-0.5">
+								<span className="line-clamp-1 min-w-0">{option.label}</span>
+								{!isEnabled && (
+									<span className="line-clamp-1 text-[9px] font-normal leading-none text-muted-foreground">
+										{t("inDevelopment")}
+									</span>
+								)}
+							</span>
 						</button>
 					);
 				})}
@@ -1280,9 +1382,11 @@ function HarnessPicker({
 
 function ChannelPicker({
 	selected,
+	developerMode,
 	onSelect,
 }: {
 	selected: DesktopChannelKind | undefined;
+	developerMode: boolean;
 	onSelect: (channel: DesktopChannelKind) => void;
 }): JSX.Element {
 	const { t } = useI18n();
@@ -1292,22 +1396,29 @@ function ChannelPicker({
 				<div className="grid grid-cols-3 gap-2">
 					{channelOptions.map((channel) => {
 						const isSelected = selected === channel.value;
+						const isEnabled = channel.enabled || (developerMode && channel.developerOnly);
 						return (
 							<button
 								key={channel.value}
 								type="button"
-								disabled={!channel.enabled}
-								onClick={() => channel.enabled && onSelect(channel.value as DesktopChannelKind)}
+								disabled={!isEnabled}
+								onClick={() => isEnabled && onSelect(channel.value as DesktopChannelKind)}
 								className={cn(
 									"pie-smooth-corner flex h-14 min-w-0 items-center justify-center rounded-2xl border px-2 text-center text-xs font-medium leading-tight transition-[background-color,border-color,box-shadow,color]",
 									isSelected
 										? "border-[var(--slate-8)] bg-[var(--slate-2)] text-foreground shadow-[0_0_0_3px_var(--slate-a4),inset_0_1px_0_rgba(255,255,255,0.65)]"
 										: "border-transparent bg-[var(--slate-2)] text-foreground shadow-none",
-									channel.enabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
+									isEnabled ? "cursor-pointer hover:bg-[var(--slate-3)]" : "cursor-not-allowed text-muted-foreground opacity-60",
 								)}
 							>
-								<span className="line-clamp-2 min-w-0">{"labelKey" in channel ? t(channel.labelKey) : channel.label}</span>
-								{!channel.enabled && <span className="shrink-0 text-[11px] text-muted-foreground">{t("inDevelopment")}</span>}
+								<span className="flex min-w-0 flex-col items-center gap-0.5">
+									<span className="line-clamp-1 min-w-0">{"labelKey" in channel ? t(channel.labelKey) : channel.label}</span>
+									{!isEnabled && (
+										<span className="line-clamp-1 text-[9px] font-normal leading-none text-muted-foreground">
+											{t("inDevelopment")}
+										</span>
+									)}
+								</span>
 							</button>
 						);
 					})}
@@ -1327,6 +1438,9 @@ function ManualChannelCredentials(props: {
 	discordBotToken: string;
 	discordApplicationId: string;
 	discordGuildId: string;
+	discordProfile: DesktopDiscordBotProfile | undefined;
+	discordSyncStatus: string;
+	isSyncingDiscord: boolean;
 	telegramBotToken: string;
 	telegramBotUsername: string;
 	setSlackBotToken: (value: string) => void;
@@ -1334,9 +1448,11 @@ function ManualChannelCredentials(props: {
 	setDiscordBotToken: (value: string) => void;
 	setDiscordApplicationId: (value: string) => void;
 	setDiscordGuildId: (value: string) => void;
+	onSyncDiscordProfile: () => void;
 	setTelegramBotToken: (value: string) => void;
 	setTelegramBotUsername: (value: string) => void;
 }): JSX.Element {
+	const { t } = useI18n();
 	return (
 		<div className="space-y-3">
 			{props.channels.includes("slack") ? (
@@ -1352,7 +1468,19 @@ function ManualChannelCredentials(props: {
 			) : null}
 			{props.channels.includes("discord") ? (
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-sm font-semibold leading-snug text-foreground">Discord</div>
+					<div className="flex items-center justify-between gap-3">
+						<div className="text-sm font-semibold leading-snug text-foreground">Discord</div>
+						<Button
+							variant="secondary"
+							size="xs"
+							className="h-7 px-2.5 text-[11px]"
+							disabled={props.isSyncingDiscord || !props.discordBotToken.trim()}
+							onClick={props.onSyncDiscordProfile}
+						>
+							{props.isSyncingDiscord ? <Spinner size={14} color="currentColor" /> : null}
+							{props.isSyncingDiscord ? t("fetching") : t("fetch")}
+						</Button>
+					</div>
 					<Field label="Bot Token">
 						<Input className={controlSurfaceClass} type="password" value={props.discordBotToken} onChange={(event) => props.setDiscordBotToken(event.target.value)} />
 					</Field>
@@ -1364,6 +1492,23 @@ function ManualChannelCredentials(props: {
 							<Input className={controlSurfaceClass} value={props.discordGuildId} onChange={(event) => props.setDiscordGuildId(event.target.value)} />
 						</Field>
 					</div>
+					{props.discordProfile?.botName || props.discordSyncStatus ? (
+						<div className="flex min-w-0 items-center gap-3 rounded-xl bg-[var(--slate-2)] px-3 py-2">
+							{props.discordProfile?.avatarUrl ? (
+								<img src={props.discordProfile.avatarUrl} alt="" className="size-9 rounded-full object-cover" draggable={false} />
+							) : (
+								<div className="size-9 rounded-full bg-[var(--slate-5)]" />
+							)}
+							<div className="min-w-0">
+								<div className="truncate text-xs font-medium text-foreground">
+									{props.discordProfile?.botName || "Discord Bot"}
+								</div>
+								<div className="truncate text-[11px] leading-4 text-muted-foreground">
+									{props.discordSyncStatus || props.discordProfile?.applicationId}
+								</div>
+							</div>
+						</div>
+					) : null}
 				</div>
 			) : null}
 			{props.channels.includes("telegram") ? (

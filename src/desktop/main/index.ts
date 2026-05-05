@@ -76,6 +76,7 @@ import {
 	checkManagedRuntimeForDesktop,
 	completeAgentCreation as completeCreationSession,
 	createFeishuAppForSession,
+	fetchDiscordBotProfileForSession,
 	createWechatLoginForSession,
 	deriveHermesApiServerPort,
 	getProviderCredentialEnv,
@@ -242,6 +243,10 @@ async function downloadRemoteAvatarToProfile(url: string | undefined, homeDir: s
 			throw new Error(`HTTP ${response.status}`);
 		}
 		const contentType = response.headers.get("content-type");
+		const mediaType = contentType?.split(";")[0]?.trim().toLowerCase();
+		if (mediaType === "image/gif") {
+			throw new Error("GIF avatars are not supported for profile storage");
+		}
 		const ext = avatarExtensionFromContent(contentType, url.trim());
 		const data = Buffer.from(await response.arrayBuffer());
 		if (!data.length) {
@@ -252,7 +257,7 @@ async function downloadRemoteAvatarToProfile(url: string | undefined, homeDir: s
 		writeFileSync(join(homeDir, `${PROFILE_AVATAR_STEM}${ext}`), data);
 		return true;
 	} catch (error) {
-		console.warn("[desktop] failed to download Feishu app avatar:", error);
+		console.warn("[desktop] failed to download remote app avatar:", error);
 		return false;
 	}
 }
@@ -1209,9 +1214,53 @@ async function syncFeishuAppProfile(id: string): Promise<AgentDetails> {
 	return getAgent(id);
 }
 
+async function syncDiscordBotProfile(id: string, botToken?: string): Promise<AgentDetails> {
+	const agent = await getAgent(id);
+	const current = readProfileConfig(agent.home) ?? { version: 3 };
+	const channel = getPrimaryDiscordChannel(current.profile);
+	if (!channel) {
+		throw new Error("当前 Agent 未配置 Discord 渠道");
+	}
+	const token = botToken?.trim() || readProfileEnv(agent.home).DISCORD_BOT_TOKEN || "";
+	if (!token.trim()) {
+		throw new Error("Discord Bot Token 必填");
+	}
+	const result = await fetchDiscordBotProfileForSession(id, token, emitOnboardEvent);
+	if (result.applicationId?.trim()) {
+		const nextProfile = upsertDiscordChannel(current.profile, {
+			...channel,
+			applicationId: result.applicationId.trim(),
+		});
+		writeProfileConfig(agent.home, {
+			...current,
+			version: 3,
+			profile: nextProfile,
+		});
+	}
+	if (botToken !== undefined) {
+		upsertAgentEnv({ DISCORD_BOT_TOKEN: token.trim() }, agent.home);
+	}
+	if (result.botName?.trim()) {
+		updateProfileRegistryEntry(id, {
+			displayName: result.botName.trim(),
+		});
+	}
+	if (result.avatarUrl?.trim()) {
+		await downloadRemoteAvatarToProfile(result.avatarUrl, agent.home);
+	}
+	return getAgent(id);
+}
+
 function validateModelDraft(draft: AgentDraft): void {
-	const hasModelUpdate = draft.provider !== undefined || draft.model !== undefined || draft.thinkingLevel !== undefined;
+	const hasModelUpdate =
+		draft.provider !== undefined ||
+		draft.model !== undefined ||
+		draft.thinkingLevel !== undefined ||
+		draft.resumeSessions !== undefined;
 	if (!hasModelUpdate) {
+		return;
+	}
+	if (draft.provider === undefined && draft.model === undefined) {
 		return;
 	}
 	if (!draft.provider?.trim()) {
@@ -1283,7 +1332,11 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		draft.discordApplicationId !== undefined ||
 		draft.discordGuildId !== undefined;
 	const hasTelegramDraft = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
-	const hasModelUpdate = draft.provider !== undefined || draft.model !== undefined || draft.thinkingLevel !== undefined;
+	const hasModelUpdate =
+		draft.provider !== undefined ||
+		draft.model !== undefined ||
+		draft.thinkingLevel !== undefined ||
+		draft.resumeSessions !== undefined;
 	const hasFeishuUpdate = feishuChannel
 		? hasFeishuDraft
 		: hasNonEmptyDraftValue(draft.appId, draft.appSecret);
@@ -1384,6 +1437,7 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 		provider: draft.provider ?? model.provider,
 		model: draft.model ?? model.model,
 		thinkingLevel: draft.thinkingLevel ?? model.thinkingLevel,
+		resumeSessions: draft.resumeSessions ?? model.resumeSessions ?? false,
 		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm ?? true,
 		outputToolCallImMaxLength: draft.outputToolCallImMaxLength ?? model.outputToolCallImMaxLength ?? 60,
 		outputThinkingToIm: nextOutputThinkingToIm,
@@ -1479,6 +1533,38 @@ async function reauthorizeWechatAgent(id: string): Promise<AgentDetails> {
 	if (!shouldRestart) {
 		return getAgent(id);
 	}
+	await stopRunningAgent(id);
+	return startAgent(id);
+}
+
+async function reauthorizeFeishuAgent(id: string): Promise<AgentDetails> {
+	const agent = await getAgent(id);
+	if (!agent.channelKinds?.includes("feishu") && !agent.appId) {
+		throw new Error("当前 Agent 未配置飞书渠道");
+	}
+	const shouldRestart = agent.status === "running" || agent.status === "starting";
+	const feishu = await createFeishuAppForSession(id, emitOnboardEvent);
+	await updateAgent(id, {
+		appId: feishu.appId,
+		appSecret: feishu.appSecret,
+		brand: feishu.brand,
+	});
+	if (feishu.appName?.trim()) {
+		updateProfileRegistryEntry(id, {
+			displayName: feishu.appName.trim(),
+		});
+	}
+	if (feishu.avatarUrl?.trim()) {
+		await downloadRemoteAvatarToProfile(feishu.avatarUrl, agent.home);
+	}
+	if (!shouldRestart) {
+		return getAgent(id);
+	}
+	await stopRunningAgent(id);
+	return startAgent(id);
+}
+
+async function restartAgent(id: string): Promise<AgentDetails> {
 	await stopRunningAgent(id);
 	return startAgent(id);
 }
@@ -2062,11 +2148,35 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:create-discord-profile", async (_event, sessionId: string, botToken: string) => {
+		try {
+			return await fetchDiscordBotProfileForSession(sessionId, botToken, emitOnboardEvent);
+		} catch (error) {
+			console.error("[ipc] agents:create-discord-profile failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:sync-feishu-app-profile", async (_event, id: string): Promise<AgentDetails> => {
 		try {
 			return await withAgentOperation(id, () => syncFeishuAppProfile(id));
 		} catch (error) {
 			console.error("[ipc] agents:sync-feishu-app-profile failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:sync-discord-bot-profile", async (_event, id: string, botToken?: string): Promise<AgentDetails> => {
+		try {
+			return await withAgentOperation(id, () => syncDiscordBotProfile(id, botToken));
+		} catch (error) {
+			console.error("[ipc] agents:sync-discord-bot-profile failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:reauthorize-feishu", async (_event, id: string): Promise<AgentDetails> => {
+		try {
+			return await withAgentOperation(id, () => reauthorizeFeishuAgent(id));
+		} catch (error) {
+			console.error("[ipc] agents:reauthorize-feishu failed:", error);
 			throw error;
 		}
 	});
@@ -2087,8 +2197,10 @@ app.whenReady().then(() => {
 			const agent = await getAgent(draft.sessionId);
 			if (draft.feishu?.avatarUrl) {
 				await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
-			} else if (draft.channels.includes("wechat") && draft.avatarId) {
+			} else if ((draft.channels.includes("wechat") || draft.channels.includes("discord")) && draft.avatarId) {
 				copyDefaultAvatarToProfile(draft.avatarId, agent.home);
+			} else if (draft.discord?.avatarUrl) {
+				await downloadRemoteAvatarToProfile(draft.discord.avatarUrl, agent.home);
 			}
 			return await withAgentOperation(draft.sessionId, () => startAgent(draft.sessionId));
 		} catch (error) {
@@ -2133,6 +2245,14 @@ app.whenReady().then(() => {
 			return await withAgentOperation(id, () => startAgent(id));
 		} catch (error) {
 			console.error("[ipc] agents:start failed:", error);
+			throw error;
+		}
+	});
+	ipcMain.handle("agents:restart", async (_event, id: string) => {
+		try {
+			return await withAgentOperation(id, () => restartAgent(id));
+		} catch (error) {
+			console.error("[ipc] agents:restart failed:", error);
 			throw error;
 		}
 	});

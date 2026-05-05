@@ -243,6 +243,11 @@ body {
 	z-index: 1;
 }
 
+.app-shell-surface > .app-shell-overlay {
+	position: absolute;
+	z-index: 80;
+}
+
 .agent-avatar-frame {
 	isolation: isolate;
 	corner-shape: circle;

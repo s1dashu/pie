@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { AgentHarnessKind } from "../core/config-store.js";
 
@@ -153,12 +153,17 @@ export function isFirstResponseSignal(event: AgentSessionEvent): boolean {
 
 export interface AgentRoundInput {
 	text: string;
+	images?: ImageContent[];
 }
 
 export type AgentRoundInputLike = string | AgentRoundInput;
 
 export function getAgentRoundInputText(input: AgentRoundInputLike): string {
 	return typeof input === "string" ? input : input.text;
+}
+
+export function normalizeAgentRoundInput(input: AgentRoundInputLike): AgentRoundInput {
+	return typeof input === "string" ? { text: input } : input;
 }
 
 export interface AgentConversationSession {

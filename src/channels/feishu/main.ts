@@ -17,14 +17,17 @@ import {
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
 import type { AgentTurnInput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
+import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
 import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import {
+	extractMessageParts,
 	extractPromptText,
 	getConversationKey,
 	isRecentMessage,
 	MessageDedup,
 	shouldHandleMessage,
 } from "./messages.js";
+import { resolveFeishuMessageAttachments } from "./attachments.js";
 import { ConversationController } from "./conversation-controller.js";
 import { loadConfig, type FeishuBotConfig } from "./config.js";
 import { type LarkMessageEvent, LarkClient } from "./platform/index.js";
@@ -40,6 +43,10 @@ function formatTaskPrompt(prompt: string): string {
 		throw new Error("Task prompt is empty.");
 	}
 	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
+}
+
+function isSilentAgentTask(request: AgentTurnInput): boolean {
+	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
 }
 
 export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
@@ -191,6 +198,14 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		sessionKey: string;
 		assistantText: string;
 	}> {
+		if (isSilentAgentTask(request)) {
+			const session = await this.sessionPool.getSession(request.sessionKey);
+			await session.prompt(request.prompt);
+			return {
+				sessionKey: request.sessionKey,
+				assistantText: extractAssistantText(session),
+			};
+		}
 		if (request.kind === "agent_task") {
 			const ownerSession = getOwnerSessionBinding(loadConfigStore());
 			if (!ownerSession) {
@@ -214,6 +229,9 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 	}
 
 	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
+		if (isSilentAgentTask(request)) {
+			return request.sessionKey;
+		}
 		if (request.kind !== "agent_task") {
 			return request.sessionKey;
 		}
@@ -271,8 +289,14 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 		this.rememberOwnerSessionBinding(event);
 
-		const promptText = extractPromptText(event, botOpenId);
-		if (!promptText) {
+		const messageParts = await resolveFeishuMessageAttachments(
+			this.config,
+			event,
+			extractMessageParts(event, botOpenId),
+		);
+		const promptInput = await buildAgentRoundInputFromMessageParts(messageParts);
+		const promptText = promptInput.text;
+		if (!promptText && !promptInput.images?.length) {
 			await sendPlainReply(this.config.feishu, event, "Only text messages are supported.");
 			return;
 		}
@@ -291,7 +315,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 		console.log(chalk.cyan(`Message received: ${conversationKey} ${promptText.slice(0, 120)}`));
 		const controller = this.getConversationController(conversationKey);
-		await controller.submit(event, promptText);
+		await controller.submit(event, promptInput);
 	}
 
 	setShutdownExitCode(code: number): void {
