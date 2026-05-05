@@ -5,11 +5,13 @@
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
 
-Pie is a desktop-first personal Agent client for creating, running, and observing local Agents that work through IM channels.
+Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels.
 
-It is a product client, not an agent framework. The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel, while Ousia, WeChat, Codex, Hermes, Slack, Discord, Telegram, and Openclaw remain early or experimental integration surfaces.
+The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel, while Ousia, WeChat, Codex, Hermes, Slack, Discord, Telegram, and Openclaw remain early or experimental integration surfaces.
 
-<video src="docs/assets/pie-product-demo.mp4" controls muted playsinline></video>
+[![Pie product demo](docs/assets/pie-product-demo-cover.png)](docs/assets/pie-product-demo.mp4)
+
+[Watch the product demo](docs/assets/pie-product-demo.mp4)
 
 ## Download
 
