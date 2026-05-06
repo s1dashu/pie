@@ -8,6 +8,9 @@ out/
 .pet-runs/
 config.json
 tasks/
+skills/
+tmp/
+src/**/ref/
 .crush/
 .firecrawl/
 superhuman_refund_email.txt

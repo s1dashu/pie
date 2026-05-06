@@ -22,7 +22,9 @@
     "LICENSE"
   ],
   "build": {
+    "appId": "app.pie.desktop",
     "mac": {
+      "category": "public.app-category.productivity",
       "icon": "build/icon.icon"
     },
     "files": [
@@ -50,6 +52,8 @@
   "scripts": {
     "clean": "shx rm -rf dist",
     "check": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:live": "node scripts/run-live-profile-tests.mjs",
     "build": "shx rm -rf dist && tsc -p tsconfig.json && shx mkdir -p dist/frameworks/ousia && shx cp -r src/frameworks/ousia/prompts dist/frameworks/ousia/ && shx cp -r src/frameworks/ousia/docs dist/frameworks/ousia/ && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js && shx chmod +x dist/channels/wechat/main.js && shx chmod +x dist/channels/slack/main.js && shx chmod +x dist/channels/discord/main.js && shx chmod +x dist/channels/telegram/main.js",
     "start": "tsx src/cli/index.ts",
     "start:onboard": "tsx src/cli/index.ts --onboard",
