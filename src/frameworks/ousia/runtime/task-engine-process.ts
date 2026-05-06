@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import type { AgentRuntimeEnvironment } from "../../../runtime/environment.js";
 
 export interface TaskEngineProcessManagerOptions {
@@ -16,18 +17,47 @@ export interface TaskEngineProcessManager {
 	stop(): void;
 }
 
+function resolveTsxNodeArgs(currentFile: string): string[] | undefined {
+	const inheritedTsxArgs = process.execArgv.filter((arg) => arg.includes("tsx/dist/") || arg.endsWith("tsx"));
+	if (inheritedTsxArgs.length) {
+		return inheritedTsxArgs;
+	}
+	const rootDir = join(dirname(currentFile), "..", "..", "..", "..");
+	const preflight = join(rootDir, "node_modules", "tsx", "dist", "preflight.cjs");
+	const loader = join(rootDir, "node_modules", "tsx", "dist", "loader.mjs");
+	if (existsSync(preflight) && existsSync(loader)) {
+		return ["--require", preflight, "--import", `file://${loader}`];
+	}
+	return undefined;
+}
+
 function resolveTaskEngineEntry(entryName: "runtime" | "engine"): { command: string; args: string[] } {
 	const currentFile = fileURLToPath(import.meta.url);
 	if (currentFile.includes(`${sep}src${sep}`)) {
+		const script = fileURLToPath(new URL(`../task-engine/${entryName}.ts`, import.meta.url));
+		const tsxNodeArgs = resolveTsxNodeArgs(currentFile);
+		if (tsxNodeArgs) {
+			return {
+				command: process.execPath,
+				args: [...tsxNodeArgs, script],
+			};
+		}
 		return {
 			command: "tsx",
-			args: [fileURLToPath(new URL(`../task-engine/${entryName}.ts`, import.meta.url))],
+			args: [script],
 		};
 	}
 	return {
 		command: process.execPath,
 		args: [fileURLToPath(new URL(`../task-engine/${entryName}.js`, import.meta.url))],
 	};
+}
+
+function shouldRunAsElectronNode(command: string): boolean {
+	if (!process.versions.electron) {
+		return false;
+	}
+	return !/(?:^|[/\\])node(?:\.exe)?$/.test(command);
 }
 
 function stopProcess(child: ChildProcess | undefined): void {
@@ -53,6 +83,7 @@ export function createTaskEngineProcessManager(
 			cwd: options.environment?.workDir ?? options.homeDir,
 			env: {
 				...process.env,
+				...(shouldRunAsElectronNode(entry.command) ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 				PIE_AGENT_HOME: options.homeDir,
 				PIE_PARENT_PID: String(process.pid),
 				PIE_CHANNEL: options.channel,

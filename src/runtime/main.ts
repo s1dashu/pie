@@ -4,22 +4,12 @@ import process from "node:process";
 import { getAgentHarnessDefinition, type AgentHarnessDefinition } from "../agents/harness-registry.js";
 import { ensureAgentHomeLayout } from "../core/agent-home-layout.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../core/agent-home.js";
-import { getStoredProfile, loadConfigStore, type ChannelKind } from "../core/config-store.js";
+import { getStoredProfile, loadConfigStore, type AgentProfile } from "../core/config-store.js";
 import { writeRuntimeStateRecord } from "../core/runtime-process.js";
+import { appendStartupSpan } from "../core/startup-spans.js";
 import { createRuntimeEnvironment, ensureRuntimeEnvironment, RuntimeEnvironmentLifecycle, type AgentRuntimeEnvironment } from "./environment.js";
-import { loadConfig } from "../channels/feishu/config.js";
-import { createFeishuBotRuntime } from "../channels/feishu/main.js";
-import { loadConfig as loadWechatConfig } from "../channels/wechat/config.js";
-import { createWechatBotRuntime } from "../channels/wechat/main.js";
-import { loadConfig as loadSlackConfig } from "../channels/slack/config.js";
-import { createSlackBotRuntime } from "../channels/slack/main.js";
-import { loadConfig as loadDiscordConfig } from "../channels/discord/config.js";
-import { createDiscordBotRuntime } from "../channels/discord/main.js";
-import { loadConfig as loadTelegramConfig } from "../channels/telegram/config.js";
-import { createTelegramBotRuntime } from "../channels/telegram/main.js";
-import { readDesktopSettings } from "../desktop/main/desktop-settings.js";
 import { ensureDailySessionDistillationTask } from "../frameworks/ousia/runtime/session-distillation.js";
-import type { AgentTurnPort, ManagedRuntime } from "./types.js";
+import { createChannelRuntimes, type ChannelRuntime } from "./channel-runtimes.js";
 
 function readPort(value: string | undefined, defaultValue: number): number {
 	const parsed = Number.parseInt(value ?? "", 10);
@@ -39,45 +29,13 @@ function parseAgentHomeFromArgv(argv: string[]): string | undefined {
 	return undefined;
 }
 
-type ChannelRuntime = ManagedRuntime & AgentTurnPort & { setShutdownExitCode?: (code: number) => void };
-
 interface RuntimePlan {
 	homeDir: string;
+	profile: AgentProfile | undefined;
 	environment: AgentRuntimeEnvironment;
 	lifecycle: RuntimeEnvironmentLifecycle;
 	harnessDefinition: AgentHarnessDefinition;
 	channelRuntimes: ChannelRuntime[];
-}
-
-function createChannelRuntimes(channelKinds: ChannelKind[]): ChannelRuntime[] {
-	const runtimes: ChannelRuntime[] = [];
-	const developerMode = readDesktopSettings().developerMode;
-	for (const kind of channelKinds) {
-		if (kind === "feishu") {
-			runtimes.push(createFeishuBotRuntime(loadConfig()));
-			continue;
-		}
-		if (kind === "wechat") {
-			runtimes.push(createWechatBotRuntime(loadWechatConfig()));
-			continue;
-		}
-		if (developerMode && kind === "slack") {
-			runtimes.push(createSlackBotRuntime(loadSlackConfig()));
-			continue;
-		}
-		if (developerMode && kind === "discord") {
-			runtimes.push(createDiscordBotRuntime(loadDiscordConfig()));
-			continue;
-		}
-		if (developerMode && kind === "telegram") {
-			runtimes.push(createTelegramBotRuntime(loadTelegramConfig()));
-			continue;
-		}
-		if (kind === "slack" || kind === "discord" || kind === "telegram") {
-			console.warn(`[runtime] ${kind} channel is still in development and is disabled for this release.`);
-		}
-	}
-	return runtimes;
 }
 
 function createRuntimePlan(): RuntimePlan {
@@ -89,26 +47,23 @@ function createRuntimePlan(): RuntimePlan {
 	ensureRuntimeEnvironment(environment);
 	ensureAgentHomeLayout(homeDir);
 	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
-	const harness = harnessDefinition.harnessRuntime;
-	harness.ensureAgentHomeLayout?.(homeDir);
+	const lifecycleHooks = harnessDefinition.lifecycleHooks;
+	lifecycleHooks?.ensureAgentHomeLayout?.(homeDir);
 	if (harnessDefinition.kind === "ousia") {
 		ensureDailySessionDistillationTask(homeDir);
 	}
-	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
-	const channelKinds: ChannelKind[] = enabledChannels.length
-		? enabledChannels.map((channel) => channel.kind)
-		: ["feishu"];
-	const channelRuntimes = createChannelRuntimes(channelKinds);
+	const channelRuntimes = createChannelRuntimes(profile);
 	if (!channelRuntimes.length) {
 		throw new Error("No enabled channel runtime is available for this profile.");
 	}
-	return { homeDir, environment, lifecycle, harnessDefinition, channelRuntimes };
+	return { homeDir, profile, environment, lifecycle, harnessDefinition, channelRuntimes };
 }
 
 export async function runPie(): Promise<number> {
+	const startedAt = Date.now();
 	const plan = createRuntimePlan();
-	const { homeDir, environment, lifecycle, harnessDefinition, channelRuntimes } = plan;
-	const harness = harnessDefinition.harnessRuntime;
+	const { homeDir, profile, environment, lifecycle, harnessDefinition, channelRuntimes } = plan;
+	const lifecycleHooks = harnessDefinition.lifecycleHooks;
 	process.chdir(environment.workDir);
 	const primaryRuntime = channelRuntimes[0]!;
 	const persistLifecycle = (): void => {
@@ -133,8 +88,9 @@ export async function runPie(): Promise<number> {
 	const gatewaySecret =
 		process.env.PIE_GATEWAY_SECRET?.trim() ||
 		undefined;
-	const taskEngine = harness.createTaskEngineProcessManager
-		? harness.createTaskEngineProcessManager({
+	const managedHarnessServiceExternal = process.env.PIE_MANAGED_HARNESS_SERVICE === "external";
+	const taskEngine = lifecycleHooks?.createTaskEngineProcessManager
+		? lifecycleHooks.createTaskEngineProcessManager({
 				homeDir,
 				environment,
 				channel: primaryRuntime.identity.channel,
@@ -142,17 +98,16 @@ export async function runPie(): Promise<number> {
 				gatewaySecret,
 			})
 		: undefined;
-	const profile = getStoredProfile(loadConfigStore());
-	const harnessService = harnessDefinition.createManagedHarnessServiceManager
-		? harnessDefinition.createManagedHarnessServiceManager({
+	const harnessService = !managedHarnessServiceExternal && lifecycleHooks?.createManagedServiceManager
+		? lifecycleHooks.createManagedServiceManager({
 				homeDir,
 				environment,
 				config: profile?.harness.config,
 				model: profile?.harness.model,
 			})
 		: undefined;
-	const turnGateway = harness.createTurnGatewayServer
-		? harness.createTurnGatewayServer({
+	const turnGateway = lifecycleHooks?.createTurnGatewayServer
+		? lifecycleHooks.createTurnGatewayServer({
 				homeDir,
 				environment,
 				port: gatewayPort,
@@ -161,13 +116,25 @@ export async function runPie(): Promise<number> {
 			})
 		: undefined;
 	const keepAlive = setInterval(() => undefined, 60_000);
+	const span = (name: string, meta?: Record<string, string | number | boolean | undefined>): void => {
+		try {
+			appendStartupSpan(homeDir, {
+				name,
+				harnessKind: harnessDefinition.kind,
+				elapsedMs: Date.now() - startedAt,
+				meta,
+			});
+		} catch {
+			// Startup telemetry must never prevent runtime launch.
+		}
+	};
 
 	const stopRuntime = (code: number): void => {
 		for (const runtime of channelRuntimes) {
 			runtime.setShutdownExitCode?.(code);
 		}
 		taskEngine?.stop();
-		harnessService?.stop();
+		void harnessService?.stop();
 		void turnGateway?.stop();
 		for (const runtime of channelRuntimes) {
 			void runtime.stop();
@@ -179,14 +146,32 @@ export async function runPie(): Promise<number> {
 	process.once("SIGTERM", onSigterm);
 	lifecycle.mark("starting");
 	persistLifecycle();
+	span("runtime_starting", { channelCount: channelRuntimes.length });
 	await turnGateway?.start();
-	await harnessService?.start();
+	span("turn_gateway_started", { enabled: Boolean(turnGateway) });
+	if (harnessService && harnessDefinition.kind === "openclaw") {
+		void Promise.resolve(harnessService.start()).then(() => {
+			span("harness_service_started", { enabled: true, background: true });
+		}).catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			lifecycle.mark("degraded", `harness-service-failed: ${message}`);
+			persistLifecycle();
+			span("harness_service_failed", { enabled: true, background: true, message });
+			console.error(`[runtime] OpenClaw managed service failed: ${message}`);
+		});
+		span("harness_service_background_start", { enabled: true });
+	} else {
+		await harnessService?.start();
+		span("harness_service_started", { enabled: Boolean(harnessService), background: false });
+	}
 	await taskEngine?.start();
+	span("task_engine_started", { enabled: Boolean(taskEngine) });
 
 	let failure: unknown;
 	try {
 		lifecycle.mark("running");
 		persistLifecycle();
+		span("runtime_running");
 		return await Promise.race(channelRuntimes.map((runtime) => runtime.start()));
 	} catch (error) {
 		failure = error;
@@ -206,7 +191,7 @@ export async function runPie(): Promise<number> {
 		process.off("SIGTERM", onSigterm);
 		clearInterval(keepAlive);
 		taskEngine?.stop();
-		harnessService?.stop();
+		await harnessService?.stop();
 		await turnGateway?.stop();
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
 		if (!failure) {

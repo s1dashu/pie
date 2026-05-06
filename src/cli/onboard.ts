@@ -42,6 +42,7 @@ import {
 	loadProfileRegistry,
 	registerProfileHome,
 } from "../core/profile-registry.js";
+import { getDefaultResumeSessionsForHarness } from "../core/session-policy.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ONBOARD_ENTRY = fileURLToPath(import.meta.url);
@@ -903,7 +904,7 @@ export async function runOnboard(argv: string[]): Promise<void> {
 
 	const tools = exModel?.tools ?? "coding";
 
-	const resumeSessions = false;
+	const resumeSessions = getDefaultResumeSessionsForHarness("pi");
 	const outputToolCallsToIm = false;
 	const outputToolCallImMaxLength = 60;
 	const outputThinkingToIm = false;

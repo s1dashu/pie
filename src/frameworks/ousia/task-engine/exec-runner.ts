@@ -5,8 +5,14 @@ import { emitToSink } from "./task-sink.js";
 import { TaskStateStore } from "./task-state-store.js";
 import type { ScheduledExecTaskSpec } from "./task-types.js";
 import { isCronExecTaskSpec, isIntervalExecTaskSpec } from "./task-types.js";
-import { buildTaskKey, makeRunId, type LoadedExecTask, type RunStatus } from "./runtime-types.js";
+import { type LoadedExecTask, type RunStatus } from "./runtime-types.js";
 import { getDueCronRunAtMs as getDueCronScheduleRunAtMs, getDueIntervalRunAtMs } from "./schedule.js";
+import {
+	failExecTaskRun,
+	finalizeExecTaskRun,
+	finishExecTaskRun,
+	startExecTaskRun,
+} from "./task-run-lifecycle.js";
 
 function runCommand(command: string, workdir: string, timeoutSec: number): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
 	return new Promise((resolvePromise, reject) => {
@@ -61,36 +67,22 @@ export async function executeScheduledExecTaskRun(
 	}
 	const spec = entrySpec as ScheduledExecTaskSpec;
 	const scheduledForIso = scheduledFor ?? new Date().toISOString();
-	const attempt = entry.state.lastRun?.scheduledFor === scheduledForIso ? entry.state.lastRun.attempt + 1 : 1;
-	const taskKey = buildTaskKey("exec", spec);
-	const runId = makeRunId(taskKey, scheduledForIso, attempt);
-	const startedAt = new Date().toISOString();
-	entry.state.running = true;
-	entry.state.lastStartedScheduledFor = scheduledForIso;
-	entry.state.currentRun = {
-		runId,
-		scheduledFor: scheduledForIso,
-		startedAt,
-		attempt,
-		status: "running",
-		enginePid: process.pid,
-	};
-	entry.state.lastError = null;
+	const run = startExecTaskRun(entry, scheduledForIso);
 	stateStore.writeExecTaskState(entry);
 	stateStore.writeRuntimeSnapshot(allExecTasks, allAgentTasks as Iterable<any>);
 	stateStore.appendTaskRunEvent(entry.filePath, {
 		event: "run_started",
 		taskId: spec.id,
-		taskKey,
-		runId,
+		taskKey: run.taskKey,
+		runId: run.runId,
 		scheduledFor: scheduledForIso,
-		attempt,
+		attempt: run.attempt,
 		triggerType,
 	});
 	appendEngineEvent(ctx, {
 		type: "execTask_run_start",
 		execTaskId: spec.id,
-		runId,
+		runId: run.runId,
 		triggerType,
 		command: spec.run.command,
 		scheduledFor: scheduledForIso,
@@ -102,34 +94,19 @@ export async function executeScheduledExecTaskRun(
 			spec.run.timeoutSec ?? 30,
 		);
 		const status: RunStatus = result.exitCode === 0 && !result.timedOut ? "success" : "failed";
-		const finishedAt = new Date().toISOString();
-		entry.state.lastRunAt = Date.now();
-		entry.state.lastCompletedScheduledFor = scheduledForIso;
-		entry.state.counters.runCount += 1;
-		if (status === "success") {
-			entry.state.counters.successCount += 1;
-			entry.state.lastError = null;
-		} else {
-			entry.state.counters.failureCount += 1;
-			entry.state.lastError = result.timedOut ? "Command timed out." : `Command exited with code ${String(result.exitCode)}.`;
-		}
-		entry.state.lastRun = {
-			runId,
-			scheduledFor: scheduledForIso,
-			startedAt,
-			finishedAt,
-			attempt,
+		const runError = status === "success"
+			? null
+			: result.timedOut ? "Command timed out." : `Command exited with code ${String(result.exitCode)}.`;
+		finishExecTaskRun(entry.state, run, {
 			status,
-			enginePid: process.pid,
 			exitCode: result.exitCode,
 			timedOut: result.timedOut,
-			error: entry.state.lastError,
-		};
-		entry.state.currentRun = undefined;
+			error: runError,
+		});
 		emitToSink(ctx, spec.sink, {
 			timestamp: new Date().toISOString(),
 			execTaskId: spec.id,
-			runId,
+			runId: run.runId,
 			triggerType,
 			command: spec.run.command,
 			exitCode: result.exitCode,
@@ -141,8 +118,8 @@ export async function executeScheduledExecTaskRun(
 		stateStore.appendTaskRunEvent(entry.filePath, {
 			event: "run_finished",
 			taskId: spec.id,
-			taskKey,
-			runId,
+			taskKey: run.taskKey,
+			runId: run.runId,
 			scheduledFor: scheduledForIso,
 			status,
 			exitCode: result.exitCode,
@@ -151,48 +128,33 @@ export async function executeScheduledExecTaskRun(
 		appendEngineEvent(ctx, {
 			type: "execTask_run_end",
 			execTaskId: spec.id,
-			runId,
+			runId: run.runId,
 			triggerType,
 			exitCode: result.exitCode,
 			timedOut: result.timedOut,
 			scheduledFor: scheduledForIso,
 		});
 	} catch (error) {
-		const finishedAt = new Date().toISOString();
 		const errorMessage = error instanceof Error ? error.message : String(error);
-		entry.state.counters.runCount += 1;
-		entry.state.counters.failureCount += 1;
-		entry.state.lastError = errorMessage;
-		entry.state.lastRun = {
-			runId,
-			scheduledFor: scheduledForIso,
-			startedAt,
-			finishedAt,
-			attempt,
-			status: "failed",
-			enginePid: process.pid,
-			error: errorMessage,
-		};
-		entry.state.currentRun = undefined;
+		failExecTaskRun(entry.state, run, errorMessage);
 		stateStore.appendTaskRunEvent(entry.filePath, {
 			event: "run_failed",
 			taskId: spec.id,
-			taskKey,
-			runId,
+			taskKey: run.taskKey,
+			runId: run.runId,
 			scheduledFor: scheduledForIso,
 			error: errorMessage,
 		});
 		appendEngineEvent(ctx, {
 			type: "execTask_run_error",
 			execTaskId: spec.id,
-			runId,
+			runId: run.runId,
 			triggerType,
 			error: errorMessage,
 			scheduledFor: scheduledForIso,
 		});
 	} finally {
-		entry.state.running = false;
-		entry.state.currentRun = undefined;
+		finalizeExecTaskRun(entry.state);
 		stateStore.writeExecTaskState(entry);
 		stateStore.writeRuntimeSnapshot(allExecTasks, allAgentTasks as Iterable<any>);
 	}

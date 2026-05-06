@@ -1,98 +1,21 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import type {
 	AgentHarnessManagedServiceManager,
 	AgentHarnessManagedServiceManagerOptions,
 } from "../harness-service.js";
-
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function shellQuote(value: string): string {
-	return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function resolveLoginShellPath(): string | undefined {
-	const shell = process.env.SHELL?.trim() || "/bin/zsh";
-	const result = spawnSync(shell, ["-lc", 'printf "%s" "$PATH"'], {
-		encoding: "utf8",
-		env: process.env,
-	});
-	const path = result.stdout.trim();
-	return result.status === 0 && path ? path : undefined;
-}
-
-function combinePath(...paths: Array<string | undefined>): string | undefined {
-	const seen = new Set<string>();
-	const values: string[] = [];
-	for (const path of paths) {
-		for (const entry of path?.split(delimiter) ?? []) {
-			if (!entry || seen.has(entry)) {
-				continue;
-			}
-			seen.add(entry);
-			values.push(entry);
-		}
-	}
-	return values.length ? values.join(delimiter) : undefined;
-}
-
-function resolveExecutable(command: string): { executablePath: string; pathEnv?: string } {
-	const loginPath = resolveLoginShellPath();
-	const pathEnv = combinePath(loginPath, process.env.PATH);
-	if (command.includes("/") || command.includes("\\")) {
-		return { executablePath: command, pathEnv };
-	}
-	const shell = process.env.SHELL?.trim() || "/bin/zsh";
-	const found = spawnSync(shell, ["-lc", `command -v ${shellQuote(command)}`], {
-		encoding: "utf8",
-		env: { ...process.env, ...(pathEnv ? { PATH: pathEnv } : {}) },
-	});
-	const shellPath = found.stdout.trim().split(/\r?\n/)[0]?.trim();
-	if (found.status === 0 && shellPath) {
-		return { executablePath: shellPath, pathEnv };
-	}
-	for (const candidate of [
-		join(homedir(), ".local", "bin", command),
-		join(homedir(), ".hermes", "hermes-agent", "venv", "bin", command),
-		`/opt/homebrew/bin/${command}`,
-		`/usr/local/bin/${command}`,
-	]) {
-		if (existsSync(candidate)) {
-			return { executablePath: candidate, pathEnv };
-		}
-	}
-	return { executablePath: command, pathEnv };
-}
-
-function asStringArray(value: unknown): string[] | undefined {
-	if (!Array.isArray(value)) {
-		return undefined;
-	}
-	return value
-		.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
-		.map((item) => item.trim());
-}
-
-function parseArgs(value: string | undefined): string[] | undefined {
-	if (!value?.trim()) {
-		return undefined;
-	}
-	return value.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? undefined;
-}
-
-function isManagedDisabled(value: unknown): boolean {
-	if (typeof value === "boolean") {
-		return !value;
-	}
-	if (typeof value !== "string") {
-		return false;
-	}
-	return ["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
+import {
+	asString,
+	asStringArray,
+	isManagedDisabled,
+	parseArgs,
+	pipePrefixedLogs,
+	resolvePythonCliLaunchCommand,
+	type PythonCliLaunchCommand,
+	stopManagedChildProcess,
+} from "./managed-process.js";
 
 function endpointFromEnv(env: Record<string, string | undefined>): string {
 	const host = env.API_SERVER_HOST || "127.0.0.1";
@@ -100,9 +23,48 @@ function endpointFromEnv(env: Record<string, string | undefined>): string {
 	return `http://${host}:${port}`;
 }
 
+function endpointPartsFromConfig(config: Record<string, unknown>): { host: string; port: string } {
+	const endpoint = asString(config.endpoint);
+	if (!endpoint) {
+		return { host: "127.0.0.1", port: "8642" };
+	}
+	try {
+		const url = new URL(endpoint);
+		return {
+			host: url.hostname || "127.0.0.1",
+			port: url.port || "8642",
+		};
+	} catch {
+		return { host: "127.0.0.1", port: "8642" };
+	}
+}
+
 function healthPathFromConfig(config: Record<string, unknown>): string {
 	const path = asString(config.healthPath) ?? "/health";
 	return path.startsWith("/") ? path : `/${path}`;
+}
+
+export function resolveHermesHome(config: Record<string, unknown>, homeDir: string): string {
+	return asString(config.hermesHome) ?? join(homeDir, "hermes");
+}
+
+export function getHermesCliCandidatePaths(command = "hermes"): string[] {
+	return [
+		join(homedir(), ".local", "bin", command),
+		join(homedir(), ".hermes", "hermes-agent", "venv", "bin", command),
+		join(homedir(), ".local", "pipx", "venvs", command, "bin", command),
+		join(homedir(), ".local", "share", "pipx", "venvs", command, "bin", command),
+		join(homedir(), ".local", "share", "uv", "tools", command, "bin", command),
+		join(homedir(), ".local", "share", "uv", "tools", `${command}-agent`, "bin", command),
+		`/opt/homebrew/bin/${command}`,
+		`/usr/local/bin/${command}`,
+	];
+}
+
+export function resolveHermesLaunchCommand(command = "hermes"): PythonCliLaunchCommand {
+	return resolvePythonCliLaunchCommand(command, {
+		candidatePaths: getHermesCliCandidatePaths(command),
+	});
 }
 
 async function waitForHealth(url: string, timeoutMs = 45_000): Promise<void> {
@@ -123,36 +85,6 @@ async function waitForHealth(url: string, timeoutMs = 45_000): Promise<void> {
 	throw new Error(`Hermes service did not become ready at ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
-function pipePrefixedLogs(
-	stream: NodeJS.ReadableStream | null,
-	target: NodeJS.WritableStream,
-	prefix: string,
-	onLine?: (line: string) => void,
-): void {
-	if (!stream) {
-		return;
-	}
-	let buffer = "";
-	stream.on("data", (chunk: Buffer | string) => {
-		buffer += chunk.toString();
-		const lines = buffer.split(/\r?\n/);
-		buffer = lines.pop() ?? "";
-		for (const line of lines) {
-			if (line.trim()) {
-				onLine?.(line);
-				target.write(`${prefix}${line}\n`);
-			}
-		}
-	});
-	stream.on("end", () => {
-		if (buffer.trim()) {
-			onLine?.(buffer);
-			target.write(`${prefix}${buffer}\n`);
-		}
-		buffer = "";
-	});
-}
-
 export function createHermesServiceProcessManager(
 	options: AgentHarnessManagedServiceManagerOptions,
 ): AgentHarnessManagedServiceManager {
@@ -163,16 +95,18 @@ export function createHermesServiceProcessManager(
 		asStringArray(config.args) ??
 		parseArgs(process.env.HERMES_ARGS) ??
 		["gateway", "run", "--replace"];
+	const endpointParts = endpointPartsFromConfig(config);
 	const managedDisabled =
 		isManagedDisabled(config.managed) ||
 		isManagedDisabled(process.env.HERMES_MANAGED);
 
-	const stop = (): void => {
+	const stop = async (): Promise<void> => {
 		if (!child) {
 			return;
 		}
-		child.kill("SIGTERM");
+		const stoppingChild = child;
 		child = undefined;
+		await stopManagedChildProcess(stoppingChild);
 	};
 
 	return {
@@ -181,21 +115,24 @@ export function createHermesServiceProcessManager(
 				return;
 			}
 			mkdirSync(join(options.homeDir, "runtime"), { recursive: true });
-			const launchCommand = resolveExecutable(command);
+			const hermesHome = resolveHermesHome(config, options.homeDir);
+			mkdirSync(hermesHome, { recursive: true });
+			const launchCommand = resolveHermesLaunchCommand(command);
 			const env = {
 				...process.env,
 				...(launchCommand.pathEnv ? { PATH: launchCommand.pathEnv } : {}),
 				PIE_AGENT_HOME: options.homeDir,
-				HERMES_HOME: process.env.HERMES_HOME || join(options.homeDir, "hermes"),
+				HERMES_HOME: hermesHome,
 				API_SERVER_ENABLED: process.env.API_SERVER_ENABLED || "true",
-				API_SERVER_HOST: process.env.API_SERVER_HOST || "127.0.0.1",
-				API_SERVER_PORT: process.env.API_SERVER_PORT || process.env.HERMES_PORT || "8642",
+				API_SERVER_HOST: process.env.API_SERVER_HOST || endpointParts.host,
+				API_SERVER_PORT: process.env.API_SERVER_PORT || process.env.HERMES_PORT || endpointParts.port,
 				GATEWAY_ALLOW_ALL_USERS: process.env.GATEWAY_ALLOW_ALL_USERS || "true",
 			};
-			child = spawn(launchCommand.executablePath, args, {
+			child = spawn(launchCommand.executablePath, [...launchCommand.argsPrefix, ...args], {
 				cwd: options.environment.workDir,
 				env,
 				stdio: ["ignore", "pipe", "pipe"],
+				detached: process.platform !== "win32",
 			});
 			let sawChildStartup = false;
 			const waitForChildStartup = new Promise<void>((resolve) => {
@@ -212,8 +149,8 @@ export function createHermesServiceProcessManager(
 						resolve();
 					}
 				};
-				pipePrefixedLogs(child?.stdout ?? null, process.stdout, "[hermes] ", markStarted);
-				pipePrefixedLogs(child?.stderr ?? null, process.stderr, "[hermes] ", markStarted);
+				pipePrefixedLogs(child?.stdout ?? null, process.stdout, "[hermes] ", { onLine: markStarted });
+				pipePrefixedLogs(child?.stderr ?? null, process.stderr, "[hermes] ", { onLine: markStarted });
 				setTimeout(resolve, 5_000);
 			});
 			child.on("exit", () => {

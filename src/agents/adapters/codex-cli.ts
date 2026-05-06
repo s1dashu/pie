@@ -1,13 +1,17 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import chalk from "chalk";
 import { sanitizePathSegment } from "../../channels/feishu/messages.js";
+import {
+	checkCodexCliRuntime,
+	getCodexDisplayExecutablePath,
+	resolveCodexLaunchCommand,
+	runCodexCli,
+} from "../harness-services/codex.js";
 import { getAgentRoundInputText, normalizeAgentRoundInput } from "../types.js";
+import { CodexStdioJsonRpcClient, type CodexJsonRpcMessage as JsonRpcMessage } from "./codex-app-server-rpc.js";
 import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
@@ -21,20 +25,6 @@ import type {
 
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexWebSearchMode = "disabled" | "cached" | "live";
-
-interface JsonRpcMessage {
-	id?: number;
-	method?: string;
-	params?: unknown;
-	result?: unknown;
-	error?: { message?: string };
-}
-
-interface PendingRequest {
-	method: string;
-	resolve: (value: unknown) => void;
-	reject: (error: Error) => void;
-}
 
 interface ActiveTurn {
 	prompt: string;
@@ -92,10 +82,12 @@ class CodexAppServerSession implements AgentConversationSession {
 	readonly capabilities = CODEX_CAPABILITIES;
 	readonly state: { messages: unknown[] } = { messages: [] };
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
-	private readonly pending = new Map<number, PendingRequest>();
-	private process?: ChildProcessWithoutNullStreams;
-	private stderr = "";
-	private nextRequestId = 0;
+	private readonly rpc = new CodexStdioJsonRpcClient({
+		stdoutLabel: "codex:stdout",
+		debug: this.options.debug,
+		onNotification: (message) => this.handleNotification(message),
+		onFailure: (error) => this.failProcess(error),
+	});
 	private initialized = false;
 	private threadId: string | undefined;
 	private activeTurnId: string | undefined;
@@ -141,13 +133,12 @@ class CodexAppServerSession implements AgentConversationSession {
 
 	async abort(): Promise<void> {
 		this.aborted = true;
-		this.process?.kill("SIGTERM");
+		this.rpc.close();
 	}
 
 	close(): void {
 		this.aborted = true;
-		this.process?.kill("SIGTERM");
-		this.process = undefined;
+		this.rpc.close();
 		this.initialized = false;
 	}
 
@@ -203,7 +194,7 @@ class CodexAppServerSession implements AgentConversationSession {
 	}
 
 	private async ensureStarted(): Promise<void> {
-		if (this.process && this.initialized) {
+		if (this.initialized) {
 			return;
 		}
 		if (this.starting) {
@@ -218,9 +209,8 @@ class CodexAppServerSession implements AgentConversationSession {
 	}
 
 	private async startProcess(): Promise<void> {
-		this.stderr = "";
-		const codexPath = await resolveCodexExecutable();
-		if (!codexPath) {
+		const codexCommand = await resolveCodexLaunchCommand();
+		if (!codexCommand) {
 			throw new Error("Codex CLI was not found. Install Codex and run `codex login` in a terminal.");
 		}
 		const args = [
@@ -230,28 +220,7 @@ class CodexAppServerSession implements AgentConversationSession {
 			"-c",
 			`web_search="${this.options.webSearchMode}"`,
 		];
-		const child = spawn(codexPath, args, {
-			cwd: process.cwd(),
-			env: process.env,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		this.process = child;
-		const rl = createInterface({ input: child.stdout });
-		rl.on("line", (line) => this.handleLine(line));
-		child.stderr.on("data", (chunk: Buffer) => {
-			this.stderr += chunk.toString("utf8");
-			if (this.stderr.length > 8_000) {
-				this.stderr = this.stderr.slice(-8_000);
-			}
-			if (this.options.debug) {
-				process.stderr.write(chunk);
-			}
-		});
-		child.on("error", (error) => this.failProcess(error));
-		child.on("close", (code, signal) => {
-			rl.close();
-			this.failProcess(new Error(`codex app-server exited${signal ? ` (${signal})` : ""}: ${this.stderr.trim() || `exit ${code}`}`));
-		});
+		this.rpc.start(codexCommand.executablePath, [...codexCommand.argsPrefix, ...args], { pathEnv: codexCommand.pathEnv });
 		await this.request("initialize", {
 			clientInfo: { name: "pie", version: "1.0.0" },
 			capabilities: { experimentalApi: true },
@@ -297,48 +266,6 @@ class CodexAppServerSession implements AgentConversationSession {
 			developerInstructions: this.options.systemPrompt || PIE_CODEX_DEVELOPER_INSTRUCTIONS,
 			config: Object.keys(config).length ? config : undefined,
 		};
-	}
-
-	private handleLine(line: string): void {
-		if (this.options.debug) {
-			console.log(chalk.gray(`[codex:stdout] ${line}`));
-		}
-		let message: JsonRpcMessage;
-		try {
-			message = JSON.parse(line) as JsonRpcMessage;
-		} catch {
-			return;
-		}
-		if (message.id !== undefined) {
-			this.handleResponse(message);
-			return;
-		}
-		this.handleNotification(message);
-	}
-
-	private handleResponse(message: JsonRpcMessage): void {
-		if (message.id === undefined) {
-			return;
-		}
-		const pending = this.pending.get(message.id);
-		if (!pending) {
-			return;
-		}
-		this.pending.delete(message.id);
-		if (message.error) {
-			pending.reject(new Error(message.error.message || `${pending.method} failed`));
-			return;
-		}
-		const threadId = extractThreadId(message.result);
-		if (threadId) {
-			this.threadId = threadId;
-			this.persistThreadId(threadId);
-		}
-		const turnId = extractTurnId(message.result);
-		if (turnId) {
-			this.activeTurnId = turnId;
-		}
-		pending.resolve(message.result);
 	}
 
 	private handleNotification(message: JsonRpcMessage): void {
@@ -495,34 +422,26 @@ class CodexAppServerSession implements AgentConversationSession {
 	}
 
 	private failProcess(error: Error): void {
-		for (const pending of this.pending.values()) {
-			pending.reject(error);
-		}
-		this.pending.clear();
 		this.initialized = false;
-		this.process = undefined;
 		this.failActiveTurn(error);
 	}
 
-	private request(method: string, params: unknown): Promise<unknown> {
-		if (!this.process?.stdin.writable) {
-			return Promise.reject(new Error("Codex app-server is not running."));
+	private async request(method: string, params: unknown): Promise<unknown> {
+		const result = await this.rpc.request(method, params);
+		const threadId = extractThreadId(result);
+		if (threadId) {
+			this.threadId = threadId;
+			this.persistThreadId(threadId);
 		}
-		const id = ++this.nextRequestId;
-		const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
-		return new Promise((resolve, reject) => {
-			this.pending.set(id, { method, resolve, reject });
-			this.process!.stdin.write(payload, (error) => {
-				if (error) {
-					this.pending.delete(id);
-					reject(error);
-				}
-			});
-		});
+		const turnId = extractTurnId(result);
+		if (turnId) {
+			this.activeTurnId = turnId;
+		}
+		return result;
 	}
 
 	private notify(method: string, params: unknown): void {
-		this.process?.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+		this.rpc.notify(method, params);
 	}
 
 	private emit(event: Record<string, unknown>): void {
@@ -674,47 +593,25 @@ class CodexAppServerSessionPool implements AgentConversationSessionPool {
 }
 
 class CodexAppServerAuthClient {
-	private readonly pending = new Map<number, PendingRequest>();
 	private readonly loginWaiters = new Map<string, {
 		resolve: (value: CodexAppServerLoginCompletion) => void;
 		reject: (error: Error) => void;
 	}>();
-	private process?: ChildProcessWithoutNullStreams;
-	private stderr = "";
-	private nextRequestId = 0;
-	private closing = false;
+	private readonly rpc = new CodexStdioJsonRpcClient({
+		stdoutLabel: "codex-auth:stdout",
+		debug: this.options.debug,
+		onNotification: (message) => this.handleNotification(message),
+		onFailure: (error) => this.fail(error),
+	});
 
 	constructor(private readonly options: { debug?: boolean } = {}) {}
 
 	async start(): Promise<void> {
-		const codexPath = await resolveCodexExecutable();
-		if (!codexPath) {
+		const codexCommand = await resolveCodexLaunchCommand();
+		if (!codexCommand) {
 			throw new Error("Codex CLI was not found. Install Codex and run `codex login` in a terminal.");
 		}
-		const child = spawn(codexPath, ["app-server", "--listen", "stdio://"], {
-			cwd: process.cwd(),
-			env: process.env,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		this.process = child;
-		const rl = createInterface({ input: child.stdout });
-		rl.on("line", (line) => this.handleLine(line));
-		child.stderr.on("data", (chunk: Buffer) => {
-			this.stderr += chunk.toString("utf8");
-			if (this.stderr.length > 8_000) {
-				this.stderr = this.stderr.slice(-8_000);
-			}
-			if (this.options.debug) {
-				process.stderr.write(chunk);
-			}
-		});
-		child.on("error", (error) => this.fail(error));
-		child.on("close", (code, signal) => {
-			rl.close();
-			if (!this.closing) {
-				this.fail(new Error(`codex app-server exited${signal ? ` (${signal})` : ""}: ${this.stderr.trim() || `exit ${code}`}`));
-			}
-		});
+		this.rpc.start(codexCommand.executablePath, [...codexCommand.argsPrefix, "app-server", "--listen", "stdio://"], { pathEnv: codexCommand.pathEnv });
 		await this.request("initialize", {
 			clientInfo: { name: "pie", version: "1.0.0" },
 			capabilities: { experimentalApi: true },
@@ -722,9 +619,8 @@ class CodexAppServerAuthClient {
 	}
 
 	close(): void {
-		this.closing = true;
-		this.process?.kill("SIGTERM");
-		this.process = undefined;
+		this.rpc.close();
+		this.fail(new Error("Codex app-server auth client closed."));
 	}
 
 	async readAccount(): Promise<unknown> {
@@ -754,39 +650,6 @@ class CodexAppServerAuthClient {
 		});
 	}
 
-	private handleLine(line: string): void {
-		if (this.options.debug) {
-			console.log(chalk.gray(`[codex-auth:stdout] ${line}`));
-		}
-		let message: JsonRpcMessage;
-		try {
-			message = JSON.parse(line) as JsonRpcMessage;
-		} catch {
-			return;
-		}
-		if (message.id !== undefined) {
-			this.handleResponse(message);
-			return;
-		}
-		this.handleNotification(message);
-	}
-
-	private handleResponse(message: JsonRpcMessage): void {
-		if (message.id === undefined) {
-			return;
-		}
-		const pending = this.pending.get(message.id);
-		if (!pending) {
-			return;
-		}
-		this.pending.delete(message.id);
-		if (message.error) {
-			pending.reject(new Error(message.error.message || `${pending.method} failed`));
-			return;
-		}
-		pending.resolve(message.result);
-	}
-
 	private handleNotification(message: JsonRpcMessage): void {
 		if (message.method !== "account/login/completed") {
 			return;
@@ -805,32 +668,14 @@ class CodexAppServerAuthClient {
 	}
 
 	private request(method: string, params: unknown): Promise<unknown> {
-		if (!this.process?.stdin.writable) {
-			return Promise.reject(new Error("Codex app-server is not running."));
-		}
-		const id = ++this.nextRequestId;
-		const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
-		return new Promise((resolve, reject) => {
-			this.pending.set(id, { method, resolve, reject });
-			this.process!.stdin.write(payload, (error) => {
-				if (error) {
-					this.pending.delete(id);
-					reject(error);
-				}
-			});
-		});
+		return this.rpc.request(method, params);
 	}
 
 	private fail(error: Error): void {
-		for (const pending of this.pending.values()) {
-			pending.reject(error);
-		}
-		this.pending.clear();
 		for (const waiter of this.loginWaiters.values()) {
 			waiter.reject(error);
 		}
 		this.loginWaiters.clear();
-		this.process = undefined;
 	}
 }
 
@@ -978,67 +823,28 @@ function readCodexWebSearchMode(config: Record<string, unknown> | undefined): Co
 	return value === "disabled" || value === "cached" || value === "live" ? value : "cached";
 }
 
-async function runCommand(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-	return new Promise((resolve) => {
-		let stdout = "";
-		let stderr = "";
-		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env });
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf8");
-		});
-		child.on("error", (error) => resolve({ code: 1, stdout, stderr: error.message }));
-		child.on("close", (code) => resolve({ code, stdout, stderr }));
-	});
-}
-
-async function runLoginShellCommand(command: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
-	const shell = process.env.SHELL?.trim() || "/bin/zsh";
-	return runCommand(shell, ["-lc", command]);
-}
-
 async function resolveCodexExecutable(): Promise<string | undefined> {
-	const found = await runLoginShellCommand("command -v codex");
-	const path = found.stdout.trim().split(/\r?\n/)[0]?.trim();
-	return found.code === 0 && path ? path : undefined;
-}
-
-async function runCodexCommand(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-	const codexPath = await resolveCodexExecutable();
-	if (!codexPath) {
-		return { code: 127, stdout: "", stderr: "codex command not found in login shell PATH" };
-	}
-	return runCommand(codexPath, args);
+	const codexCommand = await resolveCodexLaunchCommand();
+	return codexCommand ? getCodexDisplayExecutablePath(codexCommand) : undefined;
 }
 
 async function checkCodexEnvironment(): Promise<HarnessDiagnostic> {
-	const codexPath = await resolveCodexExecutable();
-	if (!codexPath) {
+	const runtime = await checkCodexCliRuntime();
+	if (!runtime.ready || !runtime.executablePath) {
 		return {
 			installed: false,
 			authenticated: false,
-			error: "codex command not found in login shell PATH",
+			executablePath: runtime.executablePath,
+			error: runtime.error || "codex command not found",
 			loginCommand: ["codex", "login"],
 		};
 	}
-	const version = await runCommand(codexPath, ["--version"]);
-	if (version.code !== 0) {
-		return {
-			installed: false,
-			authenticated: false,
-			executablePath: codexPath,
-			error: version.stderr.trim() || "codex command not found",
-			loginCommand: ["codex", "login"],
-		};
-	}
-	const auth = await runCodexCommand(["login", "status"]);
+	const auth = await runCodexCli(["login", "status"]);
 	return {
 		installed: true,
 		authenticated: auth.code === 0,
-		executablePath: codexPath,
-		version: (version.stdout || version.stderr).trim(),
+		executablePath: runtime.executablePath,
+		version: runtime.version,
 		authMethod: "cli",
 		error: auth.code === 0 ? undefined : auth.stderr.trim() || auth.stdout.trim() || "Codex CLI is not logged in.",
 		loginCommand: ["codex", "login"],
@@ -1066,22 +872,13 @@ function diagnosticFromAccount(
 }
 
 export async function checkCodexAppServerEnvironment(): Promise<HarnessDiagnostic> {
-	const codexPath = await resolveCodexExecutable();
-	if (!codexPath) {
+	const runtime = await checkCodexCliRuntime();
+	if (!runtime.ready || !runtime.executablePath) {
 		return {
 			installed: false,
 			authenticated: false,
-			error: "codex command not found in login shell PATH",
-			loginCommand: ["codex", "login"],
-		};
-	}
-	const version = await runCommand(codexPath, ["--version"]);
-	if (version.code !== 0) {
-		return {
-			installed: false,
-			authenticated: false,
-			executablePath: codexPath,
-			error: version.stderr.trim() || "codex command not found",
+			executablePath: runtime.executablePath,
+			error: runtime.error || "codex command not found",
 			loginCommand: ["codex", "login"],
 		};
 	}
@@ -1089,7 +886,7 @@ export async function checkCodexAppServerEnvironment(): Promise<HarnessDiagnosti
 	try {
 		await client.start();
 		const account = await client.readAccount();
-		return diagnosticFromAccount(codexPath, (version.stdout || version.stderr).trim(), account);
+		return diagnosticFromAccount(runtime.executablePath, runtime.version, account);
 	} finally {
 		client.close();
 	}
@@ -1100,13 +897,9 @@ export async function loginCodexWithAppServer(options: {
 	onCompleted?: (completion: CodexAppServerLoginCompletion) => void | Promise<void>;
 	debug?: boolean;
 } = {}): Promise<HarnessDiagnostic> {
-	const codexPath = await resolveCodexExecutable();
-	if (!codexPath) {
-		throw new Error("codex command not found in login shell PATH");
-	}
-	const version = await runCommand(codexPath, ["--version"]);
-	if (version.code !== 0) {
-		throw new Error(version.stderr.trim() || "codex command not found");
+	const runtime = await checkCodexCliRuntime();
+	if (!runtime.ready || !runtime.executablePath) {
+		throw new Error(runtime.error || "codex command not found");
 	}
 	const client = new CodexAppServerAuthClient({ debug: options.debug });
 	try {
@@ -1119,7 +912,7 @@ export async function loginCodexWithAppServer(options: {
 			throw new Error(completion.error || "Codex login was not completed.");
 		}
 		const account = await client.readAccount();
-		return diagnosticFromAccount(codexPath, (version.stdout || version.stderr).trim(), account);
+		return diagnosticFromAccount(runtime.executablePath, runtime.version, account);
 	} finally {
 		client.close();
 	}

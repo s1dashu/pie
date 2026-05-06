@@ -290,13 +290,25 @@ class HermesSession implements AgentConversationSession {
 
 		const abort = new AbortController();
 		this.activeAbort = abort;
+		this.emit({ type: "agent_start" });
+		this.emit({ type: "turn_start" });
 		try {
 			if (useChatCompletionsTransport(this.options)) {
 				await this.promptViaChatCompletions(prompt, abort);
 			} else {
 				await this.promptViaRunEvents(prompt, abort);
 			}
+		} catch (error) {
+			this.state.messages.push({
+				role: "assistant",
+				content: "",
+				stopReason: abort.signal.aborted ? "aborted" : "error",
+				errorMessage: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
 		} finally {
+			this.emit({ type: "turn_end" });
+			this.emit({ type: "agent_end" });
 			if (this.activeAbort === abort) {
 				this.activeAbort = undefined;
 				this.activeRunId = undefined;
@@ -460,7 +472,7 @@ class HermesSession implements AgentConversationSession {
 		}
 		const result = (await response.json().catch(() => ({}))) as HermesChatCompletionResponse;
 		const assistantText = extractAssistantText(result);
-		const assistantMessage = { role: "assistant", content: assistantText };
+		const assistantMessage = { role: "assistant", content: assistantText, ...(result.usage ? { usage: result.usage } : {}) };
 		this.emit({ type: "message_start", message: assistantMessage });
 		if (assistantText) {
 			this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: assistantText } });

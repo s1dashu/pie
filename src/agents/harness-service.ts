@@ -10,7 +10,7 @@ export interface AgentHarnessManagedServiceManagerOptions {
 
 export interface AgentHarnessManagedServiceManager {
 	start(): void | Promise<void>;
-	stop(): void;
+	stop(): void | Promise<void>;
 }
 
 export type AgentHarnessManagedServiceManagerFactory = (

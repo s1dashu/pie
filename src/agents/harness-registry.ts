@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentHarnessKind } from "../core/config-store.js";
-import { resolveAgentHarnessRuntime, type AgentHarnessRuntime } from "../core/agent-harness.js";
+import type { HarnessLifecycleHooks } from "../core/agent-harness.js";
+import { OUSIA_LIFECYCLE_HOOKS } from "../frameworks/ousia/harness.js";
 import { codexCliAgentHarnessAdapter } from "./adapters/codex-cli.js";
 import { hermesAgentHarnessAdapter } from "./adapters/hermes.js";
 import { openClawAgentHarnessAdapter } from "./adapters/openclaw.js";
@@ -21,8 +22,9 @@ export interface AgentHarnessDefinition {
 	kind: AgentHarnessKind;
 	label: string;
 	adapter: AgentHarnessAdapter;
-	harnessRuntime: AgentHarnessRuntime;
-	createManagedHarnessServiceManager?: AgentHarnessManagedServiceManagerFactory;
+	lifecycleHooks?: HarnessLifecycleHooks & {
+		createManagedServiceManager?: AgentHarnessManagedServiceManagerFactory;
+	};
 	skillSources: AgentSkillSourceRegistration[];
 }
 
@@ -39,37 +41,37 @@ const AGENT_HARNESS_DEFINITIONS: Partial<Record<AgentHarnessKind, AgentHarnessDe
 		kind: "pi",
 		label: "Pi Coding Agent",
 		adapter: piAgentHarnessAdapter,
-		harnessRuntime: resolveAgentHarnessRuntime("pi"),
 		skillSources: [globalSkillSource("agent-type", "Pi Agent Skills", ".pi")],
 	},
 	ousia: {
 		kind: "ousia",
 		label: "Ousia",
 		adapter: ousiaAgentHarnessAdapter,
-		harnessRuntime: resolveAgentHarnessRuntime("ousia"),
+		lifecycleHooks: OUSIA_LIFECYCLE_HOOKS,
 		skillSources: [globalSkillSource("agent-type", "Pi Agent Skills", ".pi")],
 	},
 	codex: {
 		kind: "codex",
 		label: "Codex",
 		adapter: codexCliAgentHarnessAdapter,
-		harnessRuntime: resolveAgentHarnessRuntime("codex"),
 		skillSources: [globalSkillSource("agent-type", "Codex Skills", ".codex")],
 	},
 	hermes: {
 		kind: "hermes",
 		label: "Hermes",
 		adapter: hermesAgentHarnessAdapter,
-		harnessRuntime: resolveAgentHarnessRuntime("hermes"),
-		createManagedHarnessServiceManager: createHermesServiceProcessManager,
+		lifecycleHooks: {
+			createManagedServiceManager: createHermesServiceProcessManager,
+		},
 		skillSources: [globalSkillSource("agent-type", "Hermes Skills", ".hermes")],
 	},
 	openclaw: {
 		kind: "openclaw",
 		label: "OpenClaw",
 		adapter: openClawAgentHarnessAdapter,
-		harnessRuntime: resolveAgentHarnessRuntime("openclaw"),
-		createManagedHarnessServiceManager: createOpenClawServiceProcessManager,
+		lifecycleHooks: {
+			createManagedServiceManager: createOpenClawServiceProcessManager,
+		},
 		skillSources: [globalSkillSource("agent-type", "OpenClaw Skills", ".openclaw")],
 	},
 };

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { RuntimeEnvironmentLifecycleSnapshot } from "../runtime/environment.js";
@@ -122,4 +123,26 @@ export function isPidRunning(pid: number): boolean {
 	} catch {
 		return false;
 	}
+}
+
+export function isRuntimeProcessIdentityCommand(command: string, homeDir: string): boolean {
+	const normalizedHome = resolve(homeDir);
+	return (
+		(command.includes("/src/runtime/main.ts") || command.includes("/dist/runtime/main.js")) &&
+		command.includes(`PIE_AGENT_HOME=${normalizedHome}`)
+	);
+}
+
+export function readProcessCommand(pid: number): string | undefined {
+	const ps = spawnSync("ps", ["eww", "-p", String(pid), "-o", "command="], { encoding: "utf8", maxBuffer: 1024 * 1024 });
+	const command = ps.stdout.trim();
+	return ps.status === 0 && command ? command : undefined;
+}
+
+export function isLiveRuntimeProcessRecord(homeDir: string, record: RuntimeProcessRecord): boolean {
+	if (resolve(record.agentHome) !== resolve(homeDir) || !isPidRunning(record.pid)) {
+		return false;
+	}
+	const command = readProcessCommand(record.pid);
+	return Boolean(command && isRuntimeProcessIdentityCommand(command, homeDir));
 }

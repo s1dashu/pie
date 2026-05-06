@@ -57,6 +57,7 @@ export function attachAgentSessionLogging(session: AgentConversationSession, hom
 
 	let activeStream: "assistant" | "thinking" | null = null;
 	let sawAssistantTextDelta = false;
+	let assistantStreamText = "";
 
 	function flushStream(): void {
 		activeStream = null;
@@ -121,6 +122,7 @@ export function attachAgentSessionLogging(session: AgentConversationSession, hom
 			}
 			case "turn_started": {
 				sawAssistantTextDelta = false;
+				assistantStreamText = "";
 				break;
 			}
 			case "turn_finished": {
@@ -138,8 +140,21 @@ export function attachAgentSessionLogging(session: AgentConversationSession, hom
 			case "text_delta": {
 				if (event.delta) {
 					sawAssistantTextDelta = true;
+					assistantStreamText += event.delta;
 					logStreamDelta("assistant", "Agent:", event.delta, chalk.green);
 				}
+				break;
+			}
+			case "text_finished": {
+				const finalText = event.text ?? "";
+				if (finalText && finalText !== assistantStreamText) {
+					const missingText = finalText.startsWith(assistantStreamText) ? finalText.slice(assistantStreamText.length) : finalText;
+					if (missingText) {
+						sawAssistantTextDelta = true;
+						logStreamDelta("assistant", "Agent:", missingText, chalk.green);
+					}
+				}
+				assistantStreamText = finalText || assistantStreamText;
 				break;
 			}
 			case "round_finished": {

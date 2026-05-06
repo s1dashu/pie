@@ -1,8 +1,10 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { execFile } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket from "ws";
-import { normalizeOpenClawModelRef, toOpenClawModelRef } from "../openclaw-models.js";
+import { normalizeOpenClawModelRef, readOpenClawGatewaySettings, toOpenClawModelRef } from "../openclaw-models.js";
 import { getAgentRoundInputText } from "../types.js";
 import type {
 	AgentHarnessAdapter,
@@ -32,6 +34,10 @@ const PIE_OPENCLAW_CLIENT_ID = "gateway-client";
 const PIE_OPENCLAW_CLIENT_MODE = "backend";
 const PIE_OPENCLAW_ROLE = "operator";
 const PIE_OPENCLAW_SCOPES = ["operator.read", "operator.write", "operator.approvals"];
+const OPENCLAW_WARMUP_CONVERSATION_KEY = "__pie_openclaw_warmup__";
+const OPENCLAW_SILENT_REPLY_TOKEN = "NO_REPLY";
+const OPENCLAW_SESSION_CREATE_TIMEOUT_MS = 30_000;
+const OPENCLAW_SESSION_SUBSCRIBE_TIMEOUT_MS = 30_000;
 
 interface OpenClawDeviceIdentity {
 	deviceId: string;
@@ -183,17 +189,37 @@ function createDeviceAuth(nonce: string, token: string | undefined): {
 
 function resolveGatewayUrl(options: AgentSessionRuntimeOptions): string {
 	const config = options.harnessConfig ?? {};
-	return asGatewayUrl(readString(config.gatewayUrl) ?? readString(config.url) ?? process.env.OPENCLAW_GATEWAY_URL);
+	const configuredUrl = readString(config.gatewayUrl) ?? readString(config.url) ?? process.env.OPENCLAW_GATEWAY_URL;
+	const settings = readOpenClawGatewaySettings({
+		stateDir: readString(config.stateDir),
+		configPath: readString(config.configPath),
+		gatewayUrl: configuredUrl,
+	});
+	return configuredUrl ? asGatewayUrl(configuredUrl) : settings.gatewayUrl;
 }
 
 function resolveGatewayToken(options: AgentSessionRuntimeOptions): string | undefined {
 	const config = options.harnessConfig ?? {};
-	return readString(config.token) ?? (process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined);
+	const settings = readOpenClawGatewaySettings({
+		stateDir: readString(config.stateDir),
+		configPath: readString(config.configPath),
+		gatewayUrl: readString(config.gatewayUrl) ?? readString(config.url) ?? process.env.OPENCLAW_GATEWAY_URL,
+	});
+	return readString(config.token) ??
+		(process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined) ??
+		settings.token;
 }
 
 function resolveGatewayPassword(options: AgentSessionRuntimeOptions): string | undefined {
 	const config = options.harnessConfig ?? {};
-	return readString(config.password) ?? (process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined);
+	const settings = readOpenClawGatewaySettings({
+		stateDir: readString(config.stateDir),
+		configPath: readString(config.configPath),
+		gatewayUrl: readString(config.gatewayUrl) ?? readString(config.url) ?? process.env.OPENCLAW_GATEWAY_URL,
+	});
+	return readString(config.password) ??
+		(process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined) ??
+		settings.password;
 }
 
 function resolveAgentId(options: AgentSessionRuntimeOptions): string | undefined {
@@ -221,6 +247,26 @@ function resolveModelRef(options: AgentSessionRuntimeOptions): string | undefine
 function isUnknownModelError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /unknown model|model_not_found/i.test(message);
+}
+
+function isSessionLabelAlreadyInUseError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /label already in use/i.test(message);
+}
+
+function isInvalidOpenClawHandshakeError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /invalid handshake|first request must be connect/i.test(message);
+}
+
+function isDisconnectedOpenClawGatewayError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message === "OpenClaw gateway is not connected.";
+}
+
+function isNonRetryableOpenClawConnectError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /unauthorized|forbidden|auth_token|token_missing|token missing|password/i.test(message);
 }
 
 function normalizeConversationKey(conversationKey: string | undefined): string {
@@ -258,6 +304,54 @@ function extractMessageText(message: unknown): string {
 	return textFromUnknown(record.content ?? record.text ?? record.message);
 }
 
+function isSilentOpenClawReplyText(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed) {
+		return false;
+	}
+	if (new RegExp(`^\\s*${OPENCLAW_SILENT_REPLY_TOKEN}\\s*$`, "i").test(trimmed)) {
+		return true;
+	}
+	if (!trimmed.startsWith("{") || !trimmed.endsWith("}") || !trimmed.includes(OPENCLAW_SILENT_REPLY_TOKEN)) {
+		return false;
+	}
+	try {
+		const parsed = JSON.parse(trimmed) as { action?: unknown };
+		return parsed
+			&& typeof parsed === "object"
+			&& !Array.isArray(parsed)
+			&& Object.keys(parsed).length === 1
+			&& typeof parsed.action === "string"
+			&& parsed.action.trim() === OPENCLAW_SILENT_REPLY_TOKEN;
+	} catch {
+		return false;
+	}
+}
+
+function extractAssistantTextFromWaitResult(value: unknown): string {
+	const record = readRecord(value);
+	if (!record) {
+		return "";
+	}
+	const messages = Array.isArray(record.messages) ? record.messages : Array.isArray(record.finalMessages) ? record.finalMessages : undefined;
+	if (messages) {
+		for (const message of [...messages].reverse()) {
+			const messageRecord = readRecord(message);
+			if (readString(messageRecord?.role) === "assistant") {
+				const text = extractMessageText(message);
+				if (text.trim()) {
+					return text;
+				}
+			}
+		}
+	}
+	const messageText = extractMessageText(record.message ?? record.finalMessage ?? record.assistantMessage ?? record.response);
+	if (messageText.trim()) {
+		return messageText;
+	}
+	return textFromUnknown(record.output ?? record.finalOutput ?? record.text ?? record.content).trim();
+}
+
 function makeRpcError(error: OpenClawRpcError | undefined): Error {
 	const message = readString(error?.message) ?? readString(error?.code) ?? "OpenClaw gateway request failed.";
 	const details = error?.details ? ` ${JSON.stringify(error.details)}` : "";
@@ -266,6 +360,59 @@ function makeRpcError(error: OpenClawRpcError | undefined): Error {
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldLogOpenClawTiming(options: AgentSessionRuntimeOptions): boolean {
+	return options.debug || options.verboseLogs || process.env.PIE_OPENCLAW_TIMING === "1";
+}
+
+function isOpenClawSessionPrewarmEnabled(): boolean {
+	return process.env.PIE_OPENCLAW_PREWARM_SESSION === "1";
+}
+
+function readOpenClawPrewarmPrompt(): string | undefined {
+	const prompt = process.env.PIE_OPENCLAW_PREWARM_PROMPT?.trim();
+	return prompt || undefined;
+}
+
+function formatTimingDetails(details: Record<string, string | number | boolean | undefined>): string {
+	const parts = Object.entries(details)
+		.filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
+		.map(([key, value]) => `${key}=${String(value).replace(/\s+/g, "_")}`);
+	return parts.length ? ` ${parts.join(" ")}` : "";
+}
+
+function logOpenClawTiming(
+	options: AgentSessionRuntimeOptions,
+	conversationKey: string,
+	stage: string,
+	startedAt: number,
+	details: Record<string, string | number | boolean | undefined> = {},
+): void {
+	const elapsedMs = Math.max(0, Date.now() - startedAt);
+	appendOpenClawTurnLog(options.homeDir, {
+		ts: new Date().toISOString(),
+		conversationKey,
+		stage,
+		elapsedMs,
+		...details,
+	});
+	if (shouldLogOpenClawTiming(options)) {
+		console.log(`> openclaw_timing ${conversationKey} stage=${stage} elapsed=${elapsedMs}ms${formatTimingDetails(details)}`);
+	}
+}
+
+function appendOpenClawTurnLog(homeDir: string | undefined, entry: Record<string, unknown>): void {
+	if (!homeDir) {
+		return;
+	}
+	try {
+		const runtimeDir = join(homeDir, "runtime");
+		mkdirSync(runtimeDir, { recursive: true });
+		appendFileSync(join(runtimeDir, "openclaw-turns.jsonl"), `${JSON.stringify(entry)}\n`);
+	} catch {
+		// File diagnostics must never affect agent turns.
+	}
 }
 
 class OpenClawGatewayClient {
@@ -283,24 +430,121 @@ class OpenClawGatewayClient {
 		};
 	}
 
-	async request(method: string, params: Record<string, unknown>, timeoutMs = 30_000): Promise<unknown> {
-		await this.ensureConnected();
+	async request(
+		method: string,
+		params: Record<string, unknown>,
+		timeoutMs = 30_000,
+		options: { signal?: AbortSignal } = {},
+	): Promise<unknown> {
+		const startedAt = Date.now();
+		appendOpenClawTurnLog(this.options.homeDir, {
+			ts: new Date().toISOString(),
+			stage: "rpc_start",
+			method,
+			timeoutMs,
+		});
+		await this.ensureConnectedWithRetry();
+		try {
+			const response = await this.sendRequest(method, params, timeoutMs, options);
+			appendOpenClawTurnLog(this.options.homeDir, {
+				ts: new Date().toISOString(),
+				stage: "rpc_done",
+				method,
+				elapsedMs: Date.now() - startedAt,
+			});
+			return response;
+		} catch (error) {
+			if (!isInvalidOpenClawHandshakeError(error) && !isDisconnectedOpenClawGatewayError(error)) {
+				appendOpenClawTurnLog(this.options.homeDir, {
+					ts: new Date().toISOString(),
+					stage: "rpc_error",
+					method,
+					elapsedMs: Date.now() - startedAt,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}
+			appendOpenClawTurnLog(this.options.homeDir, {
+				ts: new Date().toISOString(),
+				stage: isDisconnectedOpenClawGatewayError(error) ? "rpc_disconnected_retry" : "rpc_stale_handshake_retry",
+				method,
+				elapsedMs: Date.now() - startedAt,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			this.resetConnection(error instanceof Error ? error : new Error(String(error)));
+			await this.ensureConnectedWithRetry(15_000);
+			try {
+				const response = await this.sendRequest(method, params, timeoutMs, options);
+				appendOpenClawTurnLog(this.options.homeDir, {
+					ts: new Date().toISOString(),
+					stage: "rpc_retry_done",
+					method,
+					elapsedMs: Date.now() - startedAt,
+				});
+				return response;
+			} catch (retryError) {
+				appendOpenClawTurnLog(this.options.homeDir, {
+					ts: new Date().toISOString(),
+					stage: "rpc_retry_error",
+					method,
+					elapsedMs: Date.now() - startedAt,
+					error: retryError instanceof Error ? retryError.message : String(retryError),
+				});
+				throw retryError;
+			}
+		}
+	}
+
+	private async sendRequest(
+		method: string,
+		params: Record<string, unknown>,
+		timeoutMs: number,
+		options: { signal?: AbortSignal } = {},
+	): Promise<unknown> {
 		const socket = this.socket;
 		if (!socket || socket.readyState !== WebSocket.OPEN) {
 			throw new Error("OpenClaw gateway is not connected.");
 		}
+		if (options.signal?.aborted) {
+			throw new Error(`OpenClaw gateway request aborted: ${method}`);
+		}
 		const id = randomUUID();
 		return await new Promise<unknown>((resolve, reject) => {
+			const cleanup = (): void => {
+				clearTimeout(timer);
+				options.signal?.removeEventListener("abort", onAbort);
+			};
+			const onAbort = (): void => {
+				this.pending.delete(id);
+				cleanup();
+				reject(new Error(`OpenClaw gateway request aborted: ${method}`));
+			};
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
+				options.signal?.removeEventListener("abort", onAbort);
 				reject(new Error(`OpenClaw gateway request timed out: ${method}`));
 			}, timeoutMs);
-			this.pending.set(id, { resolve, reject, timer });
+			options.signal?.addEventListener("abort", onAbort, { once: true });
+			this.pending.set(id, {
+				resolve: (value) => {
+					cleanup();
+					resolve(value);
+				},
+				reject: (error) => {
+					cleanup();
+					reject(error);
+				},
+				timer,
+			});
 			socket.send(JSON.stringify({ type: "req", id, method, params }));
 		});
 	}
 
 	async warmup(retryForMs = 120_000): Promise<void> {
+		await this.ensureConnectedWithRetry(retryForMs);
+	}
+
+	private async ensureConnectedWithRetry(retryForMs = 120_000): Promise<void> {
 		const deadline = Date.now() + retryForMs;
 		let lastError: unknown;
 		while (Date.now() < deadline) {
@@ -309,6 +553,14 @@ class OpenClawGatewayClient {
 				return;
 			} catch (error) {
 				lastError = error;
+				if (isNonRetryableOpenClawConnectError(error)) {
+					appendOpenClawTurnLog(this.options.homeDir, {
+						ts: new Date().toISOString(),
+						stage: "connect_non_retryable_error",
+						error: error instanceof Error ? error.message : String(error),
+					});
+					throw error;
+				}
 				await delay(1_000);
 			}
 		}
@@ -316,11 +568,16 @@ class OpenClawGatewayClient {
 	}
 
 	close(): void {
+		this.resetConnection(new Error("OpenClaw gateway connection closed."));
+	}
+
+	private resetConnection(error: Error): void {
 		for (const [id, pending] of this.pending) {
 			clearTimeout(pending.timer);
-			pending.reject(new Error(`OpenClaw gateway request cancelled: ${id}`));
+			pending.reject(error);
 		}
 		this.pending.clear();
+		this.socket?.removeAllListeners();
 		this.socket?.close();
 		this.socket = undefined;
 		this.connected = undefined;
@@ -420,6 +677,10 @@ class OpenClawGatewayClient {
 			socket.once("close", () => {
 				if (!handshakeResolved) {
 					fail(new Error("OpenClaw gateway connection closed during handshake."));
+					return;
+				}
+				if (this.socket === socket) {
+					this.resetConnection(new Error("OpenClaw gateway connection closed."));
 				}
 			});
 		});
@@ -461,9 +722,12 @@ class OpenClawSession implements AgentConversationSession {
 	readonly state: { messages: unknown[] } = { messages: [] };
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
 	private readonly sessionKey: string;
+	private readonly sessionLabel: string;
 	private canonicalSessionKey?: string;
 	private unsubscribeGatewayEvents?: () => void;
 	private activeRunId?: string;
+	private activeMessageRunIds = new Set<string>();
+	private acceptUntrackedActiveRunMessages = false;
 	private activeAbort?: AbortController;
 	private roundIndex = 0;
 	private turnIndex = 0;
@@ -472,13 +736,18 @@ class OpenClawSession implements AgentConversationSession {
 	private assistantText = "";
 	private textStarted = false;
 	private toolIds = new Set<string>();
+	private activePromptStartedAt?: number;
+	private roundFinished?: { promise: Promise<void>; resolve: () => void };
 
 	constructor(
 		private readonly options: AgentSessionRuntimeOptions,
 		private readonly client: OpenClawGatewayClient,
 		private readonly conversationKey: string,
+		sessionKey?: string,
+		sessionLabel?: string,
 	) {
-		this.sessionKey = makeSessionKey(conversationKey);
+		this.sessionKey = sessionKey ?? makeSessionKey(conversationKey);
+		this.sessionLabel = sessionLabel ?? conversationKey;
 	}
 
 	get isStreaming(): boolean {
@@ -500,39 +769,76 @@ class OpenClawSession implements AgentConversationSession {
 		if (this.activeAbort) {
 			throw new Error("OpenClaw turn is already running.");
 		}
-		await this.ensureSession();
-		this.state.messages.push({ role: "user", content: prompt });
-		this.startRound();
-		const abort = new AbortController();
-		this.activeAbort = abort;
+		const promptStartedAt = Date.now();
+		this.activePromptStartedAt = promptStartedAt;
+		logOpenClawTiming(this.options, this.conversationKey, "prompt_enter", promptStartedAt, {
+			promptChars: prompt.length,
+		});
 		try {
-			const response = await this.client.request("sessions.send", {
-				key: this.canonicalSessionKey ?? this.sessionKey,
-				message: prompt,
-				thinking: this.options.thinkingLevel === "off" ? undefined : this.options.thinkingLevel,
-				idempotencyKey: randomUUID(),
+			const ensureStartedAt = Date.now();
+			await this.ensureSession(promptStartedAt);
+			logOpenClawTiming(this.options, this.conversationKey, "ensure_session_done", promptStartedAt, {
+				duration: `${Date.now() - ensureStartedAt}ms`,
 			});
-			const sendResponse = readRecord(response);
-			this.activeRunId = readString(sendResponse?.runId);
-			if (this.activeRunId) {
-				await this.waitForRun(this.activeRunId, abort);
-			} else {
-				const errorMessage = textFromUnknown(sendResponse?.error ?? sendResponse?.runError).trim();
+			this.state.messages.push({ role: "user", content: prompt });
+			this.startRound();
+			const abort = new AbortController();
+			this.activeAbort = abort;
+			try {
+				const sendStartedAt = Date.now();
+				logOpenClawTiming(this.options, this.conversationKey, "send_start", promptStartedAt, {
+					key: this.canonicalSessionKey ?? this.sessionKey,
+				});
+				const response = await this.client.request("sessions.send", {
+					key: this.canonicalSessionKey ?? this.sessionKey,
+					message: prompt,
+					thinking: this.options.thinkingLevel === "off" ? undefined : this.options.thinkingLevel,
+					idempotencyKey: randomUUID(),
+				});
+				logOpenClawTiming(this.options, this.conversationKey, "send_response", promptStartedAt, {
+					duration: `${Date.now() - sendStartedAt}ms`,
+				});
+				const sendResponse = readRecord(response);
+				this.activeRunId = readString(sendResponse?.runId);
+				if (this.activeRunId) {
+					this.activeMessageRunIds.add(this.activeRunId);
+					const waitStartedAt = Date.now();
+					logOpenClawTiming(this.options, this.conversationKey, "wait_start", promptStartedAt, {
+						runId: this.activeRunId,
+					});
+					await this.waitForRun(this.activeRunId, abort);
+					logOpenClawTiming(this.options, this.conversationKey, "wait_complete", promptStartedAt, {
+						duration: `${Date.now() - waitStartedAt}ms`,
+						runId: this.activeRunId,
+					});
+				} else {
+					const errorMessage = textFromUnknown(sendResponse?.error ?? sendResponse?.runError).trim();
+					this.finishRound("error");
+					throw new Error(errorMessage || "OpenClaw did not start a run.");
+				}
+			} catch (error) {
+				logOpenClawTiming(this.options, this.conversationKey, "prompt_error", promptStartedAt, {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				if (abort.signal.aborted) {
+					this.finishRound("aborted");
+					return;
+				}
 				this.finishRound("error");
-				throw new Error(errorMessage || "OpenClaw did not start a run.");
+				throw error;
+			} finally {
+				if (this.activeAbort === abort) {
+					this.activeAbort = undefined;
+					this.activeRunId = undefined;
+				}
 			}
 		} catch (error) {
-			if (abort.signal.aborted) {
-				this.finishRound("aborted");
-				return;
-			}
-			this.finishRound("error");
+			logOpenClawTiming(this.options, this.conversationKey, "prompt_outer_error", promptStartedAt, {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		} finally {
-			if (this.activeAbort === abort) {
-				this.activeAbort = undefined;
-				this.activeRunId = undefined;
-			}
+			this.activePromptStartedAt = undefined;
 		}
 	}
 
@@ -543,12 +849,24 @@ class OpenClawSession implements AgentConversationSession {
 		}
 		await this.ensureSession();
 		this.state.messages.push({ role: "user", content: prompt });
-		const response = await this.client.request("sessions.steer", {
-			key: this.canonicalSessionKey ?? this.sessionKey,
+		const isSteeringActiveRun = Boolean(this.activeAbort);
+		if (isSteeringActiveRun) {
+			this.acceptUntrackedActiveRunMessages = true;
+		}
+		const response = await this.client.request("chat.send", {
+			sessionKey: this.canonicalSessionKey ?? this.sessionKey,
 			message: prompt,
+			deliver: false,
 			idempotencyKey: randomUUID(),
 		});
-		this.activeRunId = readString(readRecord(response)?.runId) ?? this.activeRunId;
+		const steerRunId = readString(readRecord(response)?.runId);
+		if (steerRunId) {
+			if (isSteeringActiveRun) {
+				this.activeMessageRunIds.add(steerRunId);
+			} else {
+				this.activeRunId = steerRunId;
+			}
+		}
 	}
 
 	async abort(): Promise<void> {
@@ -559,30 +877,109 @@ class OpenClawSession implements AgentConversationSession {
 		}).catch(() => undefined);
 	}
 
-	private async ensureSession(): Promise<void> {
+	async prepare(): Promise<void> {
+		await this.ensureSession();
+	}
+
+	dispose(): void {
+		this.unsubscribeGatewayEvents?.();
+		this.unsubscribeGatewayEvents = undefined;
+	}
+
+	private async ensureSession(promptStartedAt?: number): Promise<void> {
 		if (this.canonicalSessionKey) {
+			if (promptStartedAt !== undefined) {
+				logOpenClawTiming(this.options, this.conversationKey, "session_reused", promptStartedAt);
+			}
 			return;
 		}
 		const modelRef = resolveModelRef(this.options);
 		const createParams = {
 			key: this.sessionKey,
-			label: this.conversationKey,
+			label: this.sessionLabel,
 			...(resolveAgentId(this.options) ? { agentId: resolveAgentId(this.options) } : {}),
 			...(modelRef ? { model: modelRef } : {}),
 		};
 		let created: unknown;
+		const createStartedAt = Date.now();
+		if (promptStartedAt !== undefined) {
+			logOpenClawTiming(this.options, this.conversationKey, "session_create_start", promptStartedAt, {
+				key: this.sessionKey,
+				label: this.sessionLabel,
+				model: modelRef,
+				agentId: resolveAgentId(this.options),
+				timeoutMs: OPENCLAW_SESSION_CREATE_TIMEOUT_MS,
+			});
+		}
 		try {
-			created = await this.client.request("sessions.create", createParams, 120_000);
-		} catch (error) {
-			if (!modelRef || !isUnknownModelError(error)) {
-				throw error;
+			created = await this.client.request("sessions.create", createParams, OPENCLAW_SESSION_CREATE_TIMEOUT_MS);
+			if (promptStartedAt !== undefined) {
+				logOpenClawTiming(this.options, this.conversationKey, "session_create", promptStartedAt, {
+					duration: `${Date.now() - createStartedAt}ms`,
+					model: modelRef,
+					agentId: resolveAgentId(this.options),
+				});
 			}
-			console.warn(`OpenClaw model ${modelRef} is not available; retrying with the OpenClaw default model.`);
-			const { model: _model, ...defaultModelParams } = createParams;
-			created = await this.client.request("sessions.create", defaultModelParams, 120_000);
+		} catch (error) {
+			if (this.options.resumeSessions && isSessionLabelAlreadyInUseError(error)) {
+				created = { key: this.sessionKey };
+				if (promptStartedAt !== undefined) {
+					logOpenClawTiming(this.options, this.conversationKey, "session_resume_existing_label", promptStartedAt, {
+						duration: `${Date.now() - createStartedAt}ms`,
+					});
+				}
+			} else if (!modelRef || !isUnknownModelError(error)) {
+				if (promptStartedAt !== undefined) {
+					logOpenClawTiming(this.options, this.conversationKey, "session_create_error", promptStartedAt, {
+						duration: `${Date.now() - createStartedAt}ms`,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+				throw error;
+			} else {
+				console.warn(`OpenClaw model ${modelRef} is not available; retrying with the OpenClaw default model.`);
+				const { model: _model, ...defaultModelParams } = createParams;
+				const retryStartedAt = Date.now();
+				if (promptStartedAt !== undefined) {
+					logOpenClawTiming(this.options, this.conversationKey, "session_create_default_model_start", promptStartedAt, {
+						failedModel: modelRef,
+						timeoutMs: OPENCLAW_SESSION_CREATE_TIMEOUT_MS,
+					});
+				}
+				created = await this.client.request("sessions.create", defaultModelParams, OPENCLAW_SESSION_CREATE_TIMEOUT_MS);
+				if (promptStartedAt !== undefined) {
+					logOpenClawTiming(this.options, this.conversationKey, "session_create_default_model", promptStartedAt, {
+						duration: `${Date.now() - retryStartedAt}ms`,
+						failedModel: modelRef,
+						agentId: resolveAgentId(this.options),
+					});
+				}
+			}
 		}
 		this.canonicalSessionKey = readString(readRecord(created)?.key) ?? this.sessionKey;
-		await this.client.request("sessions.messages.subscribe", { key: this.canonicalSessionKey });
+		const subscribeStartedAt = Date.now();
+		if (promptStartedAt !== undefined) {
+			logOpenClawTiming(this.options, this.conversationKey, "session_subscribe_start", promptStartedAt, {
+				key: this.canonicalSessionKey,
+				timeoutMs: OPENCLAW_SESSION_SUBSCRIBE_TIMEOUT_MS,
+			});
+		}
+		try {
+			await this.client.request("sessions.messages.subscribe", { key: this.canonicalSessionKey }, OPENCLAW_SESSION_SUBSCRIBE_TIMEOUT_MS);
+		} catch (error) {
+			if (promptStartedAt !== undefined) {
+				logOpenClawTiming(this.options, this.conversationKey, "session_subscribe_error", promptStartedAt, {
+					duration: `${Date.now() - subscribeStartedAt}ms`,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			throw error;
+		}
+		if (promptStartedAt !== undefined) {
+			logOpenClawTiming(this.options, this.conversationKey, "session_subscribe", promptStartedAt, {
+				duration: `${Date.now() - subscribeStartedAt}ms`,
+			});
+		}
 		this.unsubscribeGatewayEvents = this.client.onEvent((frame) => this.handleGatewayEvent(frame));
 	}
 
@@ -594,6 +991,9 @@ class OpenClawSession implements AgentConversationSession {
 		this.assistantText = "";
 		this.textStarted = false;
 		this.toolIds.clear();
+		this.activeMessageRunIds.clear();
+		this.acceptUntrackedActiveRunMessages = false;
+		this.roundFinished = createDeferredRoundFinished();
 		this.emit({ type: "round_started", roundId: this.currentRoundId });
 		this.emit({ type: "turn_started", roundId: this.currentRoundId, turnId: this.currentTurnId, index: this.turnIndex });
 	}
@@ -618,7 +1018,10 @@ class OpenClawSession implements AgentConversationSession {
 		this.emit({ type: "round_finished", roundId: this.currentRoundId, status, finalText: this.assistantText });
 		this.currentRoundId = "";
 		this.currentTurnId = "";
+		this.acceptUntrackedActiveRunMessages = false;
 		this.activeAbort = undefined;
+		this.roundFinished?.resolve();
+		this.roundFinished = undefined;
 	}
 
 	private handleGatewayEvent(frame: OpenClawEventFrame): void {
@@ -641,7 +1044,7 @@ class OpenClawSession implements AgentConversationSession {
 			return;
 		}
 		const runId = readString(record.runId);
-		if (runId && this.activeRunId && runId !== this.activeRunId) {
+		if (runId && this.activeMessageRunIds.size > 0 && !this.activeMessageRunIds.has(runId) && !this.acceptUntrackedActiveRunMessages) {
 			return;
 		}
 		const state = readString(record.state);
@@ -656,7 +1059,17 @@ class OpenClawSession implements AgentConversationSession {
 		const message = readRecord(record.message);
 		const role = readString(message?.role);
 		const text = extractMessageText(record.message);
-		if (!text || !this.currentRoundId || !this.currentTurnId) {
+		const isSilentReply = isSilentOpenClawReplyText(text);
+		if (!this.currentRoundId || !this.currentTurnId) {
+			return;
+		}
+		if (!text) {
+			return;
+		}
+		if (isSilentReply) {
+			if (state === "final" || (!state && role === "assistant")) {
+				this.finishRound("success");
+			}
 			return;
 		}
 		if (state === "delta") {
@@ -678,7 +1091,7 @@ class OpenClawSession implements AgentConversationSession {
 			return;
 		}
 		const runId = readString(record.runId);
-		if (runId && this.activeRunId && runId !== this.activeRunId) {
+		if (runId && this.activeMessageRunIds.size > 0 && !this.activeMessageRunIds.has(runId) && !this.acceptUntrackedActiveRunMessages) {
 			return;
 		}
 		const data = readRecord(record.data) ?? record;
@@ -730,6 +1143,11 @@ class OpenClawSession implements AgentConversationSession {
 		if (!this.textStarted) {
 			this.textStarted = true;
 			this.emit({ type: "text_start", roundId: this.currentRoundId, turnId: this.currentTurnId, textId: "text_0" });
+			if (this.activePromptStartedAt !== undefined) {
+				logOpenClawTiming(this.options, this.conversationKey, "first_text_delta", this.activePromptStartedAt, {
+					deltaChars: delta.length,
+				});
+			}
 		}
 		this.assistantText += delta;
 		this.emit({
@@ -742,18 +1160,43 @@ class OpenClawSession implements AgentConversationSession {
 	}
 
 	private async waitForRun(runId: string, abort: AbortController): Promise<void> {
-		const wait = this.client.request("agent.wait", { runId, timeoutMs: 10 * 60_000 }, 10 * 60_000 + 5_000);
+		if (!this.currentRoundId) {
+			logOpenClawTiming(this.options, this.conversationKey, "wait_skipped_after_final_event", this.activePromptStartedAt ?? Date.now(), {
+				runId,
+			});
+			return;
+		}
+		const waitAbort = new AbortController();
+		const wait = this.client.request(
+			"agent.wait",
+			{ runId, timeoutMs: 10 * 60_000 },
+			10 * 60_000 + 5_000,
+			{ signal: waitAbort.signal },
+		).catch((error: unknown) => {
+			if (waitAbort.signal.aborted) {
+				return undefined;
+			}
+			throw error;
+		});
 		const abortWait = new Promise<undefined>((resolve) => abort.signal.addEventListener("abort", () => resolve(undefined), { once: true }));
-		const result = await Promise.race([wait, abortWait]);
+		const waiters: Array<Promise<unknown>> = [wait, abortWait];
+		if (this.roundFinished) {
+			waiters.push(this.roundFinished.promise);
+		}
+		const result = await Promise.race(waiters);
+		waitAbort.abort();
 		if (abort.signal.aborted) {
+			return;
+		}
+		if (!this.currentRoundId) {
+			logOpenClawTiming(this.options, this.conversationKey, "wait_unblocked_by_final_event", this.activePromptStartedAt ?? Date.now(), {
+				runId,
+			});
 			return;
 		}
 		const waitResult = readRecord(result);
 		const status = readString(waitResult?.status);
 		const errorMessage = textFromUnknown(waitResult?.error ?? waitResult?.finalError).trim();
-		if (!this.currentRoundId) {
-			return;
-		}
 		if (errorMessage || status === "error" || readString(waitResult?.stopReason) === "error") {
 			this.finishRound("error");
 			throw new Error(errorMessage || "OpenClaw run failed.");
@@ -762,14 +1205,18 @@ class OpenClawSession implements AgentConversationSession {
 			this.finishRound("aborted");
 			return;
 		}
+		const waitAssistantText = extractAssistantTextFromWaitResult(waitResult);
+		if (!this.assistantText.trim() && waitAssistantText && !isSilentOpenClawReplyText(waitAssistantText)) {
+			this.emitTextDelta(waitAssistantText);
+		}
 		if (!this.assistantText.trim()) {
 			await delay(300);
 			if (!this.currentRoundId) {
 				return;
 			}
 			if (!this.assistantText.trim()) {
-				this.finishRound("error");
-				throw new Error("OpenClaw run finished without assistant text.");
+				this.finishRound("success");
+				return;
 			}
 		}
 		this.finishRound("success");
@@ -782,14 +1229,24 @@ class OpenClawSession implements AgentConversationSession {
 	}
 }
 
+function createDeferredRoundFinished(): { promise: Promise<void>; resolve: () => void } {
+	let resolve: () => void = () => undefined;
+	const promise = new Promise<void>((nextResolve) => {
+		resolve = nextResolve;
+	});
+	return { promise, resolve };
+}
+
 class OpenClawSessionPool implements AgentConversationSessionPool {
 	readonly capabilities = OPENCLAW_CAPABILITIES;
 	private readonly client: OpenClawGatewayClient;
 	private readonly sessions = new Map<string, OpenClawSession>();
+	private readonly sessionNamespace: string | undefined;
 
 	constructor(private readonly options: AgentSessionRuntimeOptions) {
 		this.client = new OpenClawGatewayClient(options);
-		void this.client.warmup().catch((error) => {
+		this.sessionNamespace = options.resumeSessions ? undefined : randomUUID();
+		void this.client.warmup().then(() => this.prewarmIfConfigured()).catch((error) => {
 			if (options.verboseLogs || options.debug) {
 				console.warn(`OpenClaw gateway warmup skipped: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -802,9 +1259,43 @@ class OpenClawSessionPool implements AgentConversationSessionPool {
 		if (existing) {
 			return existing;
 		}
-		const session = new OpenClawSession(this.options, this.client, normalizedConversationKey);
+		const session = new OpenClawSession(
+			this.options,
+			this.client,
+			normalizedConversationKey,
+			this.resolveSessionKey(normalizedConversationKey),
+			this.resolveSessionLabel(normalizedConversationKey),
+		);
 		this.sessions.set(normalizedConversationKey, session);
 		return session;
+	}
+
+	private resolveSessionKey(conversationKey: string): string {
+		const base = makeSessionKey(conversationKey);
+		return this.sessionNamespace ? `${base}:ephemeral:${this.sessionNamespace}` : base;
+	}
+
+	private resolveSessionLabel(conversationKey: string): string {
+		return this.sessionNamespace ? `${conversationKey}:ephemeral:${this.sessionNamespace}` : conversationKey;
+	}
+
+	private async prewarmIfConfigured(): Promise<void> {
+		const prompt = readOpenClawPrewarmPrompt();
+		if (!isOpenClawSessionPrewarmEnabled() && !prompt) {
+			return;
+		}
+		const startedAt = Date.now();
+		const session = new OpenClawSession(this.options, this.client, OPENCLAW_WARMUP_CONVERSATION_KEY);
+		try {
+			await session.prepare();
+			logOpenClawTiming(this.options, OPENCLAW_WARMUP_CONVERSATION_KEY, "prewarm_session_ready", startedAt);
+			if (prompt) {
+				await session.prompt(prompt);
+				logOpenClawTiming(this.options, OPENCLAW_WARMUP_CONVERSATION_KEY, "prewarm_prompt_complete", startedAt);
+			}
+		} finally {
+			session.dispose();
+		}
 	}
 
 	async resetSession(conversationKey: string): Promise<void> {
@@ -813,6 +1304,7 @@ class OpenClawSessionPool implements AgentConversationSessionPool {
 		if (existing?.isStreaming) {
 			await existing.abort();
 		}
+		existing?.dispose();
 		this.sessions.delete(normalizedConversationKey);
 	}
 }
