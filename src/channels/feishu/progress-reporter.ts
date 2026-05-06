@@ -3,7 +3,14 @@ import chalk from "chalk";
 import type { AgentSessionEvent } from "../../agents/session-runtime.js";
 import type { FeishuMessageOutputMode } from "../../core/message-style.js";
 import type { ToolCallImMaxLength } from "../common/tool-call-im.js";
-import { LarkClient, sendCardLark, sendTextLark, type LarkConfig, type LarkMessageEvent } from "./platform/index.js";
+import {
+	LarkClient,
+	sendCardLark,
+	sendTextLark,
+	type LarkConfig,
+	type LarkMessageEvent,
+	type LarkSendResult,
+} from "./platform/index.js";
 
 export type SessionEvent = AgentSessionEvent;
 
@@ -248,7 +255,7 @@ async function sendStyledReply(
 	event: LarkMessageEvent,
 	text: string,
 	mode: FeishuMessageOutputMode,
-) {
+): Promise<LarkSendResult> {
 	if (mode === "card") {
 		return sendCardLark({
 			config,
@@ -258,6 +265,23 @@ async function sendStyledReply(
 	}
 	return sendPlainReply(config, event, text);
 }
+
+export interface LarkProgressDeliveryDeps {
+	sendPlainReply(config: LarkConfig, event: LarkMessageEvent, text: string): Promise<LarkSendResult>;
+	sendStyledReply(
+		config: LarkConfig,
+		event: LarkMessageEvent,
+		text: string,
+		mode: FeishuMessageOutputMode,
+	): Promise<LarkSendResult>;
+	updateStyledReply(config: LarkConfig, messageId: string, text: string, mode: FeishuMessageOutputMode): Promise<void>;
+}
+
+const DEFAULT_DELIVERY_DEPS: LarkProgressDeliveryDeps = {
+	sendPlainReply,
+	sendStyledReply,
+	updateStyledReply,
+};
 
 async function updateStyledReply(
 	config: LarkConfig,
@@ -316,6 +340,8 @@ export class LarkProgressReporter {
 	private flushTimer?: ReturnType<typeof setTimeout>;
 	private pending: Promise<void> = Promise.resolve();
 	private visibleResponseStarted = false;
+	private assistantDeliverySucceeded = false;
+	private lastDeliveryError?: unknown;
 
 	constructor(
 		private readonly event: LarkMessageEvent,
@@ -324,6 +350,7 @@ export class LarkProgressReporter {
 		private readonly outputToolCallImMaxLength: ToolCallImMaxLength,
 		private readonly outputThinkingToIm: boolean,
 		private readonly messageOutputMode: FeishuMessageOutputMode,
+		private readonly delivery: LarkProgressDeliveryDeps = DEFAULT_DELIVERY_DEPS,
 	) {}
 
 	async markReceived(): Promise<void> {
@@ -400,6 +427,7 @@ export class LarkProgressReporter {
 		}
 		this.finalizeActiveSegment();
 		await this.pending;
+		await this.ensureFinalDelivered(finalText);
 		await this.clearReaction();
 	}
 
@@ -409,7 +437,7 @@ export class LarkProgressReporter {
 			this.flushTimer = undefined;
 		}
 		await this.clearReaction();
-		await sendPlainReply(this.config, this.event, `Failed: ${errorMessage}`);
+		await this.delivery.sendPlainReply(this.config, this.event, `Failed: ${errorMessage}`);
 	}
 
 	async dispose(): Promise<void> {
@@ -419,6 +447,18 @@ export class LarkProgressReporter {
 		}
 		await this.pending;
 		await this.clearReaction();
+	}
+
+	private async ensureFinalDelivered(finalText: string): Promise<void> {
+		const normalizedFinalText = finalText.trim();
+		if (!normalizedFinalText || this.assistantDeliverySucceeded) {
+			return;
+		}
+
+		const cause = this.lastDeliveryError ? ` after delivery failure: ${formatLarkError(this.lastDeliveryError)}` : "";
+		console.warn(chalk.gray(`Lark final reply fallback triggered${cause}`));
+		const result = await this.delivery.sendPlainReply(this.config, this.event, normalizedFinalText);
+		this.recordSendSuccess(result, "final_fallback");
 	}
 
 		private startSegment(kind: AssistantSegment["kind"]): void {
@@ -557,25 +597,38 @@ export class LarkProgressReporter {
 		}
 		if (segment.messageId) {
 			try {
-				await updateStyledReply(this.config, segment.messageId, currentChunk, this.messageOutputMode);
+				await this.delivery.updateStyledReply(this.config, segment.messageId, currentChunk, this.messageOutputMode);
 				segment.messageEditCount += 1;
+				this.recordUpdateSuccess(segment.kind);
 			} catch (error) {
-				if (!isMessageEditLimitError(error)) {
-					throw error;
+				if (segment.kind === "assistant") {
+					this.assistantDeliverySucceeded = false;
 				}
-				console.warn(chalk.gray("Assistant segment edit limit reached, continuing in a new message."));
+				if (isMessageEditLimitError(error)) {
+					console.warn(chalk.gray("Assistant segment edit limit reached, continuing in a new message."));
+					segment.messagePrefix = segment.lastRendered;
+					currentChunk = getContinuationText(rendered, segment.messagePrefix);
+				} else {
+					this.recordDeliveryFailure(error, "assistant_segment_update");
+					segment.messagePrefix = "";
+					currentChunk = rendered;
+				}
 				segment.messageId = undefined;
-				segment.messagePrefix = segment.lastRendered;
 				segment.messageEditCount = 0;
-				currentChunk = getContinuationText(rendered, segment.messagePrefix);
 			}
 		}
 		if (!segment.messageId && currentChunk) {
-			const result = await sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
-			if (result.messageId) {
+			try {
+				const result = await this.delivery.sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
+				this.recordSendSuccess(result, "assistant_segment", segment.kind);
 				segment.messageId = result.messageId;
 				segment.messagePrefix = rendered.slice(0, rendered.length - currentChunk.length);
 				segment.messageEditCount = 0;
+			} catch (error) {
+				if (segment.kind === "assistant") {
+					this.assistantDeliverySucceeded = false;
+				}
+				throw error;
 			}
 		}
 		segment.lastRendered = rendered;
@@ -615,34 +668,61 @@ export class LarkProgressReporter {
 		}
 		if (block.messageId) {
 			try {
-				await updateStyledReply(this.config, block.messageId, currentChunk, this.messageOutputMode);
+				await this.delivery.updateStyledReply(this.config, block.messageId, currentChunk, this.messageOutputMode);
 				block.messageEditCount += 1;
+				this.recordUpdateSuccess("tool");
 			} catch (error) {
-				if (!isMessageEditLimitError(error)) {
-					throw error;
+				if (isMessageEditLimitError(error)) {
+					console.warn(chalk.gray("Tool run IM edit limit reached, continuing in a new message."));
+					block.messagePrefix = block.lastRendered;
+					currentChunk = getContinuationText(rendered, block.messagePrefix);
+				} else {
+					this.recordDeliveryFailure(error, "tool_run_update");
+					block.messagePrefix = "";
+					currentChunk = rendered;
 				}
-				console.warn(chalk.gray("Tool run IM edit limit reached, continuing in a new message."));
 				block.messageId = undefined;
-				block.messagePrefix = block.lastRendered;
 				block.messageEditCount = 0;
-				currentChunk = getContinuationText(rendered, block.messagePrefix);
 			}
 		}
 		if (!block.messageId && currentChunk) {
-			const result = await sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
-			if (result.messageId) {
-				block.messageId = result.messageId;
-				block.messagePrefix = rendered.slice(0, rendered.length - currentChunk.length);
-				block.messageEditCount = 0;
-			}
+			const result = await this.delivery.sendStyledReply(this.config, this.event, currentChunk, this.messageOutputMode);
+			this.recordSendSuccess(result, "tool_run", "tool");
+			block.messageId = result.messageId;
+			block.messagePrefix = rendered.slice(0, rendered.length - currentChunk.length);
+			block.messageEditCount = 0;
 		}
 		block.lastRendered = rendered;
 	}
 
 	private enqueue(task: () => Promise<void>): void {
 		this.pending = this.pending
-			.then(task, task)
-			.catch((error) => console.warn(chalk.gray(`Lark progress update skipped: ${formatLarkError(error)}`)));
+			.then(task)
+			.catch((error) => this.recordDeliveryFailure(error, "queued_delivery"));
+	}
+
+	private recordSendSuccess(
+		result: LarkSendResult,
+		source: string,
+		kind: AssistantSegment["kind"] | "tool" = "assistant",
+	): void {
+		if (!result.messageId) {
+			throw new Error(`Lark ${source} send returned empty message_id.`);
+		}
+		if (kind === "assistant") {
+			this.assistantDeliverySucceeded = true;
+		}
+	}
+
+	private recordUpdateSuccess(kind: AssistantSegment["kind"] | "tool"): void {
+		if (kind === "assistant") {
+			this.assistantDeliverySucceeded = true;
+		}
+	}
+
+	private recordDeliveryFailure(error: unknown, source: string): void {
+		this.lastDeliveryError = error;
+		console.warn(chalk.gray(`Lark progress delivery failed source=${source}: ${formatLarkError(error)}`));
 	}
 
 	private async beginVisibleResponse(): Promise<void> {

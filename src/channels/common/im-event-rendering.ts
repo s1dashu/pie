@@ -17,7 +17,11 @@ export class ThinkingPresentationBuffer {
 			this.text += event.delta;
 		}
 		if (event.type === "thinking_finished" && event.thinking) {
+			const previousText = this.text;
 			this.text = event.thinking;
+			if (!this.text.startsWith(previousText)) {
+				this.flushedLength = 0;
+			}
 		}
 	}
 

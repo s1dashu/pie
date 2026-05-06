@@ -22,7 +22,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): DiscordBotCo
 			}
 		},
 	});
-	const token = process.env.DISCORD_BOT_TOKEN?.trim();
+	const env = common.runtimeEnv;
+	const token = env.DISCORD_BOT_TOKEN?.trim();
 	if (!token) {
 		throw new Error("Missing DISCORD_BOT_TOKEN");
 	}
@@ -30,8 +31,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): DiscordBotCo
 		...common,
 		discord: {
 			token,
-			applicationId: process.env.DISCORD_APPLICATION_ID?.trim() || undefined,
-			guildId: process.env.DISCORD_GUILD_ID?.trim() || undefined,
+			applicationId: env.DISCORD_APPLICATION_ID?.trim() || undefined,
+			guildId: env.DISCORD_GUILD_ID?.trim() || undefined,
 		},
 	};
 }

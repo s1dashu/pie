@@ -14,6 +14,7 @@ import {
 	type AgentProfile,
 } from "../../core/config-store.js";
 import { resolveDefaultRuntimeHomeDir } from "../../core/profile-registry.js";
+import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js";
 import type { PieChannelKind } from "../../runtime/types.js";
 import { DEFAULT_TOOL_CALL_IM_MAX_LENGTH, type ToolCallImMaxLength } from "./tool-call-im.js";
 
@@ -30,6 +31,7 @@ export interface CommonChannelRuntimeConfig {
 	harnessKind: AgentHarnessKind;
 	harnessConfig?: Record<string, unknown>;
 	channelKind: PieChannelKind;
+	runtimeEnv: RuntimeEnv;
 	model?: Model<any>;
 	modelId?: string;
 	modelLabel: string;
@@ -223,7 +225,7 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	mergeStoredModelIntoEnv(env, options.envPrefix, store);
 
 	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
-	const harness = harnessDefinition.harnessRuntime;
+	const lifecycleHooks = harnessDefinition.lifecycleHooks;
 	const harnessKind = harnessDefinition.kind;
 	const { model, modelId, label: modelLabel } = resolveModel(
 		env,
@@ -233,14 +235,16 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 	);
 	const { tools, label: toolLabel } = resolveTools(env[`${options.envPrefix}_BOT_TOOLS`], `${options.envPrefix}_BOT_TOOLS`);
 	const assistantSystemPrompt =
-		harness.systemPrompt
-			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, harness.systemPrompt.defaultPath)
+		lifecycleHooks?.systemPrompt
+			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, lifecycleHooks.systemPrompt.defaultPath)
 			: undefined;
+	const defaultResumeSessions = getDefaultResumeSessionsForHarness(harnessKind);
 	return {
 		homeDir: resolveAgentHomeDir(),
 		harnessKind,
 		harnessConfig: profile?.harness.config,
 		channelKind: options.channelKind,
+		runtimeEnv: env,
 		model,
 		modelId,
 		modelLabel,
@@ -252,7 +256,7 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		runMode: env.PIE_RUN_MODE === "dev" ? "dev" : "start",
 		debug: parseBooleanFlag(env[`${options.envPrefix}_BOT_DEBUG`], false),
 		verboseLogs: parseBooleanFlag(env[`${options.envPrefix}_BOT_DEBUG`], false),
-		resumeSessions: parseBooleanFlag(env[`${options.envPrefix}_BOT_RESUME_SESSIONS`], false),
+		resumeSessions: parseBooleanFlag(env[`${options.envPrefix}_BOT_RESUME_SESSIONS`], defaultResumeSessions),
 		outputToolCallsToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_TOOL_CALLS`], true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env[`${options.envPrefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`]),
 		outputThinkingToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_THINKING`], false),

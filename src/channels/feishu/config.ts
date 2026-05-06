@@ -16,6 +16,7 @@ import {
 } from "../../core/config-store.js";
 import { DEFAULT_FEISHU_MESSAGE_OUTPUT_MODE, type FeishuMessageOutputMode } from "../../core/message-style.js";
 import { resolveDefaultRuntimeHomeDir } from "../../core/profile-registry.js";
+import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js";
 import { DEFAULT_TOOL_CALL_IM_MAX_LENGTH, type ToolCallImMaxLength } from "../common/tool-call-im.js";
 import type { LarkConfig } from "./platform/index.js";
 
@@ -181,8 +182,8 @@ function resolveRunMode(env: RuntimeEnv): "start" | "dev" {
 }
 
 function resolveAssistantSystemPrompt(env: RuntimeEnv): { path: string; content: string } {
-	const harness = getAgentHarnessDefinition(getStoredProfile(loadConfigStore())?.harness.kind ?? "pi").harnessRuntime;
-	const filePath = resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE ?? harness.systemPrompt?.defaultPath ?? "");
+	const lifecycleHooks = getAgentHarnessDefinition(getStoredProfile(loadConfigStore())?.harness.kind ?? "pi").lifecycleHooks;
+	const filePath = resolve(env.FEISHU_BOT_SYSTEM_PROMPT_FILE ?? lifecycleHooks?.systemPrompt?.defaultPath ?? "");
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
@@ -273,11 +274,12 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 	}
 	const { model, modelId, label: modelLabel } = resolveModel(env, harnessKind);
 	const { tools, label: toolLabel } = resolveTools(env.FEISHU_BOT_TOOLS);
-	const harness = getAgentHarnessDefinition(harnessKind).harnessRuntime;
-	const assistantSystemPrompt = harness.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
+	const lifecycleHooks = getAgentHarnessDefinition(harnessKind).lifecycleHooks;
+	const assistantSystemPrompt = lifecycleHooks?.systemPrompt ? resolveAssistantSystemPrompt(env) : undefined;
 	const runMode = resolveRunMode(env);
 	const debug = parseBooleanFlag(env.FEISHU_BOT_DEBUG, false);
 	const messageOutputMode = resolveFeishuMessageOutputMode(feishuChannel, env.FEISHU_BOT_IM_OUTPUT_MODE);
+	const defaultResumeSessions = getDefaultResumeSessionsForHarness(harnessKind);
 
 	return {
 		homeDir,
@@ -301,7 +303,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): FeishuBotCon
 		runMode,
 		debug,
 		verboseLogs: debug,
-		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, false),
+		resumeSessions: parseBooleanFlag(env.FEISHU_BOT_RESUME_SESSIONS, defaultResumeSessions),
 		outputToolCallsToIm: parseBooleanFlag(env.FEISHU_BOT_IM_TOOL_CALLS, true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env.FEISHU_BOT_IM_TOOL_CALL_MAX_LENGTH),
 		outputThinkingToIm: messageOutputMode === "card" ? false : parseBooleanFlag(env.FEISHU_BOT_IM_THINKING, false),

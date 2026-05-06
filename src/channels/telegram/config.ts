@@ -24,7 +24,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): TelegramBotC
 			}
 		},
 	});
-	const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+	const env = common.runtimeEnv;
+	const token = env.TELEGRAM_BOT_TOKEN?.trim();
 	if (!token) {
 		throw new Error("Missing TELEGRAM_BOT_TOKEN");
 	}
@@ -32,7 +33,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): TelegramBotC
 		...common,
 		telegram: {
 			token,
-			botUsername: process.env.TELEGRAM_BOT_USERNAME?.trim() || undefined,
+			botUsername: env.TELEGRAM_BOT_USERNAME?.trim() || undefined,
 		},
 	};
 }

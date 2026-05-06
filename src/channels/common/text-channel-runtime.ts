@@ -3,7 +3,6 @@
 import chalk from "chalk";
 import { getAgentHarnessLabel } from "../../agents/harness-registry.js";
 import {
-	canSteerSession,
 	createAgentSessionPool,
 	extractAssistantText,
 	extractLastAssistantError,
@@ -48,7 +47,7 @@ interface QueuedTextTurn {
 
 class TextConversationController {
 	private processing = false;
-	private pendingRequest?: QueuedTextTurn;
+	private readonly pendingRequests: QueuedTextTurn[] = [];
 
 	constructor(
 		private readonly conversationKey: string,
@@ -66,42 +65,18 @@ class TextConversationController {
 			resolvePromise = resolve;
 			rejectPromise = reject;
 		});
-		if (this.pendingRequest) {
-			this.pendingRequest.resolve({ assistantText: "", interrupted: true });
-		}
-		this.pendingRequest = { message, promptText, promptInput, resolve: resolvePromise, reject: rejectPromise };
-		if (this.processing && await this.trySteerCurrentRun(this.pendingRequest)) {
-			this.pendingRequest = undefined;
-			return completion;
-		}
+		this.pendingRequests.push({ message, promptText, promptInput, resolve: resolvePromise, reject: rejectPromise });
 		if (!this.processing) {
 			void this.processPending();
 		}
 		return completion;
 	}
 
-	private async trySteerCurrentRun(request: QueuedTextTurn): Promise<boolean> {
-		try {
-			const session = await this.runtime.getSession(this.conversationKey);
-			if (!session.isStreaming || !canSteerSession(session)) {
-				return false;
-			}
-			await session.steer?.(request.promptText);
-			await this.runtime.sendPlainReply(request.message, "已补充到当前正在处理的任务。");
-			request.resolve({ assistantText: "", interrupted: false });
-			return true;
-		} catch (error) {
-			console.warn(chalk.gray(`${this.runtime.channelLabel} steer skipped: ${formatError(error)}`));
-			return false;
-		}
-	}
-
 	private async processPending(): Promise<void> {
 		this.processing = true;
 		try {
 			for (;;) {
-				const request = this.pendingRequest;
-				this.pendingRequest = undefined;
+				const request = this.pendingRequests.shift();
 				if (!request) {
 					return;
 				}
@@ -201,6 +176,9 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 	constructor(
 		private readonly config: CommonChannelRuntimeConfig,
 		private readonly adapter: TextChannelAdapter,
+		dependencies?: {
+			sessionPool?: AgentConversationSessionPool;
+		},
 	) {
 		this.channelLabel = titleCase(config.channelKind);
 		this.presentationRules = getPresentationRules({ channel: config.channelKind });
@@ -209,7 +187,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 			channel: config.channelKind,
 			homeDir: config.homeDir,
 		};
-		this.sessionPool = createAgentSessionPool({
+		this.sessionPool = dependencies?.sessionPool ?? createAgentSessionPool({
 			harnessKind: config.harnessKind,
 			harnessConfig: config.harnessConfig,
 			homeDir: config.homeDir,

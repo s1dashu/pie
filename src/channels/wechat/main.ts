@@ -4,7 +4,6 @@ import process from "node:process";
 import chalk from "chalk";
 import { getAgentHarnessLabel } from "../../agents/harness-registry.js";
 import {
-	canSteerSession,
 	createAgentSessionPool,
 	extractAssistantText,
 	extractLastAssistantError,
@@ -106,7 +105,7 @@ interface QueuedWechatTurn {
 
 class WechatConversationController {
 	private processing = false;
-	private pendingRequest?: QueuedWechatTurn;
+	private readonly pendingRequests: QueuedWechatTurn[] = [];
 
 	constructor(
 		private readonly conversationKey: string,
@@ -121,48 +120,24 @@ class WechatConversationController {
 			resolvePromise = resolve;
 			rejectPromise = reject;
 		});
-		if (this.pendingRequest) {
-			this.pendingRequest.resolve({ assistantText: "", interrupted: true });
-		}
-		this.pendingRequest = {
+		this.pendingRequests.push({
 			message,
 			promptText,
 			promptInput,
 			resolve: resolvePromise,
 			reject: rejectPromise,
-		};
-		if (this.processing && await this.trySteerCurrentRun(this.pendingRequest)) {
-			this.pendingRequest = undefined;
-			return completion;
-		}
+		});
 		if (!this.processing) {
 			void this.processPending();
 		}
 		return completion;
 	}
 
-	private async trySteerCurrentRun(request: QueuedWechatTurn): Promise<boolean> {
-		try {
-			const session = await this.runtime.getSession(this.conversationKey);
-			if (!session.isStreaming || !canSteerSession(session)) {
-				return false;
-			}
-			await session.steer?.(request.promptText);
-			await this.runtime.sendPlainReply(request.message, "已补充到当前正在处理的任务。");
-			request.resolve({ assistantText: "", interrupted: false });
-			return true;
-		} catch (error) {
-			console.warn(chalk.gray(`Wechat steer skipped: ${formatError(error)}`));
-			return false;
-		}
-	}
-
 	private async processPending(): Promise<void> {
 		this.processing = true;
 		try {
 			for (;;) {
-				const request = this.pendingRequest;
-				this.pendingRequest = undefined;
+				const request = this.pendingRequests.shift();
 				if (!request) {
 					return;
 				}

@@ -26,8 +26,9 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): SlackBotConf
 			}
 		},
 	});
-	const botToken = process.env.SLACK_BOT_TOKEN?.trim();
-	const appToken = process.env.SLACK_APP_TOKEN?.trim();
+	const env = common.runtimeEnv;
+	const botToken = env.SLACK_BOT_TOKEN?.trim();
+	const appToken = env.SLACK_APP_TOKEN?.trim();
 	if (!botToken || !appToken) {
 		throw new Error("Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN");
 	}
@@ -36,10 +37,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): SlackBotConf
 		slack: {
 			botToken,
 			appToken,
-			signingSecret: process.env.SLACK_SIGNING_SECRET?.trim() || undefined,
-			teamId: process.env.SLACK_TEAM_ID?.trim() || undefined,
-			appId: process.env.SLACK_APP_ID?.trim() || undefined,
-			botUserId: process.env.SLACK_BOT_USER_ID?.trim() || undefined,
+			signingSecret: env.SLACK_SIGNING_SECRET?.trim() || undefined,
+			teamId: env.SLACK_TEAM_ID?.trim() || undefined,
+			appId: env.SLACK_APP_ID?.trim() || undefined,
+			botUserId: env.SLACK_BOT_USER_ID?.trim() || undefined,
 		},
 	};
 }
