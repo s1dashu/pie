@@ -1,8 +1,9 @@
 {
   "name": "pie",
   "productName": "Pie",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "author": "s1dashu",
   "description": "Personal Agent client for desktop-first local agent profiles and IM channels.",
   "license": "MIT",
   "type": "module",
