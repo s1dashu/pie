@@ -16,6 +16,7 @@ import type {
 	DesktopChannelKind,
 	DesktopDiscordBotProfile,
 	DesktopFeishuAppCredentials,
+	DesktopManagedRuntimeStatus,
 	DesktopRuntimeDiagnostic,
 	DesktopThinkingLevel,
 	DesktopWechatCredentials,
@@ -37,8 +38,8 @@ import { ProviderSelect } from "./ProviderSelect";
 const channelOptions = [
 	{ value: "feishu", labelKey: "feishu", enabled: true, developerOnly: false },
 	{ value: "wechat", labelKey: "wechat", enabled: true, developerOnly: false },
-	{ value: "telegram", label: "Telegram", enabled: false, developerOnly: true },
 	{ value: "discord", label: "Discord", enabled: true, developerOnly: false },
+	{ value: "telegram", label: "Telegram", enabled: false, developerOnly: true },
 	{ value: "slack", label: "Slack", enabled: false, developerOnly: true },
 ] as const;
 
@@ -61,11 +62,11 @@ function appendInstallStep(steps: InstallStep[], message: string, tone: InstallS
 }
 
 const harnessOptions: Array<{ value: DesktopAgentHarness; label: string; enabled: boolean; developerOnly: boolean }> = [
+	{ value: "openclaw", label: "OpenClaw", enabled: true, developerOnly: false },
+	{ value: "hermes", label: "Hermes", enabled: true, developerOnly: false },
 	{ value: "codex", label: "Codex", enabled: true, developerOnly: false },
 	{ value: "pi", label: "Pi", enabled: true, developerOnly: false },
 	{ value: "ousia", label: "Ousia", enabled: true, developerOnly: false },
-	{ value: "hermes", label: "Hermes", enabled: false, developerOnly: true },
-	{ value: "openclaw", label: "OpenClaw", enabled: false, developerOnly: true },
 ];
 
 const codexWebSearchOptions: Array<{ value: DesktopCodexWebSearchMode; label: string }> = [
@@ -125,6 +126,10 @@ const harnessModelConfig = {
 	showsCodexWebSearch: boolean;
 }>;
 
+function getDefaultResumeSessionsForHarness(harness: DesktopAgentHarness): boolean {
+	return harness === "hermes" || harness === "openclaw";
+}
+
 export function CreateAgentView({
 	onCancel,
 	onCreated,
@@ -161,6 +166,9 @@ export function CreateAgentView({
 	const [hermesInstallStatus, setHermesInstallStatus] = useState("");
 	const [hermesInstallSteps, setHermesInstallSteps] = useState<InstallStep[]>([]);
 	const [hermesRuntimeReady, setHermesRuntimeReady] = useState(false);
+	const [openClawInstallStatus, setOpenClawInstallStatus] = useState("");
+	const [openClawInstallSteps, setOpenClawInstallSteps] = useState<InstallStep[]>([]);
+	const [openClawRuntimeReady, setOpenClawRuntimeReady] = useState(false);
 	const [harness, setHarness] = useState<DesktopAgentHarness>("pi");
 	const [provider, setProvider] = useState("kimi-coding");
 	const [model, setModel] = useState("k2p6");
@@ -201,6 +209,13 @@ export function CreateAgentView({
 		refetchOnWindowFocus: false,
 		retry: false,
 		staleTime: 5 * 60_000,
+	});
+	const openClawDiagnostic = useQuery({
+		queryKey: ["managed-runtime", "openclaw"],
+		queryFn: () => window.pie.getManagedRuntimeStatus("openclaw"),
+		enabled: harness === "openclaw",
+		refetchOnWindowFocus: false,
+		retry: false,
 	});
 	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
 		setFeishu(created);
@@ -486,6 +501,25 @@ export function CreateAgentView({
 			}
 		},
 	});
+	const installOpenClaw = useMutation({
+		mutationFn: () => {
+			setOpenClawInstallStatus(t("openclawInstallingOfficial"));
+			setOpenClawInstallSteps([{ id: Date.now(), message: t("openclawPreparingInstall"), tone: "active" }]);
+			return window.pie.upgradeManagedRuntime("openclaw");
+		},
+		onSuccess: async (diagnostic) => {
+			const refreshed = await openClawDiagnostic.refetch();
+			const ready = diagnostic.ready || refreshed.data?.ready === true;
+			setOpenClawRuntimeReady(ready);
+			const message = ready ? t("openclawInstallDone") : diagnostic.error || refreshed.data?.error || t("openclawInstallFirst");
+			setOpenClawInstallStatus(message);
+			setOpenClawInstallSteps((steps) => appendInstallStep(steps, message, ready ? "done" : "error"));
+		},
+		onError: (err: Error) => {
+			setOpenClawInstallSteps((steps) => appendInstallStep(steps, err.message, "error"));
+			onError(err.message);
+		},
+	});
 	const cancelHermesInstall = useMutation({
 		mutationFn: () => {
 			if (!session) {
@@ -519,6 +553,12 @@ export function CreateAgentView({
 			setHermesRuntimeReady(true);
 		}
 	}, [harness, hermesDiagnostic.data?.ready]);
+
+	useEffect(() => {
+		if (harness === "openclaw" && openClawDiagnostic.data?.ready) {
+			setOpenClawRuntimeReady(true);
+		}
+	}, [harness, openClawDiagnostic.data?.ready]);
 
 	useEffect(() => {
 		if (harness !== "openclaw") {
@@ -636,6 +676,7 @@ export function CreateAgentView({
 	};
 	const updateHarnessSelection = (nextHarness: DesktopAgentHarness) => {
 		setHarness(nextHarness);
+		setStartFreshOnRestart(!getDefaultResumeSessionsForHarness(nextHarness));
 		setHermesRuntimeReady(nextHarness === "hermes" && hermesDiagnostic.data?.ready === true);
 		if (nextHarness === "codex") {
 			const defaultCodexModel = session?.codexModels[0];
@@ -684,7 +725,8 @@ export function CreateAgentView({
 		? t("useWechatScan")
 		: t("useFeishuScan");
 	const isHermesRuntimeReady = harness === "hermes" && (hermesRuntimeReady || hermesDiagnostic.data?.ready === true);
-	const requiresRuntimeInstall = harness === "hermes" && !isHermesRuntimeReady;
+	const isOpenClawRuntimeReady = harness === "openclaw" && (openClawRuntimeReady || openClawDiagnostic.data?.ready === true);
+	const requiresRuntimeInstall = (harness === "hermes" && !isHermesRuntimeReady) || (harness === "openclaw" && !isOpenClawRuntimeReady);
 	const visibleSteps = createAgentStepFlow({
 		requiresIdentity,
 		identityAfterCredentials: channels.includes("discord"),
@@ -761,7 +803,13 @@ export function CreateAgentView({
 		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
 		|| (step === "model" && harness === "openclaw" && openClawCatalog.isLoading)
 		|| (step === "model" && (complete.isPending || installCodex.isPending))
-		|| (step === "runtime" && (complete.isPending || installHermes.isPending || !isHermesRuntimeReady));
+		|| (step === "runtime" && (
+			complete.isPending ||
+			installHermes.isPending ||
+			installOpenClaw.isPending ||
+			(harness === "hermes" && !isHermesRuntimeReady) ||
+			(harness === "openclaw" && !isOpenClawRuntimeReady)
+		));
 	const currentStepIndex = visibleSteps.indexOf(step);
 
 	return (
@@ -888,7 +936,7 @@ export function CreateAgentView({
 											setTelegramBotUsername={setTelegramBotUsername}
 										/>
 									</div>
-								) : step === "runtime" ? (
+								) : step === "runtime" && harness === "hermes" ? (
 									<HermesDiagnosticPanel
 										diagnostic={hermesDiagnostic.data}
 										isRuntimeReady={isHermesRuntimeReady}
@@ -902,6 +950,21 @@ export function CreateAgentView({
 										onRefresh={async () => {
 											const refreshed = await hermesDiagnostic.refetch();
 											setHermesRuntimeReady(refreshed.data?.ready === true);
+										}}
+									/>
+								) : step === "runtime" ? (
+									<OpenClawDiagnosticPanel
+										diagnostic={openClawDiagnostic.data}
+										isRuntimeReady={isOpenClawRuntimeReady}
+										isLoading={openClawDiagnostic.isFetching}
+										error={openClawDiagnostic.error instanceof Error ? openClawDiagnostic.error.message : undefined}
+										installStatus={openClawInstallStatus}
+										installSteps={openClawInstallSteps}
+										isInstalling={installOpenClaw.isPending}
+										onInstall={() => installOpenClaw.mutate()}
+										onRefresh={async () => {
+											const refreshed = await openClawDiagnostic.refetch();
+											setOpenClawRuntimeReady(refreshed.data?.ready === true);
 										}}
 									/>
 								) : (
@@ -1308,6 +1371,92 @@ function HermesDiagnosticPanel({
 							onClick={isInstalling ? onCancelInstall : onInstall}
 						>
 							{isInstalling ? t("cancelInstall") : t("hermesInstall")}
+						</Button>
+					)}
+				</div>
+			</div>
+			{installSteps.length > 0 && (
+				<div className="mt-3 space-y-1.5 rounded-xl bg-white/70 p-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+					{installSteps.map((step, index) => {
+						const isLatest = index === installSteps.length - 1;
+						const dotClass = step.tone === "error" ? "bg-[var(--red-9)]" : "bg-[var(--lime-9)]";
+						return (
+							<div key={step.id} className="flex min-w-0 items-start gap-2 text-[11px] leading-5 text-muted-foreground">
+								<span className={cn("mt-2 size-1.5 shrink-0 rounded-full", dotClass, isLatest && step.tone === "active" ? "animate-pulse" : "")} />
+								<span className={cn("min-w-0 flex-1 truncate", isLatest ? "text-[var(--slate-12)]" : "")} title={step.message}>
+									{step.message}
+								</span>
+							</div>
+						);
+					})}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function OpenClawDiagnosticPanel({
+	diagnostic,
+	isRuntimeReady,
+	isLoading,
+	error,
+	installStatus,
+	installSteps,
+	isInstalling,
+	onInstall,
+	onRefresh,
+}: {
+	diagnostic: DesktopManagedRuntimeStatus | undefined;
+	isRuntimeReady: boolean;
+	isLoading: boolean;
+	error?: string;
+	installStatus?: string;
+	installSteps: InstallStep[];
+	isInstalling: boolean;
+	onInstall: () => void;
+	onRefresh: () => void;
+}): JSX.Element {
+	const { t } = useI18n();
+	const ready = isRuntimeReady || diagnostic?.ready === true;
+	const status = error
+		? { label: t("openclawDiagnosticFailed"), tone: "text-[var(--red-11)]", detail: error }
+		: ready
+			? { label: t("openclawReady"), tone: "text-[var(--lime-11)]", detail: diagnostic?.version || t("openclawInstalled") }
+		: !diagnostic
+		? { label: isLoading ? t("openclawChecking") : t("openclawNotChecked"), tone: "text-muted-foreground", detail: t("openclawNeedInstalled") }
+		: diagnostic.installed
+				? { label: t("openclawUpgradeRequired"), tone: "text-[var(--amber-11)]", detail: diagnostic.error || diagnostic.version || t("openclawUpgradeFirst") }
+			: { label: t("openclawMissing"), tone: "text-[var(--red-11)]", detail: diagnostic.error || t("openclawInstallFirst") };
+
+	return (
+		<div className="pie-smooth-corner rounded-2xl bg-[var(--slate-2)] px-3 py-3">
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div className={cn("text-sm font-medium", status.tone)}>{status.label}</div>
+					<div className="mt-1 text-xs leading-5 text-muted-foreground">{installStatus || status.detail}</div>
+					<div className="mt-1 text-xs leading-5 text-muted-foreground">{t("openclawOfficialInstallDesc")}</div>
+					{diagnostic?.executablePath && (
+						<div className="mt-1 truncate text-[11px] text-muted-foreground">{diagnostic.executablePath}</div>
+					)}
+				</div>
+				<div className="flex shrink-0 flex-col gap-2">
+					<Button
+						variant="secondary"
+						size="small"
+						className="text-muted-foreground hover:text-[var(--slate-12)]"
+						onClick={onRefresh}
+						disabled={isLoading || isInstalling}
+					>
+						{isLoading ? t("openclawRefreshing") : t("openclawRefresh")}
+					</Button>
+					{!ready && (
+						<Button
+							variant="default"
+							size="small"
+							onClick={onInstall}
+							disabled={isInstalling}
+						>
+							{isInstalling ? t("openclawInstallingOfficial") : t("installOfficial")}
 						</Button>
 					)}
 				</div>

@@ -199,7 +199,7 @@ export function AgentHeader({
 		reader.readAsDataURL(file);
 	};
 	const showRuntimeUnavailable =
-		agent.harnessKind === "hermes" &&
+		(agent.harnessKind === "hermes" || agent.harnessKind === "openclaw") &&
 		agent.desiredState === "running" &&
 		agent.runtimeEnvironment?.lifecycle.state === "failed" &&
 		agent.status !== "running" &&

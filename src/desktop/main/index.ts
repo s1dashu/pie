@@ -1,7 +1,6 @@
 import { app, BrowserWindow, Tray, dialog, ipcMain, nativeImage, powerSaveBlocker, screen, shell } from "electron";
-import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { totalmem } from "node:os";
+import { spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import {
 	deleteProfileRegistryEntry,
@@ -12,6 +11,7 @@ import {
 	updateProfileRegistryEntry,
 } from "../../core/profile-registry.js";
 import { getAgentEnvFilePath, readAgentEnvFile, upsertAgentEnv } from "../../core/agent-home.js";
+import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js";
 import {
 	getPrimaryFeishuChannel,
 	getPrimaryDiscordChannel,
@@ -21,27 +21,23 @@ import {
 	getProfileModel,
 	loadConfigStore,
 	saveConfigStore,
-	setProfileModel,
 	upsertFeishuChannel,
 	upsertDiscordChannel,
-	upsertSlackChannel,
-	upsertTelegramChannel,
-	upsertWechatChannel,
 	type AgentConfigStore,
 } from "../../core/config-store.js";
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
 import { appendAgentUsageEvent, pruneAgentUsageEvents, readAgentUsageEvents, summarizeAgentUsage } from "../../core/usage-stats.js";
 import { resolveSkillSources } from "../../agents/skills.js";
-import { ensureOpenClawModelState, toOpenClawModelRef } from "../../agents/openclaw-models.js";
 import {
 	clearRuntimeProcessRecord,
+	isLiveRuntimeProcessRecord,
 	isPidRunning,
 	readRuntimeProcessRecord,
 	readRuntimeStateRecord,
-	writeRuntimeStateRecord,
 } from "../../core/runtime-process.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import type {
+	AgentChangeEvent,
 	AgentCreationDraft,
 	AgentAvatarUpload,
 	AgentDeleteEvent,
@@ -65,6 +61,7 @@ import type {
 	DesktopWechatCredentials,
 	DesktopSettings,
 	DesktopSettingsDraft,
+	DesktopBootstrap,
 	ProviderCredentialReuse,
 	RuntimeEnvironmentSummary,
 } from "../shared/types.js";
@@ -105,19 +102,29 @@ import {
 import { readDesktopSettings, retentionToDays, updateDesktopSettings } from "./desktop-settings.js";
 import { createRuntimeEnvironment } from "../../runtime/environment.js";
 import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
-import type { AgentHarnessRuntime } from "../../core/agent-harness.js";
+import type { HarnessLifecycleHooks } from "../../core/agent-harness.js";
+import { readAgentProcessResourceStats, readAgentStorageResourceStats } from "./resource-observer.js";
+import { writeAgentRuntimeLifecycle, writeRuntimeLifecycle } from "./runtime-lifecycle-state.js";
+import { planAgentProfileMutation } from "./agent-profile-mutation.js";
+import { getRestoreDelayMs } from "./agent-restore-schedule.js";
+import { getSharedHarnessServiceInfo, sharedHarnessServices } from "./shared-harness-services.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
-const storageStatsCache = new Map<string, { value: Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes">; expiresAt: number }>();
-const cpuStatsCache = new Map<string, { cpuTimeSeconds: number; sampledAt: number }>();
+const profileAvatarDataUrlCache = new Map<string, { mtimeMs: number; size: number; dataUrl: string }>();
 const PROFILE_AVATAR_STEM = "avatar";
 const PROFILE_AVATAR_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 const RUNTIME_STOP_FORCE_KILL_MS = 5000;
-const RESTORE_AGENTS_ON_LAUNCH_DELAY_MS = 1_500;
-const RESTORE_AGENTS_STAGGER_MS = 500;
+const RESTORE_AGENTS_ON_LAUNCH_DELAY_MS = 500;
+const STORED_RUNTIME_DATA_PRUNE_DELAY_MS = 3_000;
 const agentStartLimiter = new AgentStartLimiter({
 	limits: { hermes: 1, openclaw: 1 },
-	getWeight: getAgentStartWeight,
+	getWeight: (harnessKind) => {
+		const serviceState = getSharedHarnessServiceInfo(harnessKind)?.lifecycle.state;
+		if (harnessKind === "openclaw" && serviceState === "running") {
+			return 1;
+		}
+		return getAgentStartWeight(harnessKind);
+	},
 	getBudget: () => calculateAgentStartBudget(readAgentStartResourceSnapshot()),
 });
 let isQuitting = false;
@@ -200,6 +207,7 @@ function profileAvatarPath(homeDir: string): string | undefined {
 }
 
 function clearProfileAvatarFiles(homeDir: string): void {
+	profileAvatarDataUrlCache.delete(homeDir);
 	for (const ext of PROFILE_AVATAR_EXTENSIONS) {
 		rmSync(join(homeDir, `${PROFILE_AVATAR_STEM}${ext}`), { force: true });
 	}
@@ -365,7 +373,27 @@ function copyDefaultAvatarToProfile(avatarId: string | undefined, homeDir: strin
 
 function readProfileAvatarUrl(homeDir: string): string | undefined {
 	const source = profileAvatarPath(homeDir);
-	return source ? readImageDataUrl(source) : undefined;
+	if (!source) {
+		profileAvatarDataUrlCache.delete(homeDir);
+		return undefined;
+	}
+	try {
+		const stat = statSync(source);
+		const cached = profileAvatarDataUrlCache.get(homeDir);
+		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+			return cached.dataUrl;
+		}
+		const dataUrl = readImageDataUrl(source);
+		if (!dataUrl) {
+			profileAvatarDataUrlCache.delete(homeDir);
+			return undefined;
+		}
+		profileAvatarDataUrlCache.set(homeDir, { mtimeMs: stat.mtimeMs, size: stat.size, dataUrl });
+		return dataUrl;
+	} catch {
+		profileAvatarDataUrlCache.delete(homeDir);
+		return undefined;
+	}
 }
 
 async function uploadAgentAvatar(id: string, upload: AgentAvatarUpload): Promise<AgentDetails> {
@@ -450,163 +478,6 @@ function readSkillNames(path: string): string[] {
 	}
 }
 
-function readDirectorySize(path: string): number {
-	if (!existsSync(path)) {
-		return 0;
-	}
-	try {
-		const stat = lstatSync(path);
-		if (!stat.isDirectory()) {
-			return stat.size;
-		}
-		return readdirSync(path).reduce((total, child) => total + readDirectorySize(join(path, child)), 0);
-	} catch {
-		return 0;
-	}
-}
-
-function readDiskStats(path: string): { diskTotalBytes?: number; diskAvailableBytes?: number } {
-	const df = spawnSync("df", ["-k", path], { encoding: "utf8" });
-	if (df.status !== 0 || !df.stdout.trim()) {
-		return {};
-	}
-	const line = df.stdout.trim().split("\n").at(-1);
-	if (!line) {
-		return {};
-	}
-	const parts = line.trim().split(/\s+/);
-	const totalKb = Number(parts[1]);
-	const availableKb = Number(parts[3]);
-	return {
-		...(Number.isFinite(totalKb) ? { diskTotalBytes: totalKb * 1024 } : {}),
-		...(Number.isFinite(availableKb) ? { diskAvailableBytes: availableKb * 1024 } : {}),
-	};
-}
-
-interface ProcessResourceRow {
-	pid: number;
-	ppid: number;
-	rssKb: number;
-	cpuPercent: number;
-	cpuTimeSeconds: number;
-	command: string;
-}
-
-function readProcessResourceRows(): ProcessResourceRow[] {
-	const ps = spawnSync("ps", ["-axo", "pid=,ppid=,rss=,%cpu=,time=,command="], { encoding: "utf8" });
-	if (ps.status !== 0 || !ps.stdout.trim()) {
-		return [];
-	}
-	return ps.stdout.split("\n").flatMap((line) => {
-		const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.+)$/);
-		if (!match) {
-			return [];
-		}
-		const [, pidText, ppidText, rssText, cpuText, timeText, command] = match;
-		const pid = Number(pidText);
-		const ppid = Number(ppidText);
-		const rssKb = Number(rssText);
-		const cpuPercent = Number(cpuText);
-		const cpuTimeSeconds = parseCpuTimeSeconds(timeText);
-		if (![pid, ppid, rssKb, cpuPercent, cpuTimeSeconds].every(Number.isFinite)) {
-			return [];
-		}
-		return [{ pid, ppid, rssKb, cpuPercent, cpuTimeSeconds, command }];
-	});
-}
-
-function parseCpuTimeSeconds(value: string): number {
-	const [dayOrTime, rest] = value.includes("-") ? value.split("-", 2) : ["0", value];
-	const days = Number(dayOrTime);
-	const parts = rest.split(":").map(Number);
-	if (parts.some((part) => !Number.isFinite(part))) {
-		return 0;
-	}
-	const [hours, minutes, seconds] = parts.length === 3 ? parts : [0, parts[0] ?? 0, parts[1] ?? 0];
-	return days * 86_400 + hours * 3_600 + minutes * 60 + seconds;
-}
-
-function readExpandedProcessCommand(pid: number): string {
-	const ps = spawnSync("ps", ["eww", "-p", String(pid), "-o", "command="], { encoding: "utf8", maxBuffer: 1024 * 1024 });
-	return ps.status === 0 ? ps.stdout : "";
-}
-
-function findDescendantPids(rootPid: number, rows: ProcessResourceRow[]): Set<number> {
-	const descendants = new Set<number>([rootPid]);
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const row of rows) {
-			if (!descendants.has(row.pid) && descendants.has(row.ppid)) {
-				descendants.add(row.pid);
-				changed = true;
-			}
-		}
-	}
-	return descendants;
-}
-
-function isAgentProcessForHome(row: ProcessResourceRow, homeDir: string): boolean {
-	if (
-		!/src\/runtime\/main\.ts|dist\/runtime\/main\.js|src\/frameworks\/ousia\/task-engine\/|dist\/frameworks\/ousia\/task-engine\//.test(
-			row.command,
-		)
-	) {
-		return false;
-	}
-	return readExpandedProcessCommand(row.pid).includes(`PIE_AGENT_HOME=${homeDir}`);
-}
-
-function readProcessResourceStats(pid: number | undefined, homeDir: string): Pick<AgentResourceStats, "cpuPercent" | "memoryBytes" | "memoryPercent" | "pid" | "running"> {
-	const rows = readProcessResourceRows();
-	if (!rows.length) {
-		return { cpuPercent: 0, memoryBytes: 0, memoryPercent: 0, running: false };
-	}
-	const selectedPids = pid ? findDescendantPids(pid, rows) : new Set<number>();
-	for (const row of rows) {
-		if (isAgentProcessForHome(row, homeDir)) {
-			for (const descendantPid of findDescendantPids(row.pid, rows)) {
-				selectedPids.add(descendantPid);
-			}
-		}
-	}
-	const selectedRows = rows.filter((row) => selectedPids.has(row.pid));
-	if (!selectedRows.length) {
-		return { cpuPercent: 0, memoryBytes: 0, memoryPercent: 0, ...(pid ? { pid } : {}), running: false };
-	}
-	const memoryBytes = selectedRows.reduce((total, row) => total + row.rssKb * 1024, 0);
-	const cpuTimeSeconds = selectedRows.reduce((total, row) => total + row.cpuTimeSeconds, 0);
-	const fallbackCpuPercent = selectedRows.reduce((total, row) => total + row.cpuPercent, 0);
-	const previousCpuStats = cpuStatsCache.get(homeDir);
-	const sampledAt = Date.now();
-	const elapsedSeconds = previousCpuStats ? (sampledAt - previousCpuStats.sampledAt) / 1000 : 0;
-	const cpuPercent = previousCpuStats && elapsedSeconds > 0
-		? ((cpuTimeSeconds - previousCpuStats.cpuTimeSeconds) / elapsedSeconds) * 100
-		: fallbackCpuPercent;
-	cpuStatsCache.set(homeDir, { cpuTimeSeconds, sampledAt });
-	const primaryPid = pid ?? selectedRows.find((row) => row.command.includes("src/runtime/main.ts") || row.command.includes("dist/runtime/main.js"))?.pid ?? selectedRows[0]?.pid;
-	return {
-		cpuPercent: Math.max(0, cpuPercent),
-		memoryBytes: Math.max(0, memoryBytes),
-		memoryPercent: Math.max(0, (memoryBytes / totalmem()) * 100),
-		...(primaryPid ? { pid: primaryPid } : {}),
-		running: true,
-	};
-}
-
-function readStorageResourceStats(path: string): Pick<AgentResourceStats, "storageBytes" | "diskTotalBytes" | "diskAvailableBytes"> {
-	const cached = storageStatsCache.get(path);
-	if (cached && cached.expiresAt > Date.now()) {
-		return cached.value;
-	}
-	const value = {
-		storageBytes: readDirectorySize(path),
-		...readDiskStats(path),
-	};
-	storageStatsCache.set(path, { value, expiresAt: Date.now() + 15_000 });
-	return value;
-}
-
 function describeSkillSource(source: Omit<AgentSkillSource, "exists" | "skillCount" | "skills">): AgentSkillSource {
 	const skills = readSkillNames(source.path);
 	return {
@@ -633,9 +504,13 @@ function getConfiguredSystemPromptPath(profile: AgentConfigStore["profile"], env
 }
 
 function resolveSystemPromptSource(profile: AgentConfigStore["profile"], env: Record<string, string>): AgentSystemPromptSource {
-	const harness: Pick<AgentHarnessRuntime, "label" | "systemPrompt"> = (() => {
+	const harness: { label: string; systemPrompt?: HarnessLifecycleHooks["systemPrompt"] } = (() => {
 		try {
-			return getAgentHarnessDefinition(profile?.harness.kind ?? "pi").harnessRuntime;
+			const definition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
+			return {
+				label: definition.label,
+				systemPrompt: definition.lifecycleHooks?.systemPrompt,
+			};
 		} catch {
 			const label = String(profile?.harness.kind ?? "harness");
 			return { label };
@@ -678,6 +553,9 @@ const agentProcesses = new AgentProcessManager({
 	async getAgentName(agentId) {
 		return (await getAgent(agentId)).name;
 	},
+	async getAgentHarnessKind(agentId) {
+		return (await getAgent(agentId)).harnessKind;
+	},
 	async getAgentStartLabel(agentId) {
 		const agent = await getAgent(agentId);
 		return `名称=${agent.name} id=${agent.id} Agent Harness=${agent.harnessKind ?? "unknown"} 渠道=${agent.channelKinds?.join(",") || "none"}`;
@@ -694,6 +572,9 @@ const agentProcesses = new AgentProcessManager({
 			runtimeEvent: event,
 			...(reason ? { reason } : {}),
 		});
+	},
+	recordRuntimeStateChange(agentId, reason) {
+		emitAgentChangeEvent({ agentIds: [agentId], ...(reason ? { reason } : {}) });
 	},
 	async recordLogEntry(entry) {
 		const agent = await getAgent(entry.agentId);
@@ -732,7 +613,7 @@ function hasLiveRuntimeProcess(home: string): boolean {
 	if (!record) {
 		return false;
 	}
-	if (resolve(record.agentHome) !== resolve(home) || !isPidRunning(record.pid)) {
+	if (!isLiveRuntimeProcessRecord(home, record)) {
 		clearRuntimeProcessRecord(home);
 		const persisted = readRuntimeStateRecord(home);
 		if (
@@ -740,15 +621,7 @@ function hasLiveRuntimeProcess(home: string): boolean {
 			persisted?.lifecycle.state === "starting" ||
 			persisted?.lifecycle.state === "degraded"
 		) {
-			writeRuntimeStateRecord(home, {
-				homeDir: persisted.homeDir,
-				workDir: persisted.workDir,
-				lifecycle: {
-					state: "stopped",
-					updatedAt: new Date().toISOString(),
-					reason: "stale-process",
-				},
-			});
+			writeRuntimeLifecycle(home, persisted.homeDir, persisted.workDir, "stopped", "stale-process");
 		}
 		return false;
 	}
@@ -825,44 +698,55 @@ function displayModelId(modelId: string | undefined): string | undefined {
 	return value.split("/").filter(Boolean).at(-1) ?? value;
 }
 
+function readAgentSummary(
+	id: string,
+	entry: ReturnType<typeof loadProfileRegistry>["profiles"][string],
+	rootDir: string,
+	selectedProfileId?: string,
+): AgentSummary {
+	const home = profileHomeFromEntry(rootDir, entry.home);
+	const config = readProfileConfig(home);
+	const profile = config?.profile;
+	const runtimeEnvironment = createRuntimeEnvironment({ homeDir: home, profile });
+	runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, home, entry.desiredState);
+	const model = getProfileModel(profile);
+	const channel = getPrimaryFeishuChannel(profile);
+	const channelKinds = profile?.channels
+		.filter((profileChannel) => profileChannel.enabled !== false)
+		.map((profileChannel) => profileChannel.kind);
+		const harnessKind = profile?.harness.kind ? String(profile.harness.kind) : undefined;
+		const harnessService = getSharedHarnessServiceInfo(harnessKind);
+	const selectedModelId = displayModelId(model?.model);
+	const modelOption = model?.provider && model?.model
+		? loadModelOptions(home).find((item) => item.provider === model.provider && item.id === selectedModelId)
+		: undefined;
+	const modelLabel = model?.provider && model?.model ? modelOption?.name || selectedModelId : undefined;
+	return {
+		id,
+		name: entry.displayName || id,
+		status: statusForProfile(id, entry.desiredState),
+		avatarSeed: id,
+		avatarUrl: readProfileAvatarUrl(home),
+		desiredState: entry.desiredState,
+		selected: selectedProfileId === id,
+		home,
+		runtimeEnvironment,
+		createdAt: entry.createdAt,
+		updatedAt: entry.updatedAt,
+			harnessKind,
+			harnessService,
+			modelLabel,
+		channelKinds,
+		appId: channel?.appId,
+	};
+}
+
 async function listAgents(): Promise<AgentSummary[]> {
 	const registry = loadProfileRegistry();
 	const rootDir = getDefaultPieRootDir();
-	return Object.entries(registry.profiles).map(([id, entry]) => {
-		const home = profileHomeFromEntry(rootDir, entry.home);
-		const config = readProfileConfig(home);
-		const profile = config?.profile;
-		const runtimeEnvironment = createRuntimeEnvironment({ homeDir: home, profile });
-		runtimeEnvironment.lifecycle = runtimeLifecycleForProfile(id, home, entry.desiredState);
-		const model = getProfileModel(profile);
-		const channel = getPrimaryFeishuChannel(profile);
-		const channelKinds = profile?.channels
-			.filter((profileChannel) => profileChannel.enabled !== false)
-			.map((profileChannel) => profileChannel.kind);
-		const harnessKind = profile?.harness.kind ? String(profile.harness.kind) : undefined;
-		const selectedModelId = displayModelId(model?.model);
-		const modelOption = model?.provider && model?.model
-			? loadModelOptions(home).find((item) => item.provider === model.provider && item.id === selectedModelId)
-			: undefined;
-		const modelLabel = model?.provider && model?.model ? modelOption?.name || selectedModelId : undefined;
-		return {
-			id,
-			name: entry.displayName || id,
-			status: statusForProfile(id, entry.desiredState),
-			avatarSeed: id,
-			avatarUrl: readProfileAvatarUrl(home),
-			desiredState: entry.desiredState,
-			selected: registry.selectedProfile === id,
-			home,
-			runtimeEnvironment,
-			createdAt: entry.createdAt,
-			updatedAt: entry.updatedAt,
-			harnessKind,
-			modelLabel,
-			channelKinds,
-			appId: channel?.appId,
-		};
-	}).sort((left, right) => agentSortTimestamp(right) - agentSortTimestamp(left));
+	return Object.entries(registry.profiles)
+		.map(([id, entry]) => readAgentSummary(id, entry, rootDir, registry.selectedProfile))
+		.sort((left, right) => agentSortTimestamp(right) - agentSortTimestamp(left));
 }
 
 function agentSortTimestamp(agent: Pick<AgentSummary, "createdAt" | "updatedAt">): number {
@@ -905,6 +789,16 @@ function pruneStoredRuntimeData(settings: DesktopSettings): void {
 	}
 }
 
+function scheduleStoredRuntimeDataPrune(settings: DesktopSettings): void {
+	setTimeout(() => {
+		try {
+			pruneStoredRuntimeData(settings);
+		} catch (error) {
+			console.error("[desktop] failed to prune stored runtime data:", error);
+		}
+	}, STORED_RUNTIME_DATA_PRUNE_DELAY_MS);
+}
+
 async function saveDesktopSettings(draft: DesktopSettingsDraft): Promise<DesktopSettings> {
 	const settings = updateDesktopSettings(draft);
 	applyOpenAtLoginSetting(settings);
@@ -922,18 +816,11 @@ async function restoreAgentOnLaunch(agent: AgentSummary): Promise<void> {
 		await withAgentOperation(agent.id, () => startAgent(agent.id));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		writeRuntimeStateRecord(agent.home, {
-			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-			lifecycle: {
-				state: "failed",
-				updatedAt: new Date().toISOString(),
-				reason: `restore-failed: ${message}`,
-			},
-		});
+		writeAgentRuntimeLifecycle(agent, "failed", `restore-failed: ${message}`);
 		console.error(`[desktop] failed to restore agent ${agent.id}:`, error);
 	} finally {
 		restoringAgentIds.delete(agent.id);
+		emitAgentChangeEvent({ agentIds: [agent.id], reason: "restore-finished" });
 	}
 }
 
@@ -946,7 +833,9 @@ async function restoreDesiredRunningAgents(): Promise<void> {
 	const budget = calculateAgentStartBudget(snapshot);
 	const desiredCandidates = agents.filter((agent) => agent.desiredState === "running" && !hasLiveRuntimeProcess(agent.home));
 	const deferredCandidates = desiredCandidates.filter((agent) =>
-		shouldDeferAutoStartForResources(agent.harnessKind, snapshot),
+		(getSharedHarnessServiceInfo(agent.harnessKind)?.lifecycle.state === "running"
+			? false
+			: shouldDeferAutoStartForResources(agent.harnessKind, snapshot)),
 	);
 	const candidates = desiredCandidates.filter((agent) => !deferredCandidates.includes(agent));
 	console.log(
@@ -954,24 +843,21 @@ async function restoreDesiredRunningAgents(): Promise<void> {
 			`freeMemGb=${(snapshot.freeMemoryBytes / 1024 ** 3).toFixed(1)} load=${snapshot.loadAverage1m.toFixed(2)}/${snapshot.cpuCount}`,
 	);
 	for (const agent of deferredCandidates) {
-		writeRuntimeStateRecord(agent.home, {
-			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-			lifecycle: {
-				state: "stopped",
-				updatedAt: new Date().toISOString(),
-				reason: "restore-deferred-low-resources",
-			},
-		});
+		writeAgentRuntimeLifecycle(agent, "stopped", "restore-deferred-low-resources");
 		console.warn(`[desktop] deferred auto-start for ${agent.id} (${agent.harnessKind}) because system resources are low.`);
 	}
 	for (const agent of candidates) {
 		restoringAgentIds.add(agent.id);
+		writeAgentRuntimeLifecycle(agent, "starting", "restore-scheduled");
+	}
+	if (candidates.length) {
+		emitAgentChangeEvent({ agentIds: candidates.map((agent) => agent.id), reason: "restore-scheduled" });
 	}
 	await Promise.allSettled(
 		candidates.map(async (agent, index) => {
-			if (index > 0) {
-				await delay(index * RESTORE_AGENTS_STAGGER_MS);
+			const restoreDelayMs = getRestoreDelayMs(agent, index);
+			if (restoreDelayMs > 0) {
+				await delay(restoreDelayMs);
 			}
 			await restoreAgentOnLaunch(agent);
 		}),
@@ -979,11 +865,12 @@ async function restoreDesiredRunningAgents(): Promise<void> {
 }
 
 async function getAgent(id: string): Promise<AgentDetails> {
-	const agents = await listAgents();
-	const summary = agents.find((agent) => agent.id === id);
-	if (!summary) {
+	const registry = loadProfileRegistry();
+	const entry = registry.profiles[id];
+	if (!entry) {
 		throw new Error(`Unknown agent: ${id}`);
 	}
+	const summary = readAgentSummary(id, entry, getDefaultPieRootDir(), registry.selectedProfile);
 	const config = readProfileConfig(summary.home);
 	const env = readProfileEnv(summary.home);
 	const profile = config?.profile;
@@ -1029,8 +916,21 @@ async function getAgent(id: string): Promise<AgentDetails> {
 			: undefined,
 		model: {
 			...(model ?? {}),
+			resumeSessions: model?.resumeSessions ?? getDefaultResumeSessionsForHarness(profile?.harness.kind),
 			...(apiKeyEnv ? { apiKeyEnv, apiKey: env[apiKeyEnv] ?? "" } : {}),
 		},
+	};
+}
+
+async function getDesktopBootstrap(): Promise<DesktopBootstrap> {
+	const settings = readDesktopSettings();
+	const agents = await listAgents();
+	const selectedSummary = agents.find((agent) => agent.selected) ?? agents[0];
+	const selectedAgent = selectedSummary ? await getAgent(selectedSummary.id) : undefined;
+	return {
+		settings,
+		agents,
+		...(selectedAgent ? { selectedAgent } : {}),
 	};
 }
 
@@ -1074,15 +974,14 @@ async function invalidateFeishuCredentialsOwnedByOtherAgents(ownerId: string, ap
 		});
 		upsertAgentEnv({ FEISHU_APP_SECRET: undefined }, home);
 		await stopRunningAgent(agentId);
-		writeRuntimeStateRecord(home, {
-			homeDir: home,
-			workDir: createRuntimeEnvironment({ homeDir: home, profile: nextProfile }).workDir,
-			lifecycle: {
-				state: "failed",
-				updatedAt: invalidatedAt,
-				reason: `feishu-credential-invalidated: transferred to ${ownerId}`,
-			},
-		});
+		writeRuntimeLifecycle(
+			home,
+			home,
+			createRuntimeEnvironment({ homeDir: home, profile: nextProfile }).workDir,
+			"failed",
+			`feishu-credential-invalidated: transferred to ${ownerId}`,
+			{ updatedAt: invalidatedAt },
+		);
 		console.warn(`[desktop] invalidated Feishu credentials for ${agentId}; App ID ${targetAppId} is now owned by ${ownerId}.`);
 	}
 }
@@ -1112,10 +1011,10 @@ function compareAgentLogEntries(left: AgentLogEntry, right: AgentLogEntry): numb
 
 async function getAgentResources(id: string): Promise<AgentResourceStats> {
 	const agent = await getAgent(id);
-	const processStats = readProcessResourceStats(agentProcesses.getPid(id), agent.home);
+	const processStats = readAgentProcessResourceStats(agentProcesses.getPid(id), agent.home);
 	return {
 		...processStats,
-		...readStorageResourceStats(agent.home),
+		...readAgentStorageResourceStats(agent.home, { refresh: agent.status !== "starting" }),
 		updatedAt: new Date().toISOString(),
 	};
 }
@@ -1307,30 +1206,6 @@ async function syncDiscordBotProfile(id: string, botToken?: string): Promise<Age
 	return getAgent(id);
 }
 
-function validateModelDraft(draft: AgentDraft): void {
-	const hasModelUpdate =
-		draft.provider !== undefined ||
-		draft.model !== undefined ||
-		draft.thinkingLevel !== undefined ||
-		draft.resumeSessions !== undefined;
-	if (!hasModelUpdate) {
-		return;
-	}
-	if (draft.provider === undefined && draft.model === undefined) {
-		return;
-	}
-	if (!draft.provider?.trim()) {
-		throw new Error("模型 Provider 必填");
-	}
-	if (!draft.model?.trim()) {
-		throw new Error("模型 ID 必填");
-	}
-}
-
-function hasNonEmptyDraftValue(...values: Array<string | undefined>): boolean {
-	return values.some((value) => typeof value === "string" && value.trim().length > 0);
-}
-
 function writeHermesModelConfig(homeDir: string, profileId: string, provider: string, model: string): Record<string, string> {
 	const hermesProvider = toHermesInferenceProvider(provider);
 	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
@@ -1365,203 +1240,33 @@ async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails>
 	const agent = await getAgent(id);
 	const current = readProfileConfig(agent.home) ?? { version: 3 };
 	const currentProfile = current.profile;
-	const feishuChannel = getPrimaryFeishuChannel(currentProfile);
-	const wechatChannel = getPrimaryWechatChannel(currentProfile);
-	const slackChannel = getPrimarySlackChannel(currentProfile);
-	const discordChannel = getPrimaryDiscordChannel(currentProfile);
-	const telegramChannel = getPrimaryTelegramChannel(currentProfile);
-	const model = getProfileModel(currentProfile) ?? {};
-	const hasFeishuDraft =
-		draft.appId !== undefined ||
-		draft.appSecret !== undefined ||
-		draft.brand !== undefined ||
-		draft.feishuMessageOutputMode !== undefined;
-	const hasWechatDraft =
-		draft.wechatAccountId !== undefined ||
-		draft.wechatBaseUrl !== undefined ||
-		draft.wechatBotToken !== undefined;
-	const hasSlackDraft =
-		draft.slackBotToken !== undefined ||
-		draft.slackAppToken !== undefined;
-	const hasDiscordDraft =
-		draft.discordBotToken !== undefined ||
-		draft.discordApplicationId !== undefined ||
-		draft.discordGuildId !== undefined;
-	const hasTelegramDraft = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
-	const hasModelUpdate =
-		draft.provider !== undefined ||
-		draft.model !== undefined ||
-		draft.thinkingLevel !== undefined ||
-		draft.resumeSessions !== undefined;
-	const hasFeishuUpdate = feishuChannel
-		? hasFeishuDraft
-		: hasNonEmptyDraftValue(draft.appId, draft.appSecret);
-	const hasWechatUpdate = wechatChannel
-		? hasWechatDraft
-		: hasNonEmptyDraftValue(draft.wechatAccountId, draft.wechatBotToken);
-	const hasSlackUpdate = slackChannel
-		? hasSlackDraft
-		: hasNonEmptyDraftValue(draft.slackBotToken, draft.slackAppToken);
-	const hasDiscordUpdate = discordChannel
-		? hasDiscordDraft
-		: hasNonEmptyDraftValue(draft.discordBotToken, draft.discordApplicationId, draft.discordGuildId);
-	const hasTelegramUpdate = telegramChannel
-		? hasTelegramDraft
-		: hasNonEmptyDraftValue(draft.telegramBotToken, draft.telegramBotUsername);
-	const nextAppId = draft.appId ?? feishuChannel?.appId ?? "";
-	const nextBrand = draft.brand ?? feishuChannel?.brand ?? "feishu";
-	const nextFeishuMessageOutputMode = draft.feishuMessageOutputMode ?? feishuChannel?.messageOutputMode ?? "bubble";
-	const nextOutputThinkingToIm = nextFeishuMessageOutputMode === "card"
-		? false
-		: draft.outputThinkingToIm ?? model.outputThinkingToIm ?? false;
-	const nextAppSecret = draft.appSecret ?? readProfileEnv(agent.home).FEISHU_APP_SECRET ?? "";
-	if (hasFeishuUpdate) {
-		if (!nextAppId.trim() || !nextAppSecret.trim()) {
-			throw new Error("飞书 App ID 和 App Secret 必填");
-		}
-		await validateFeishuCredentials({
-			appId: nextAppId.trim(),
-			appSecret: nextAppSecret.trim(),
-			brand: nextBrand,
-		});
-	}
-	const nextWechatAccountId = draft.wechatAccountId ?? wechatChannel?.accountId ?? "";
-	const nextWechatBaseUrl = draft.wechatBaseUrl ?? wechatChannel?.baseUrl ?? "https://ilinkai.weixin.qq.com";
-	if (hasWechatUpdate && !nextWechatAccountId.trim()) {
-		throw new Error("微信 Account ID 必填");
-	}
-	if (hasSlackUpdate) {
-		const env = readProfileEnv(agent.home);
-		const botToken = draft.slackBotToken ?? env.SLACK_BOT_TOKEN ?? "";
-		const appToken = draft.slackAppToken ?? env.SLACK_APP_TOKEN ?? "";
-		if (!botToken.trim() || !appToken.trim()) {
-			throw new Error("Slack Bot Token 和 App Token 必填");
-		}
-	}
-	if (hasDiscordUpdate) {
-		const token = draft.discordBotToken ?? readProfileEnv(agent.home).DISCORD_BOT_TOKEN ?? "";
-		if (!token.trim()) {
-			throw new Error("Discord Bot Token 必填");
-		}
-	}
-	if (hasTelegramUpdate) {
-		const token = draft.telegramBotToken ?? readProfileEnv(agent.home).TELEGRAM_BOT_TOKEN ?? "";
-		if (!token.trim()) {
-			throw new Error("Telegram Bot Token 必填");
-		}
-	}
-	validateModelDraft(draft);
-	let nextProfileWithChannel = currentProfile;
-	if (feishuChannel || hasFeishuUpdate) {
-		nextProfileWithChannel = upsertFeishuChannel(nextProfileWithChannel, {
-			...(feishuChannel ?? { kind: "feishu" as const, id: "feishu", enabled: true }),
-			appId: nextAppId.trim(),
-			credentialState: draft.appId !== undefined || draft.appSecret !== undefined ? "active" : feishuChannel?.credentialState ?? "active",
-			credentialInvalidatedAt: draft.appId !== undefined || draft.appSecret !== undefined ? undefined : feishuChannel?.credentialInvalidatedAt,
-			credentialInvalidatedReason: draft.appId !== undefined || draft.appSecret !== undefined ? undefined : feishuChannel?.credentialInvalidatedReason,
-			brand: nextBrand,
-			messageOutputMode: nextFeishuMessageOutputMode,
-		});
-	}
-	if (wechatChannel || hasWechatUpdate) {
-		nextProfileWithChannel = upsertWechatChannel(nextProfileWithChannel, {
-			...(wechatChannel ?? { kind: "wechat" as const, id: "wechat", enabled: true }),
-			accountId: nextWechatAccountId.trim(),
-			baseUrl: nextWechatBaseUrl.trim(),
-		});
-	}
-	if (slackChannel || hasSlackUpdate) {
-		nextProfileWithChannel = upsertSlackChannel(nextProfileWithChannel, {
-			...(slackChannel ?? { kind: "slack" as const, id: "slack", enabled: true }),
-		});
-	}
-	if (discordChannel || hasDiscordUpdate) {
-		nextProfileWithChannel = upsertDiscordChannel(nextProfileWithChannel, {
-			...(discordChannel ?? { kind: "discord" as const, id: "discord", enabled: true }),
-			applicationId: draft.discordApplicationId ?? discordChannel?.applicationId,
-			guildId: draft.discordGuildId ?? discordChannel?.guildId,
-		});
-	}
-	if (telegramChannel || hasTelegramUpdate) {
-		nextProfileWithChannel = upsertTelegramChannel(nextProfileWithChannel, {
-			...(telegramChannel ?? { kind: "telegram" as const, id: "telegram", enabled: true }),
-			botUsername: draft.telegramBotUsername ?? telegramChannel?.botUsername,
-		});
-	}
-	const nextProfileBase = setProfileModel(nextProfileWithChannel, {
-		...model,
-		provider: draft.provider ?? model.provider,
-		model: draft.model ?? model.model,
-		thinkingLevel: draft.thinkingLevel ?? model.thinkingLevel,
-		resumeSessions: draft.resumeSessions ?? model.resumeSessions ?? false,
-		outputToolCallsToIm: draft.outputToolCallsToIm ?? model.outputToolCallsToIm ?? true,
-		outputToolCallImMaxLength: draft.outputToolCallImMaxLength ?? model.outputToolCallImMaxLength ?? 60,
-		outputThinkingToIm: nextOutputThinkingToIm,
+	const plan = planAgentProfileMutation({
+		currentProfile,
+		draft,
+		env: readProfileEnv(agent.home),
 	});
-	const openClawModelRef = nextProfileBase.harness.kind === "openclaw"
-		? toOpenClawModelRef(nextProfileBase.harness.model?.provider, nextProfileBase.harness.model?.model)
-		: undefined;
-	const nextProfile = nextProfileBase.harness.kind === "openclaw"
-		? {
-				...nextProfileBase,
-				harness: {
-					...nextProfileBase.harness,
-					config: {
-						...(nextProfileBase.harness.config ?? {}),
-						modelRef: openClawModelRef,
-					},
-				},
-			}
-		: nextProfileBase;
+	if (plan.feishu) {
+		await validateFeishuCredentials({
+			appId: plan.feishu.appId.trim(),
+			appSecret: plan.feishu.appSecret.trim(),
+			brand: plan.feishu.brand,
+		});
+	}
 	writeProfileConfig(agent.home, {
 		...current,
 		version: 3,
-		profile: nextProfile,
+		profile: plan.nextProfile,
 	});
-	if (nextProfile.harness.kind === "openclaw") {
-		ensureOpenClawModelState(join(agent.home, "openclaw", "state"), openClawModelRef);
+	if (Object.keys(plan.envUpdates).length) {
+		upsertAgentEnv(plan.envUpdates, agent.home);
 	}
-	if (hasFeishuUpdate) {
-		upsertAgentEnv({ FEISHU_APP_SECRET: nextAppSecret.trim() }, agent.home);
-		if (draft.appId !== undefined || draft.appSecret !== undefined) {
-			await invalidateFeishuCredentialsOwnedByOtherAgents(id, nextAppId);
-		}
+	if (plan.shouldInvalidateFeishuCredentials && plan.feishu) {
+		await invalidateFeishuCredentialsOwnedByOtherAgents(id, plan.feishu.appId);
 	}
-	if (hasWechatUpdate) {
-		const envUpdates: Record<string, string | undefined> = {};
-		if (draft.wechatBotToken !== undefined) {
-			envUpdates.WECHAT_BOT_TOKEN = draft.wechatBotToken.trim();
-		}
-		if (draft.wechatAccountId !== undefined) {
-			envUpdates.WECHAT_ACCOUNT_ID = nextWechatAccountId.trim();
-		}
-		if (draft.wechatBaseUrl !== undefined) {
-			envUpdates.WECHAT_BASE_URL = nextWechatBaseUrl.trim();
-		}
-		upsertAgentEnv(envUpdates, agent.home);
+	if (plan.hermesModelUpdate) {
+		upsertAgentEnv(writeHermesModelConfig(agent.home, id, plan.hermesModelUpdate.provider, plan.hermesModelUpdate.model), agent.home);
 	}
-	if (hasSlackUpdate) {
-		upsertAgentEnv({
-			...(draft.slackBotToken !== undefined ? { SLACK_BOT_TOKEN: draft.slackBotToken.trim() } : {}),
-			...(draft.slackAppToken !== undefined ? { SLACK_APP_TOKEN: draft.slackAppToken.trim() } : {}),
-		}, agent.home);
-	}
-	if (hasDiscordUpdate) {
-		upsertAgentEnv({
-			...(draft.discordBotToken !== undefined ? { DISCORD_BOT_TOKEN: draft.discordBotToken.trim() } : {}),
-		}, agent.home);
-	}
-	if (hasTelegramUpdate) {
-		upsertAgentEnv({
-			...(draft.telegramBotToken !== undefined ? { TELEGRAM_BOT_TOKEN: draft.telegramBotToken.trim() } : {}),
-		}, agent.home);
-	}
-	const nextProvider = draft.provider ?? model.provider;
-	const nextModel = draft.model ?? model.model;
-	if (hasModelUpdate && currentProfile?.harness.kind === "hermes" && nextProvider?.trim() && nextModel?.trim()) {
-		upsertAgentEnv(writeHermesModelConfig(agent.home, id, nextProvider.trim(), nextModel.trim()), agent.home);
-	}
-	const apiKeyEnv = nextProvider ? getProviderCredentialEnv(nextProvider) : undefined;
+	const apiKeyEnv = plan.nextProvider ? getProviderCredentialEnv(plan.nextProvider) : undefined;
 	if (apiKeyEnv && draft.apiKey !== undefined) {
 		upsertAgentEnv({ [apiKeyEnv]: draft.apiKey.trim() }, agent.home);
 	}
@@ -1637,15 +1342,7 @@ async function startAgent(id: string): Promise<AgentDetails> {
 async function startKnownAgent(existing: AgentDetails): Promise<AgentDetails> {
 	if (existing.feishuCredentialState === "invalidated") {
 		const message = "飞书凭证已失效，请重新授权后再启动这个 Agent。";
-		writeRuntimeStateRecord(existing.home, {
-			homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
-			workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
-			lifecycle: {
-				state: "failed",
-				updatedAt: new Date().toISOString(),
-				reason: message,
-			},
-		});
+		writeAgentRuntimeLifecycle(existing, "failed", message);
 		throw new Error(message);
 	}
 	if (existing.harnessKind === "hermes") {
@@ -1654,34 +1351,31 @@ async function startKnownAgent(existing: AgentDetails): Promise<AgentDetails> {
 			const message = diagnostic.installed
 				? "Hermes 运行时不可用，请先升级或重新安装 Hermes。"
 				: "未检测到 Hermes 运行时，请先安装 Hermes 后再启动这个 Agent。";
-			writeRuntimeStateRecord(existing.home, {
-				homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
-				workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
-				lifecycle: {
-					state: "failed",
-					updatedAt: new Date().toISOString(),
-					reason: message,
-				},
-			});
+			writeAgentRuntimeLifecycle(existing, "failed", message);
+			throw new Error(message);
+		}
+	}
+	if (existing.harnessKind === "openclaw") {
+		const diagnostic = await checkManagedRuntimeForDesktop("openclaw");
+		if (!diagnostic.ready) {
+			const message = diagnostic.installed
+				? "OpenClaw 运行时不可用，请先升级或重新安装官方 OpenClaw。"
+				: "未检测到 OpenClaw 运行时，请先安装官方 OpenClaw 后再启动这个 Agent。";
+			writeAgentRuntimeLifecycle(existing, "failed", message);
 			throw new Error(message);
 		}
 	}
 	if (hasLiveRuntimeProcess(existing.home)) {
-		writeRuntimeStateRecord(existing.home, {
-			homeDir: existing.runtimeEnvironment?.homeDir ?? existing.home,
-			workDir: existing.runtimeEnvironment?.workDir ?? existing.home,
-			lifecycle: {
-				state: "running",
-				updatedAt: new Date().toISOString(),
-				reason: "existing-process",
-			},
-			...(readRuntimeProcessRecord(existing.home) ? { process: readRuntimeProcessRecord(existing.home)! } : {}),
-		});
+		const record = readRuntimeProcessRecord(existing.home);
+		writeAgentRuntimeLifecycle(existing, "running", "existing-process", record ? { process: record } : {});
 		updateProfileRegistryEntry(existing.id, { desiredState: "running", selected: true });
 		return getAgent(existing.id);
 	}
-	await agentStartLimiter.run(existing.harnessKind, () => agentProcesses.start(existing.id));
 	updateProfileRegistryEntry(existing.id, { desiredState: "running", selected: true });
+	writeAgentRuntimeLifecycle(existing, "starting", "starting");
+	emitAgentChangeEvent({ agentIds: [existing.id], reason: "starting" });
+	await sharedHarnessServices.ensureForProfile(existing);
+	await agentStartLimiter.run(existing.harnessKind, () => agentProcesses.start(existing.id));
 	return getAgent(existing.id);
 }
 
@@ -1694,17 +1388,8 @@ async function stopRunningAgent(id: string): Promise<void> {
 	const agent = await getAgent(id);
 	if (!agentProcesses.isRunning(id)) {
 		const record = readRuntimeProcessRecord(agent.home);
-		if (record && resolve(record.agentHome) === resolve(agent.home) && isPidRunning(record.pid)) {
-			writeRuntimeStateRecord(agent.home, {
-				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-				lifecycle: {
-					state: "stopping",
-					updatedAt: new Date().toISOString(),
-					reason: "paused",
-				},
-				process: record,
-			});
+		if (record && isLiveRuntimeProcessRecord(agent.home, record)) {
+			writeAgentRuntimeLifecycle(agent, "stopping", "paused", { process: record });
 			signalRuntimeProcess(record.pid, "SIGTERM");
 			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
 			if (isPidRunning(record.pid)) {
@@ -1712,15 +1397,7 @@ async function stopRunningAgent(id: string): Promise<void> {
 			}
 		}
 		clearRuntimeProcessRecord(agent.home);
-		writeRuntimeStateRecord(agent.home, {
-			homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-			workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-			lifecycle: {
-				state: "stopped",
-				updatedAt: new Date().toISOString(),
-				reason: "paused",
-			},
-		});
+		writeAgentRuntimeLifecycle(agent, "stopped", "paused");
 		updateProfileRegistryEntry(id, { desiredState: "paused" });
 		return;
 	}
@@ -1736,56 +1413,66 @@ async function stopAgentsForQuit(): Promise<void> {
 				return true;
 			}
 			const record = readRuntimeProcessRecord(agent.home);
-			return Boolean(record && resolve(record.agentHome) === resolve(agent.home) && isPidRunning(record.pid));
+			return Boolean(record && isLiveRuntimeProcessRecord(agent.home, record));
 		})
 		.map((agent) => agent.id);
 	if (terminatingAgentIds.length) {
+		const terminatingAgents = agents
+			.filter((agent) => terminatingAgentIds.includes(agent.id))
+			.map((agent) => ({
+				id: agent.id,
+				name: agent.name,
+				avatarSeed: agent.avatarSeed,
+				avatarUrl: agent.avatarUrl,
+			}));
 		showMainWindow();
-		emitDesktopQuitEvent({ phase: "terminating-agents", agentIds: terminatingAgentIds });
+		emitDesktopQuitEvent({ phase: "terminating-agents", agentIds: terminatingAgentIds, agents: terminatingAgents });
 	}
 	await Promise.allSettled(
 		agents.map(async (agent) => {
 			if (agentProcesses.isRunning(agent.id)) {
 				await agentProcesses.stop(agent.id, "quit");
+				emitDesktopQuitEvent({
+					phase: "agent-stopped",
+					agent: {
+						id: agent.id,
+						name: agent.name,
+						avatarSeed: agent.avatarSeed,
+						avatarUrl: agent.avatarUrl,
+					},
+				});
 				return;
 			}
 			const record = readRuntimeProcessRecord(agent.home);
-			if (!record || resolve(record.agentHome) !== resolve(agent.home) || !isPidRunning(record.pid)) {
+			if (!record || !isLiveRuntimeProcessRecord(agent.home, record)) {
 				clearRuntimeProcessRecord(agent.home);
 				return;
 			}
-			writeRuntimeStateRecord(agent.home, {
-				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-				lifecycle: {
-					state: "stopping",
-					updatedAt: new Date().toISOString(),
-					reason: "quit",
-				},
-				process: record,
-			});
+			writeAgentRuntimeLifecycle(agent, "stopping", "quit", { process: record });
 			signalRuntimeProcess(record.pid, "SIGTERM");
 			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
 			if (isPidRunning(record.pid)) {
 				signalRuntimeProcess(record.pid, "SIGKILL");
 			}
 			clearRuntimeProcessRecord(agent.home);
-			writeRuntimeStateRecord(agent.home, {
-				homeDir: agent.runtimeEnvironment?.homeDir ?? agent.home,
-				workDir: agent.runtimeEnvironment?.workDir ?? agent.home,
-				lifecycle: {
-					state: "stopped",
-					updatedAt: new Date().toISOString(),
-					reason: "quit",
-				},
-			});
+			writeAgentRuntimeLifecycle(agent, "stopped", "quit");
 			appendAgentUsageEvent(agent.home, {
 				type: "runtime",
 				runtimeEvent: "stop",
 				reason: "quit",
 			});
+			emitDesktopQuitEvent({
+				phase: "agent-stopped",
+				agent: {
+					id: agent.id,
+					name: agent.name,
+					avatarSeed: agent.avatarSeed,
+					avatarUrl: agent.avatarUrl,
+				},
+			});
 		}),
 	);
+	await sharedHarnessServices.stopAll();
 }
 
 function emitDesktopQuitEvent(event: DesktopQuitEvent): void {
@@ -1802,6 +1489,15 @@ function emitDesktopQuitEvent(event: DesktopQuitEvent): void {
 		} else {
 			win.webContents.send("desktop:quit-event", event);
 		}
+	}
+}
+
+function emitAgentChangeEvent(event: AgentChangeEvent): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (win.isDestroyed() || win.webContents.isDestroyed()) {
+			continue;
+		}
+		win.webContents.send("agents:change", event);
 	}
 }
 
@@ -1926,8 +1622,8 @@ function createWindow(): BrowserWindow {
 	const win = new BrowserWindow({
 		width: 1024,
 		height: 576,
-		minWidth: 1024,
-		minHeight: 576,
+		minWidth: 840,
+		minHeight: 520,
 		show: false,
 		title: "Pie",
 		transparent: true,
@@ -2070,7 +1766,14 @@ app.whenReady().then(() => {
 	const settings = readDesktopSettings();
 	applyOpenAtLoginSetting(settings);
 	applyKeepAwakeSetting(settings);
-	pruneStoredRuntimeData(settings);
+	ipcMain.handle("desktop:bootstrap", async () => {
+		try {
+			return await getDesktopBootstrap();
+		} catch (error) {
+			console.error("[ipc] desktop:bootstrap failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("settings:get", async () => readDesktopSettings());
 	ipcMain.handle("settings:update", async (_event, draft: DesktopSettingsDraft) => {
 		try {
@@ -2429,6 +2132,7 @@ app.whenReady().then(() => {
 	});
 	createTray();
 	createWindow();
+	scheduleStoredRuntimeDataPrune(settings);
 	setTimeout(() => {
 		void restoreDesiredRunningAgents().catch((error) => {
 			console.error("[desktop] failed to restore auto-start agents:", error);

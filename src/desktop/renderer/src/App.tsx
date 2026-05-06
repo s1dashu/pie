@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import type { AgentDetails, AgentSummary } from "../shared/types";
+import { useEffect, useRef, useState } from "react";
+import type { AgentDetails, AgentSummary, DesktopQuitAgent } from "../shared/types";
+import { AgentLoadingIndicator } from "./components/shared/agent-loading-indicator";
 import { AgentAvatar } from "./components/shared/agent-avatar";
 import { Spinner } from "./components/ui/spinner-1";
 import { Toaster, toast } from "./components/ui/sonner";
@@ -12,7 +13,8 @@ import { cn } from "./lib/utils";
 import { applyDesktopAppearance, watchSystemColorScheme } from "./lib/appearance-theme";
 import { I18nProvider, useI18n } from "./lib/i18n";
 
-type AppSelection = { type: "agent"; id: string } | { type: "settings" } | { type: "create" };
+type AppSelection = { type: "agent"; id: string } | { type: "settings" } | { type: "docs" } | { type: "create" };
+type QuitOverlayAgent = DesktopQuitAgent & { stopped: boolean; stoppedAt?: number };
 
 function agentSummaryFingerprint(agent: AgentSummary): string {
 	return JSON.stringify({
@@ -53,7 +55,9 @@ export function App(): JSX.Element {
 	}
 
 	const [selection, setSelection] = useState<AppSelection | undefined>();
-	const [quittingAgentIds, setQuittingAgentIds] = useState<string[]>();
+	const [quittingAgents, setQuittingAgents] = useState<QuitOverlayAgent[]>();
+	const pendingStoppedAgentsRef = useRef<DesktopQuitAgent[]>([]);
+	const stoppedAgentsFrameRef = useRef<number>();
 	const queryClient = useQueryClient();
 	const selectedId = selection?.type === "agent" ? selection.id : undefined;
 
@@ -61,20 +65,45 @@ export function App(): JSX.Element {
 		toast.error(message);
 	};
 
+	const bootstrap = useQuery({
+		queryKey: ["desktop-bootstrap"],
+		queryFn: () => window.pie.getDesktopBootstrap(),
+		staleTime: 60_000,
+	});
 	const agents = useQuery({
 		queryKey: ["agents"],
 		queryFn: () => window.pie.listAgents(),
-		refetchInterval: 3000,
+		enabled: bootstrap.isSuccess,
+		initialData: () => queryClient.getQueryData<AgentSummary[]>(["agents"]),
+		staleTime: 2500,
+		refetchInterval: 10_000,
 	});
 	const settings = useQuery({
 		queryKey: ["settings"],
 		queryFn: () => window.pie.getSettings(),
+		enabled: bootstrap.isError,
+		initialData: () => queryClient.getQueryData(["settings"]),
+		staleTime: 60_000,
 	});
 	const selected = useQuery({
 		queryKey: ["agent", selectedId],
 		queryFn: () => window.pie.getAgent(selectedId!),
-		enabled: Boolean(selectedId),
+		enabled: Boolean(selectedId) && bootstrap.isSuccess,
+		initialData: () => selectedId ? queryClient.getQueryData(["agent", selectedId]) : undefined,
+		staleTime: 2000,
 	});
+
+	useEffect(() => {
+		if (!bootstrap.data) {
+			return;
+		}
+		queryClient.setQueryData(["settings"], bootstrap.data.settings);
+		queryClient.setQueryData(["agents"], bootstrap.data.agents);
+		if (bootstrap.data.selectedAgent) {
+			queryClient.setQueryData(["agent", bootstrap.data.selectedAgent.id], bootstrap.data.selectedAgent);
+			setSelection((current) => current ?? { type: "agent", id: bootstrap.data.selectedAgent!.id });
+		}
+	}, [bootstrap.data, queryClient]);
 
 	useEffect(() => {
 		applyDesktopAppearance(settings.data?.colorScheme, settings.data?.appearanceGrayHue);
@@ -104,12 +133,43 @@ export function App(): JSX.Element {
 	}, [queryClient]);
 
 	useEffect(() => {
-		return window.pie.onDesktopQuitEvent((event) => {
-			if (event.phase !== "terminating-agents") {
+		return window.pie.onAgentChange((event) => {
+			void queryClient.invalidateQueries({ queryKey: ["agents"] });
+			for (const agentId of event.agentIds) {
+				void queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+			}
+		});
+	}, [queryClient]);
+
+	useEffect(() => {
+		const flushStoppedAgents = () => {
+			stoppedAgentsFrameRef.current = undefined;
+			const stoppedAgents = pendingStoppedAgentsRef.current.splice(0);
+			if (!stoppedAgents.length) {
 				return;
 			}
+			const stoppedAt = Date.now();
+			setQuittingAgents((current) => {
+				const byId = new Map((current ?? []).map((agent) => [agent.id, agent]));
+				for (const agent of stoppedAgents) {
+					byId.set(agent.id, { ...byId.get(agent.id), ...agent, stopped: true, stoppedAt });
+				}
+				return Array.from(byId.values());
+			});
+		};
+		const unsubscribe = window.pie.onDesktopQuitEvent((event) => {
+			if (event.phase === "agent-stopped") {
+				pendingStoppedAgentsRef.current.push(event.agent);
+				stoppedAgentsFrameRef.current ??= window.requestAnimationFrame(flushStoppedAgents);
+				return;
+			}
+			pendingStoppedAgentsRef.current = [];
+			if (stoppedAgentsFrameRef.current !== undefined) {
+				window.cancelAnimationFrame(stoppedAgentsFrameRef.current);
+				stoppedAgentsFrameRef.current = undefined;
+			}
 			const agentIds = new Set(event.agentIds);
-			setQuittingAgentIds(event.agentIds);
+			setQuittingAgents(event.agents.map((agent) => ({ ...agent, stopped: false })));
 			const updatedAt = new Date().toISOString();
 			queryClient.setQueryData<AgentSummary[]>(["agents"], (current) =>
 				current?.map((agent) =>
@@ -150,10 +210,17 @@ export function App(): JSX.Element {
 				);
 			}
 		});
+		return () => {
+			unsubscribe();
+			if (stoppedAgentsFrameRef.current !== undefined) {
+				window.cancelAnimationFrame(stoppedAgentsFrameRef.current);
+				stoppedAgentsFrameRef.current = undefined;
+			}
+		};
 	}, [queryClient]);
 
 	useEffect(() => {
-		if (!agents.data || selection?.type === "settings" || selection?.type === "create") {
+		if (!agents.data || selection?.type === "settings" || selection?.type === "docs" || selection?.type === "create") {
 			return;
 		}
 		if (!agents.data.length) {
@@ -186,14 +253,16 @@ export function App(): JSX.Element {
 
 	return (
 		<I18nProvider language={settings.data?.language ?? "zh"}>
-			<main className="app-continuous-corner app-shell-surface relative flex h-full w-full overflow-hidden bg-[var(--slate-2)] p-[var(--app-shell-gap)] text-foreground">
+			<main className="app-continuous-corner app-shell-surface relative flex h-full w-full overflow-hidden bg-[var(--slate-3)] p-[var(--app-shell-gap)] text-foreground">
 				<div className="drag-region absolute left-0 right-0 top-0 z-0 h-10 w-full" />
 				<AgentSidebar
 					agents={agents.data}
 					selectedId={selectedId}
+					docsSelected={selection?.type === "docs"}
 					settingsSelected={selection?.type === "settings"}
 					isLoading={agents.isLoading}
 					onSelectAgent={(id) => setSelection({ type: "agent", id })}
+					onSelectDocs={() => setSelection({ type: "docs" })}
 					onSelectSettings={() => setSelection({ type: "settings" })}
 					onCreateAgent={() => {
 						setSelection({ type: "create" });
@@ -201,12 +270,14 @@ export function App(): JSX.Element {
 				/>
 				<AgentDetailPane
 					agent={selectedId ? selected.data : undefined}
+					showDocs={selection?.type === "docs"}
 					showSettings={selection?.type === "settings"}
 					showCreateAgent={selection?.type === "create"}
 					hasAgents={Boolean(agents.data?.length)}
 					isLoadingAgents={agents.isLoading}
 					onCreateAgent={() => setSelection({ type: "create" })}
 					onError={handleError}
+					onCloseDocs={() => setSelection(undefined)}
 					onCloseSettings={() => setSelection(undefined)}
 					onCancelCreate={() => {
 						setSelection(agents.data?.[0] ? { type: "agent", id: agents.data[0].id } : undefined);
@@ -218,23 +289,76 @@ export function App(): JSX.Element {
 					}}
 				/>
 				<Toaster />
-				{quittingAgentIds?.length ? <QuitOverlay /> : null}
+				{quittingAgents?.length ? <QuitOverlay agents={quittingAgents} /> : null}
 			</main>
 		</I18nProvider>
 	);
 }
 
-function QuitOverlay(): JSX.Element {
+function QuitOverlay({ agents }: { agents: QuitOverlayAgent[] }): JSX.Element {
 	const { t } = useI18n();
+	const stoppedListRef = useRef<HTMLDivElement>(null);
+	const stoppedAgents = agents.filter((agent) => agent.stopped);
+
+	useEffect(() => {
+		const node = stoppedListRef.current;
+		if (!node) {
+			return;
+		}
+		const frame = window.requestAnimationFrame(() => {
+			node.scrollTop = node.scrollHeight;
+		});
+		return () => window.cancelAnimationFrame(frame);
+	}, [stoppedAgents.length]);
+
 	return (
 		<div className="app-shell-overlay no-drag inset-0 flex items-center justify-center bg-white px-6 text-center">
-			<div className="flex items-center gap-2.5 text-base font-medium leading-6 text-foreground">
-				<span className="grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
-					<Spinner size={18} color="var(--slate-11)" />
-				</span>
-				<span>{t("quittingTitle")}</span>
+			<div className="drag-region absolute left-0 right-0 top-0 h-10 w-full" />
+			<div className="flex w-full max-w-[420px] flex-col items-stretch">
+				<div className="flex items-center justify-center gap-3 text-lg font-semibold leading-7 text-foreground">
+					<span className="grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
+						<Spinner size={18} color="var(--slate-11)" />
+					</span>
+					<span>{t("quittingTitle")}</span>
+				</div>
+				{stoppedAgents.length ? (
+					<div
+						ref={stoppedListRef}
+						className="quit-agent-list mx-auto mt-8 flex max-h-[340px] w-[286px] flex-col gap-2 overflow-y-auto text-left"
+					>
+						{stoppedAgents.map((agent) => (
+							<div
+								key={agent.id}
+								className="grid h-9 w-full shrink-0 grid-cols-[28px_minmax(0,132px)_1fr_20px] items-center gap-2"
+							>
+								<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={28} />
+								<span className="min-w-0 truncate text-sm font-medium leading-5 text-foreground">
+									{agent.name} {t("quittingExited")}
+								</span>
+								<span aria-hidden="true" />
+								<QuitCheckIcon />
+							</div>
+						))}
+					</div>
+				) : null}
 			</div>
 		</div>
+	);
+}
+
+function QuitCheckIcon(): JSX.Element {
+	return (
+		<span className="grid size-5 place-items-center rounded-full bg-[var(--lime-10)]" aria-hidden="true">
+			<svg viewBox="0 0 24 24" className="size-4" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<path
+					d="M7.8 12.2 10.55 15 16.4 9.15"
+					stroke="white"
+					strokeWidth="2.7"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
+			</svg>
+		</span>
 	);
 }
 
@@ -242,7 +366,7 @@ function MenuBarAgentList(): JSX.Element {
 	const agents = useQuery({
 		queryKey: ["menu-bar-agents"],
 		queryFn: () => window.pie.listAgents(),
-		refetchInterval: 3000,
+		refetchInterval: 5_000,
 	});
 	const settings = useQuery({
 		queryKey: ["settings"],
@@ -276,7 +400,7 @@ function MenuBarAgentListContent({ agents, isLoading }: { agents?: AgentSummary[
 				</div>
 				<div className="max-h-[340px] flex-1 overflow-y-auto px-2 pb-2">
 					{isLoading ? (
-						<div className="px-2 py-8 text-center text-xs text-muted-foreground">{t("loading")}</div>
+						<AgentLoadingIndicator className="px-2 py-8" label={t("loading")} />
 					) : agents?.length ? (
 						<div className="flex flex-col gap-1">
 							{agents.map((agent) => (

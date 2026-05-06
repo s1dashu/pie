@@ -1,6 +1,7 @@
-import { CPUBoltBoldDuotone, SettingsMinimalisticBoldDuotone } from "solar-icon-set";
+import { DocumentTextBoldDuotone, SettingsMinimalisticBoldDuotone } from "solar-icon-set";
 import { AnimatePresence, motion } from "motion/react";
 import type { AgentSummary } from "../../shared/types";
+import { AgentLoadingIndicator } from "../components/shared/agent-loading-indicator";
 import { AgentAvatar } from "../components/shared/agent-avatar";
 import { AppIcon } from "../components/shared/app-icon";
 import { AceternityTooltip } from "../components/shared/tooltip";
@@ -14,17 +15,21 @@ import { formatAgentSubtitle } from "../features/agents/agent-labels";
 export function AgentSidebar({
 	agents,
 	selectedId,
+	docsSelected,
 	settingsSelected,
 	isLoading,
 	onSelectAgent,
+	onSelectDocs,
 	onSelectSettings,
 	onCreateAgent,
 }: {
 	agents?: AgentSummary[];
 	selectedId?: string;
+	docsSelected?: boolean;
 	settingsSelected?: boolean;
 	isLoading: boolean;
 	onSelectAgent: (agentId: string) => void;
+	onSelectDocs: () => void;
 	onSelectSettings: () => void;
 	onCreateAgent: () => void;
 }): JSX.Element {
@@ -44,9 +49,7 @@ export function AgentSidebar({
 			<div className="drag-region h-9 shrink-0" />
 			<div className="flex-1 overflow-y-auto px-2 pb-4 pt-3">
 				{isLoading ? (
-					<div className="flex h-20 items-center justify-center">
-						<AppIcon IconComponent={CPUBoltBoldDuotone} className="h-5 w-5 animate-pulse text-muted-foreground" />
-					</div>
+					<AgentLoadingIndicator className="h-20" />
 				) : (
 					<div className="relative flex flex-col gap-1">
 						{selectedIndex >= 0 ? (
@@ -114,13 +117,27 @@ export function AgentSidebar({
 						<span className="truncate">{t("create")}</span>
 					</Button>
 				</AceternityTooltip>
+				<AceternityTooltip content={t("pieDocs")}>
+					<Button
+						variant="unstyled"
+						size="inline"
+						className={cn(
+							"no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition-[color,opacity,transform] duration-200 hover:text-[var(--slate-12)] active:scale-[0.96]",
+							docsSelected ? "text-[var(--slate-12)]" : "",
+						)}
+						onClick={onSelectDocs}
+						aria-label={t("pieDocs")}
+					>
+						<AppIcon IconComponent={DocumentTextBoldDuotone} className="size-7" />
+					</Button>
+				</AceternityTooltip>
 				<AceternityTooltip content={t("globalSettings")}>
 					<Button
 						variant="unstyled"
 						size="inline"
 						className={cn(
-							"no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition hover:text-[var(--slate-12)]",
-							settingsSelected ? "text-[var(--lime-11)]" : "",
+							"no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center text-[var(--slate-10)] transition-[color,opacity,transform] duration-200 hover:text-[var(--slate-12)] active:scale-[0.96]",
+							settingsSelected ? "text-[var(--slate-12)]" : "",
 						)}
 						onClick={onSelectSettings}
 						aria-label={t("globalSettings")}

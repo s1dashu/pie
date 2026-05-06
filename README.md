@@ -13,8 +13,6 @@ The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark cha
   <img src="docs/assets/pie-intro-video-preview.gif" alt="Pie intro video" width="100%">
 </a>
 
-[Watch the intro video](docs/assets/pie-intro-video.mp4)
-
 ## What Pie Does
 
 Pie gives you one desktop surface for day-to-day Agent work:

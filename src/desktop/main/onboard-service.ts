@@ -14,11 +14,21 @@ import {
 	upsertAgentEnv,
 } from "../../core/agent-home.js";
 import {
+	isChannelAvailableForRelease,
+	isDevelopmentChannel,
+} from "../../core/channel-availability.js";
+import {
 	checkCodexAppServerEnvironment,
 	codexCliAgentHarnessAdapter,
 	loginCodexWithAppServer,
 } from "../../agents/adapters/codex-cli.js";
-import { ensureOpenClawModelState, toOpenClawModelRef } from "../../agents/openclaw-models.js";
+import { checkCodexCliRuntime } from "../../agents/harness-services/codex.js";
+import { resolveHermesLaunchCommand } from "../../agents/harness-services/hermes.js";
+import {
+	getOpenClawAgentIdForPieProfile,
+	readOpenClawGatewaySettings,
+	toOpenClawModelRef,
+} from "../../agents/openclaw-models.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
 import {
 	DEFAULT_WECHAT_BASE_URL,
@@ -41,6 +51,7 @@ import {
 	loadProfileRegistry,
 	registerProfileHome,
 } from "../../core/profile-registry.js";
+import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js";
 import type {
 	AgentCreationDraft,
 	AgentCreationSession,
@@ -98,8 +109,10 @@ const PROVIDER_CREDENTIAL_ENV: Record<string, string> = {
 const HERMES_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
 const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex";
 const CODEX_INSTALL_WITH_NODE_COMMAND = "brew install node && npm install -g @openai/codex";
+const OPENCLAW_INSTALL_COMMAND = "curl -fsSL https://openclaw.ai/install.sh | bash";
 const MIN_HERMES_GOOD_DISPLAY_VERSION = "0.12.0";
 const DEFAULT_OPENCLAW_GATEWAY_PORT = 18789;
+const SHARED_OPENCLAW_GATEWAY_URL = process.env.PIE_OPENCLAW_SHARED_GATEWAY_URL?.trim() || readOpenClawGatewaySettings().gatewayUrl;
 const activeHermesInstalls = new Map<string, HermesInstallContext>();
 
 interface HermesInstallContext {
@@ -165,6 +178,25 @@ function runLoginShellCommand(command: string): Promise<{ code: number | null; s
 		child.on("error", (error) => {
 			stderr += error.message;
 		});
+		child.on("close", (code) => resolve({ code, stdout, stderr }));
+	});
+}
+
+function runResolvedCommand(command: string, args: string[], options: { pathEnv?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		let stdout = "";
+		let stderr = "";
+		const child = spawn(command, args, {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, ...(options.pathEnv ? { PATH: options.pathEnv } : {}) },
+		});
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf8");
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString("utf8");
+		});
+		child.on("error", (error) => resolve({ code: 1, stdout, stderr: error.message }));
 		child.on("close", (code) => resolve({ code, stdout, stderr }));
 	});
 }
@@ -439,6 +471,7 @@ async function checkOpenClawEnvironmentForDesktop(): Promise<DesktopRuntimeDiagn
 			installed: false,
 			ready: false,
 			error: "openclaw command not found in login shell PATH",
+			installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
 		};
 	}
 	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
@@ -449,31 +482,14 @@ async function checkOpenClawEnvironmentForDesktop(): Promise<DesktopRuntimeDiagn
 		executablePath,
 		version: versionText || undefined,
 		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "OpenClaw CLI exists but did not run successfully.",
+		installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
 	};
 }
 
 async function checkCodexRuntimeForDesktop(): Promise<DesktopRuntimeDiagnostic> {
-	const executablePath = await resolveCommandPath("codex", [
-		join(homedir(), ".local", "bin", "codex"),
-		"/opt/homebrew/bin/codex",
-		"/usr/local/bin/codex",
-	]);
-	if (!executablePath) {
-		return {
-			installed: false,
-			ready: false,
-			error: "codex command not found in login shell PATH",
-			installCommand: ["bash", "-lc", CODEX_INSTALL_COMMAND],
-		};
-	}
-	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
-	const versionText = stripAnsi(version.stdout || version.stderr).trim();
+	const diagnostic = await checkCodexCliRuntime();
 	return {
-		installed: true,
-		ready: version.code === 0,
-		executablePath,
-		version: versionText || undefined,
-		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "Codex CLI exists but did not run successfully.",
+		...diagnostic,
 		installCommand: ["bash", "-lc", CODEX_INSTALL_COMMAND],
 	};
 }
@@ -506,13 +522,35 @@ export async function upgradeManagedRuntimeForDesktop(kind: DesktopManagedRuntim
 	}
 	const diagnostic = await checkOpenClawEnvironmentForDesktop();
 	if (!diagnostic.installed) {
-		throw new Error("未检测到 OpenClaw CLI，当前只能升级已安装的 OpenClaw。");
+		return asManagedRuntimeStatus(kind, await installOpenClawRuntimeForDesktop());
 	}
 	const upgrade = await runLoginShellCommand("openclaw update");
 	if (upgrade.code !== 0) {
 		throw new Error(stripAnsi(upgrade.stderr || upgrade.stdout).trim() || "OpenClaw 升级失败。");
 	}
 	return checkManagedRuntimeForDesktop(kind);
+}
+
+async function installOpenClawRuntimeForDesktop(): Promise<DesktopRuntimeDiagnostic> {
+	const curlCheck = await runLoginShellCommand("command -v curl");
+	if (curlCheck.code !== 0) {
+		return {
+			installed: false,
+			ready: false,
+			error: "未检测到 curl，无法运行 OpenClaw 官方安装脚本。",
+			installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
+		};
+	}
+	const install = await runLoginShellCommand(OPENCLAW_INSTALL_COMMAND);
+	if (install.code !== 0) {
+		return {
+			installed: false,
+			ready: false,
+			error: stripAnsi(install.stderr || install.stdout).trim() || "OpenClaw 官方安装脚本执行失败。",
+			installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
+		};
+	}
+	return checkOpenClawEnvironmentForDesktop();
 }
 
 function uninstallHermesRuntime(): void {
@@ -791,7 +829,7 @@ export async function checkCodexEnvironmentForDesktop(): Promise<DesktopCodexDia
 			tools: [],
 			debug: false,
 			verboseLogs: false,
-			resumeSessions: false,
+			resumeSessions: getDefaultResumeSessionsForHarness("codex"),
 		}) ?? Promise.resolve({
 			installed: false,
 			authenticated: false,
@@ -837,11 +875,18 @@ export async function installCodexForDesktop(
 }
 
 export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntimeDiagnostic> {
-	const executablePath = await resolveCommandPath("hermes", [
-		hermesBinPath(),
-		join(homedir(), ".hermes", "hermes-agent", "venv", "bin", "hermes"),
-	]);
-	if (!executablePath) {
+	let command;
+	try {
+		command = resolveHermesLaunchCommand();
+	} catch (error) {
+		return {
+			installed: false,
+			ready: false,
+			error: error instanceof Error ? error.message : String(error),
+			installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
+		};
+	}
+	if (!existsSync(command.executablePath)) {
 		return {
 			installed: false,
 			ready: false,
@@ -849,7 +894,8 @@ export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntime
 			installCommand: ["bash", "-lc", HERMES_INSTALL_COMMAND],
 		};
 	}
-	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
+	const executablePath = command.argsPrefix[0] ?? command.executablePath;
+	const version = await runResolvedCommand(command.executablePath, [...command.argsPrefix, "--version"], { pathEnv: command.pathEnv });
 	const versionText = stripAnsi(version.stdout || version.stderr).trim();
 	if (version.code === 0 && !isHermesVersionSupported(versionText)) {
 		return {
@@ -1315,22 +1361,14 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	const profileId = draft.sessionId;
 	const homeDir = getProfileHomeDir(profileId);
 	const developerMode = readDesktopSettings().developerMode;
-	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
-	if (!developerMode && (draft.harness === "hermes" || draft.harness === "openclaw")) {
-		throw new Error("Hermes 和 OpenClaw 仍在开发中，当前 release 暂不开放。");
-	}
 	const channels = Array.from(new Set(draft.channels)).filter(
-		(channel) =>
-			channel === "feishu" ||
-			channel === "wechat" ||
-			channel === "discord" ||
-			(developerMode && (channel === "slack" || channel === "telegram")),
+		(channel) => isChannelAvailableForRelease(channel, { developerMode }),
 	);
 	const disabledChannels = draft.channels.filter(
-		(channel) => channel === "slack" || channel === "telegram",
+		(channel) => isDevelopmentChannel(channel),
 	);
 	if (!developerMode && disabledChannels.length) {
-		throw new Error("Slack、Telegram 渠道仍在开发中，当前 release 暂不开放。");
+		throw new Error("Slack、Discord、Telegram 渠道仍在开发中，当前 release 暂不开放。");
 	}
 	if (!channels.length) {
 		throw new Error("至少选择一个 IM 渠道");
@@ -1382,7 +1420,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 			models: [{ id: model }],
 		});
 	}
-	const openClawGatewayUrl = draft.harness === "openclaw" ? await resolveOpenClawGatewayUrl() : undefined;
+	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
 	const openClawModelRef = draft.harness === "openclaw" ? toOpenClawModelRef(provider, model) : undefined;
 
 	const profile = createAgentProfile({
@@ -1409,8 +1447,10 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 					: draft.harness === "openclaw"
 						? {
 								config: {
-									gatewayUrl: openClawGatewayUrl,
+									gatewayUrl: SHARED_OPENCLAW_GATEWAY_URL,
+									agentId: getOpenClawAgentIdForPieProfile(profileId),
 									modelRef: openClawModelRef,
+									managed: false,
 								},
 							}
 				: {}),
@@ -1420,7 +1460,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 				thinkingLevel: draft.thinkingLevel as ThinkingLevel,
 				tools: exModel?.tools ?? "coding",
 				debug: exModel?.debug ?? false,
-				resumeSessions: draft.resumeSessions ?? false,
+				resumeSessions: draft.resumeSessions ?? getDefaultResumeSessionsForHarness(draft.harness),
 				outputToolCallsToIm: true,
 				outputToolCallImMaxLength: 60,
 				outputThinkingToIm: false,
@@ -1475,9 +1515,6 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	});
 
 	saveConfigStore(setStoredProfile(store, profile), homeDir);
-	if (draft.harness === "openclaw") {
-		ensureOpenClawModelState(join(homeDir, "openclaw", "state"), openClawModelRef);
-	}
 	const savedEnv: Record<string, string> = {};
 	if (channels.includes("feishu") && draft.feishu) {
 		savedEnv.FEISHU_APP_SECRET = draft.feishu.appSecret.trim();

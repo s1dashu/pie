@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import type * as React from "react";
 import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone, RestartCircleBoldDuotone } from "solar-icon-set";
 import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopFeishuMessageOutputMode, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { AgentLoadingIndicator } from "../../components/shared/agent-loading-indicator";
 import { AppIcon } from "../../components/shared/app-icon";
 import { Field } from "../../components/shared/field";
 import { UsageMetric } from "../../components/shared/metrics";
@@ -12,9 +13,10 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
-import { TerminalLog } from "../logs/TerminalLog";
 import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLevelOptions, type AgentTab } from "./agent-display";
 import { ProviderSelect } from "./ProviderSelect";
+
+const AgentLogsPanel = lazy(() => import("./AgentLogsPanel").then((module) => ({ default: module.AgentLogsPanel })));
 
 export interface ResourceChartHistory {
 	updatedAt?: string;
@@ -90,10 +92,7 @@ export function AgentContentPanels({
 	const { language, t } = useI18n();
 	const visibleSkillSources = useMemo(() => orderSkillSources(skillSources), [skillSources]);
 	const totalMessages = usage.total.incomingMessages + usage.total.outgoingMessages;
-	const messageDirectionHint = t("messageDirectionCount", {
-		sent: formatCount(usage.total.outgoingMessages, language),
-		received: formatCount(usage.total.incomingMessages, language),
-	});
+	const todayMessages = usage.today.incomingMessages + usage.today.outgoingMessages;
 	const hasFeishuChannel = Boolean(agent.channelKinds?.includes("feishu") || agent.appId);
 	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
@@ -110,17 +109,7 @@ export function AgentContentPanels({
 	const usesCodexCli = draft.provider === "codex-cli" || agent.harnessKind === "codex";
 	const showsSystemPrompt = agent.harnessKind === "ousia";
 	const usesFeishuMessageCard = hasFeishuChannel && (channelDraft.feishuMessageOutputMode ?? "bubble") === "card";
-	const totalCacheTokens = usage.total.cacheReadTokens + usage.total.cacheWriteTokens;
-	const inputTokensWithCache = usage.total.inputTokens + totalCacheTokens;
 	const showsTokenUsage = supportsTokenUsage(agent.harnessKind);
-	const hasTokenBreakdown = inputTokensWithCache > 0 || usage.total.outputTokens > 0;
-	const tokenUsageHint = hasTokenBreakdown
-		? `${formatTokenCount(inputTokensWithCache)} / ${formatTokenCount(usage.total.outputTokens)}`
-		: usage.tokenUsageSource === "actual"
-			? t("reportedByModel")
-			: usage.tokenUsageSource === "estimated"
-				? t("estimatedTokenUsage")
-				: t("noUsageData");
 
 	return (
 		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
@@ -130,19 +119,19 @@ export function AgentContentPanels({
 						<UsageMetric
 							label={t("messageCount")}
 							value={formatCount(totalMessages, language)}
-							hint={messageDirectionHint}
+							hint={t("todayMetric", { value: formatCount(todayMessages, language) })}
 						/>
 						{showsTokenUsage ? (
 							<UsageMetric
 								label={t("tokenUsage")}
 								value={formatTokenCountCompact(usage.total.tokens)}
-								hint={tokenUsageHint}
+								hint={t("todayMetric", { value: formatTokenCountCompact(usage.today.tokens) })}
 							/>
 						) : null}
 						<UsageMetric
 							label={t("runDuration")}
 							value={formatDuration(usage.total.runDurationMs)}
-							hint={t("currentRun", { duration: formatDuration(usage.currentRun.runDurationMs) })}
+							hint={t("todayMetric", { value: formatDuration(usage.today.runDurationMs) })}
 						/>
 						<UsageMetric
 							label={t("averageTtfs")}
@@ -176,12 +165,9 @@ export function AgentContentPanels({
 					</div>
 				</div>
 			) : activeTab === "logs" ? (
-				<div className="pie-smooth-corner flex min-h-0 flex-1 flex-col overflow-hidden rounded-[42px] bg-slate-950 pb-3 pt-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-					<div className="flex items-center justify-between px-4 pb-2.5">
-						<SectionTitle title={t("runtimeLogs")} className="[&_div:first-child]:text-slate-100" />
-					</div>
-					<TerminalLog agent={agent} tone="dark" />
-				</div>
+				<Suspense fallback={<PanelLoading label={t("loading")} tone="dark" />}>
+					<AgentLogsPanel agent={agent} title={t("runtimeLogs")} />
+				</Suspense>
 			) : activeTab === "model" ? (
 				<div className="mx-auto max-w-5xl space-y-4">
 					<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
@@ -266,9 +252,7 @@ export function AgentContentPanels({
 					</div>
 					<div className="mt-5 grid gap-4">
 						{isLoadingSkillSources ? (
-							<div className="pie-smooth-corner rounded-[36px] bg-white p-6 text-center text-sm text-muted-foreground">
-								{t("readingSkills")}
-							</div>
+							<AgentLoadingIndicator className="pie-smooth-corner h-24 rounded-[36px] bg-white" label={t("readingSkills")} />
 						) : (
 							visibleSkillSources.map((source) => (
 								<SkillSourceRow
@@ -505,6 +489,19 @@ export function AgentContentPanels({
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+function PanelLoading({ label, tone = "light" }: { label: string; tone?: "light" | "dark" }): JSX.Element {
+	return (
+		<AgentLoadingIndicator
+			className={cn(
+				"h-full min-h-0 rounded-[42px]",
+				tone === "dark" ? "bg-slate-950 text-slate-400" : "bg-[var(--slate-2)] text-muted-foreground",
+			)}
+			color={tone === "dark" ? "rgb(148 163 184)" : "var(--slate-11)"}
+			label={label}
+		/>
 	);
 }
 

@@ -34,6 +34,12 @@ export interface AgentSummary {
 	createdAt?: string;
 	updatedAt?: string;
 	harnessKind?: string;
+	harnessService?: {
+		kind: string;
+		group: string;
+		endpoint?: string;
+		lifecycle: RuntimeEnvironmentSummary["lifecycle"];
+	};
 	channelKinds?: string[];
 	modelLabel?: string;
 	appId?: string;
@@ -97,6 +103,12 @@ export interface DesktopSettings {
 	runtimeLogRetention: DesktopLogRetention;
 	usageEventRetention: DesktopLogRetention;
 	appearanceGrayHue?: number;
+}
+
+export interface DesktopBootstrap {
+	settings: DesktopSettings;
+	agents: AgentSummary[];
+	selectedAgent?: AgentDetails;
 }
 
 export type DesktopSettingsDraft = Partial<
@@ -290,10 +302,23 @@ export interface AgentDeleteEvent {
 	message: string;
 }
 
-export interface DesktopQuitEvent {
-	phase: "terminating-agents";
-	agentIds: string[];
+export interface DesktopQuitAgent {
+	id: string;
+	name: string;
+	avatarSeed: string;
+	avatarUrl?: string;
 }
+
+export type DesktopQuitEvent =
+	| {
+			phase: "terminating-agents";
+			agentIds: string[];
+			agents: DesktopQuitAgent[];
+	  }
+	| {
+			phase: "agent-stopped";
+			agent: DesktopQuitAgent;
+	  };
 
 export interface AgentLogEntry {
 	id: number;
@@ -366,7 +391,13 @@ export interface AgentSystemPromptSource {
 	content: string;
 }
 
+export interface AgentChangeEvent {
+	agentIds: string[];
+	reason?: string;
+}
+
 export interface PieDesktopApi {
+	getDesktopBootstrap(): Promise<DesktopBootstrap>;
 	getSettings(): Promise<DesktopSettings>;
 	updateSettings(draft: DesktopSettingsDraft): Promise<DesktopSettings>;
 	listAgents(): Promise<AgentSummary[]>;
@@ -412,6 +443,7 @@ export interface PieDesktopApi {
 	getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	openAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
+	onAgentChange(callback: (event: AgentChangeEvent) => void): () => void;
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;
 	onAgentDeleteEvent(callback: (event: AgentDeleteEvent) => void): () => void;

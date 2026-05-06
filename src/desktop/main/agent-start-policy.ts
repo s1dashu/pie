@@ -12,6 +12,52 @@ export interface AgentStartBudget {
 	maxWeight: number;
 }
 
+interface AgentStartCost {
+	weight: number;
+	estimatedStartupMemoryBytes: number;
+	autoStartReserveBytes?: number;
+}
+
+const MIB = 1024 ** 2;
+
+const DEFAULT_AGENT_START_COST: AgentStartCost = {
+	weight: 2,
+	estimatedStartupMemoryBytes: 384 * MIB,
+};
+
+const AGENT_START_COSTS: Record<string, AgentStartCost> = {
+	openclaw: {
+		weight: 6,
+		estimatedStartupMemoryBytes: 768 * MIB,
+		autoStartReserveBytes: 768 * MIB,
+	},
+	hermes: {
+		weight: 3,
+		estimatedStartupMemoryBytes: 256 * MIB,
+		autoStartReserveBytes: 512 * MIB,
+	},
+	codex: {
+		weight: 2,
+		estimatedStartupMemoryBytes: 384 * MIB,
+	},
+	"claude-code": {
+		weight: 2,
+		estimatedStartupMemoryBytes: 384 * MIB,
+	},
+	ousia: {
+		weight: 2,
+		estimatedStartupMemoryBytes: 384 * MIB,
+	},
+	pi: {
+		weight: 1,
+		estimatedStartupMemoryBytes: 192 * MIB,
+	},
+};
+
+function getAgentStartCost(harnessKind: string | undefined): AgentStartCost {
+	return AGENT_START_COSTS[harnessKind?.trim() ?? ""] ?? DEFAULT_AGENT_START_COST;
+}
+
 export function readAgentStartResourceSnapshot(): AgentStartResourceSnapshot {
 	return {
 		cpuCount: Math.max(1, cpus().length),
@@ -27,49 +73,22 @@ function processLoadAverage1m(): number {
 }
 
 export function getAgentStartWeight(harnessKind: string | undefined): number {
-	switch (harnessKind) {
-		case "openclaw":
-			return 6;
-		case "hermes":
-			return 3;
-		case "codex":
-		case "claude-code":
-		case "ousia":
-			return 2;
-		case "pi":
-			return 1;
-		default:
-			return 2;
-	}
+	return getAgentStartCost(harnessKind).weight;
 }
 
 export function getEstimatedStartupMemoryBytes(harnessKind: string | undefined): number {
-	switch (harnessKind) {
-		case "openclaw":
-			return 768 * 1024 ** 2;
-		case "hermes":
-			return 256 * 1024 ** 2;
-		case "codex":
-		case "claude-code":
-		case "ousia":
-			return 384 * 1024 ** 2;
-		case "pi":
-			return 192 * 1024 ** 2;
-		default:
-			return 384 * 1024 ** 2;
-	}
+	return getAgentStartCost(harnessKind).estimatedStartupMemoryBytes;
 }
 
 export function shouldDeferAutoStartForResources(
 	harnessKind: string | undefined,
 	snapshot: AgentStartResourceSnapshot,
 ): boolean {
-	const kind = harnessKind?.trim();
-	if (kind !== "openclaw" && kind !== "hermes") {
+	const cost = getAgentStartCost(harnessKind);
+	if (!cost.autoStartReserveBytes) {
 		return false;
 	}
-	const reserveBytes = kind === "openclaw" ? 768 * 1024 ** 2 : 512 * 1024 ** 2;
-	return snapshot.freeMemoryBytes < getEstimatedStartupMemoryBytes(kind) + reserveBytes;
+	return snapshot.freeMemoryBytes < cost.estimatedStartupMemoryBytes + cost.autoStartReserveBytes;
 }
 
 export function calculateAgentStartBudget(snapshot: AgentStartResourceSnapshot): AgentStartBudget {

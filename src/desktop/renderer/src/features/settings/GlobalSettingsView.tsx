@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
 import type { DesktopLanguage, DesktopLogRetention, DesktopManagedRuntimeKind, DesktopManagedRuntimeStatus, DesktopSettings, DesktopSettingsDraft } from "../../../shared/types";
+import { AgentLoadingIndicator } from "../../components/shared/agent-loading-indicator";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
@@ -261,7 +262,11 @@ export function GlobalSettingsView({ onError, onClose }: { onError: (message: st
 					</div>
 				) : (
 					<div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-						{settings.isLoading ? t("settingsLoading") : t("settingsLoadFailed")}
+						{settings.isLoading ? (
+							<AgentLoadingIndicator className="h-full w-full" label={t("settingsLoading")} />
+						) : (
+							t("settingsLoadFailed")
+						)}
 					</div>
 				)}
 			</div>
@@ -321,6 +326,9 @@ function RuntimeVersionRow({
 					<div className="text-sm font-medium text-foreground">{label}</div>
 				</div>
 				<div className="mt-1 truncate text-xs leading-5 text-muted-foreground">{detail}</div>
+				{kind === "openclaw" && !installed && (
+					<div className="mt-1 text-xs leading-5 text-muted-foreground">{t("openclawOfficialInstallDesc")}</div>
+				)}
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
 				<Button
@@ -328,9 +336,9 @@ function RuntimeVersionRow({
 					size="small"
 					className="rounded-full"
 					onClick={onUpgrade}
-					disabled={isLoading || isUpgrading || isUninstalling || (kind === "openclaw" && !installed)}
+					disabled={isLoading || isUpgrading || isUninstalling}
 				>
-					{isUpgrading ? t("upgrading") : t("upgradeLatest")}
+					{isUpgrading ? t("upgrading") : kind === "openclaw" && !installed ? t("installOfficial") : t("upgradeLatest")}
 				</Button>
 				<Button
 					variant="destructive"

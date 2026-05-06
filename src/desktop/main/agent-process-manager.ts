@@ -1,8 +1,5 @@
 import { BrowserWindow } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { createServer } from "node:net";
-import { join } from "node:path";
 import type { AgentLogEntry } from "../shared/types.js";
 import {
 	clearRuntimeProcessRecord,
@@ -10,6 +7,7 @@ import {
 	writeRuntimeStateRecord,
 	type RuntimeProcessRecord,
 } from "../../core/runtime-process.js";
+import { appendStartupSpan } from "../../core/startup-spans.js";
 import {
 	ensureRuntimeEnvironment,
 	RuntimeEnvironmentLifecycle,
@@ -20,15 +18,21 @@ import {
 	getRuntimeLifecycleLogTransition,
 	isRuntimeReadyLog,
 } from "./runtime-lifecycle-signals.js";
+import {
+	getAgentRuntimeLaunchCommand,
+	getDistinctAvailableLocalPorts,
+} from "./agent-runtime-launcher.js";
 
 export interface AgentProcessManagerOptions {
 	getAppRoot(): string;
 	getNodeExecPath(): string;
 	getAgentHome(agentId: string): Promise<string>;
 	getAgentName?(agentId: string): Promise<string | undefined> | string | undefined;
+	getAgentHarnessKind?(agentId: string): Promise<string | undefined> | string | undefined;
 	getAgentStartLabel?(agentId: string): Promise<string | undefined> | string | undefined;
 	getRuntimeEnvironment(agentId: string): Promise<AgentRuntimeEnvironment>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
+	recordRuntimeStateChange?(agentId: string, reason?: string): Promise<void> | void;
 	recordLogEntry?(entry: AgentLogEntry): Promise<void> | void;
 }
 
@@ -64,34 +68,6 @@ function signalAgentProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 		}
 	}
 	child.kill(signal);
-}
-
-async function getAvailableLocalPort(): Promise<number> {
-	return new Promise((resolvePort, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			server.close(() => {
-				if (typeof address === "object" && address?.port) {
-					resolvePort(address.port);
-					return;
-				}
-				reject(new Error("Unable to allocate a local port."));
-			});
-		});
-	});
-}
-
-async function getDistinctAvailableLocalPorts(count: number): Promise<number[]> {
-	const ports: number[] = [];
-	while (ports.length < count) {
-		const port = await getAvailableLocalPort();
-		if (!ports.includes(port)) {
-			ports.push(port);
-		}
-	}
-	return ports;
 }
 
 export class AgentProcessManager {
@@ -144,9 +120,24 @@ export class AgentProcessManager {
 		const command = this.getBotLaunchCommand();
 		const runsWithPackagedElectron = Boolean(process.versions.electron) && command.argv.some((arg) => arg.endsWith("/dist/runtime/main.js"));
 		const home = await this.options.getAgentHome(agentId);
+		const harnessKind = (await this.options.getAgentHarnessKind?.(agentId))?.trim();
+		const startedAt = Date.now();
+		const span = (name: string, meta?: Record<string, string | number | boolean | undefined>): void => {
+			try {
+				appendStartupSpan(home, {
+					name,
+					elapsedMs: Date.now() - startedAt,
+					meta,
+				});
+			} catch {
+				// Startup telemetry must not affect process launch.
+			}
+		};
+		span("desktop_agent_start_begin");
 		const lifecycle = new RuntimeEnvironmentLifecycle();
 		this.agentLifecycles.set(agentId, lifecycle);
 		lifecycle.mark("starting");
+		this.recordRuntimeStateChange(agentId, "starting");
 		const environment = {
 			...(await this.options.getRuntimeEnvironment(agentId)),
 			lifecycle: lifecycle.snapshot,
@@ -156,18 +147,22 @@ export class AgentProcessManager {
 		const [gatewayPort] = await getDistinctAvailableLocalPorts(1);
 		this.appendAgentLog(agentId, "system", "starting bot");
 		const readyPromise = this.createReadyPromise(agentId);
+		span("desktop_agent_spawn_begin", { execPath: command.execPath });
+		const childEnv = {
+			...process.env,
+			...(runsWithPackagedElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+			PIE_AGENT_HOME: home,
+			PIE_GATEWAY_PORT: String(gatewayPort),
+			PIE_DESKTOP_LOGS: "1",
+			...(harnessKind === "openclaw" ? { PIE_MANAGED_HARNESS_SERVICE: "external" } : {}),
+		};
 		const child = spawn(command.execPath, command.argv, {
 			cwd: environment.workDir,
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: process.platform !== "win32",
-			env: {
-				...process.env,
-				...(runsWithPackagedElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-				PIE_AGENT_HOME: home,
-				PIE_GATEWAY_PORT: String(gatewayPort),
-				PIE_DESKTOP_LOGS: "1",
-			},
+			env: childEnv,
 		});
+		span("desktop_agent_spawned", { pid: child.pid });
 		if (child.pid) {
 			const processRecord = {
 				pid: child.pid,
@@ -194,32 +189,25 @@ export class AgentProcessManager {
 		child.once("exit", () => {
 			lifecycle.mark("stopped", "exit");
 			this.flushAgentLogBuffers(agentId);
-			this.runningAgents.delete(agentId);
-			this.agentStartedAt.delete(agentId);
-			this.agentLifecycles.delete(agentId);
-			this.agentEnvironments.delete(agentId);
-			this.agentProcessRecords.delete(agentId);
-			this.readyAgents.delete(agentId);
+			this.forgetAgentRuntimeState(agentId);
 			clearRuntimeProcessRecord(home);
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
 			this.rejectAgentReady(agentId, new Error("Bot process exited before it was ready."));
 			this.recordRuntimeEvent(agentId, "stop", "exit");
+			this.recordRuntimeStateChange(agentId, "exit");
 			this.appendAgentLog(agentId, "system", "bot process exited");
 		});
-		child.once("error", (error) => {
-			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
+		child.once("error", (error: unknown, location: unknown) => {
+			const errorMessage = error instanceof Error ? error.message : [error, location].filter(Boolean).join(": ") || String(error);
+			lifecycle.mark("failed", errorMessage);
 			this.flushAgentLogBuffers(agentId);
-			this.runningAgents.delete(agentId);
-			this.agentStartedAt.delete(agentId);
-			this.agentLifecycles.delete(agentId);
-			this.agentEnvironments.delete(agentId);
-			this.agentProcessRecords.delete(agentId);
-			this.readyAgents.delete(agentId);
+			this.forgetAgentRuntimeState(agentId);
 			clearRuntimeProcessRecord(home);
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
-			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(String(error)));
+			this.rejectAgentReady(agentId, error instanceof Error ? error : new Error(errorMessage));
 			this.recordRuntimeEvent(agentId, "stop", "error");
-			this.appendAgentLog(agentId, "stderr", `bot process error: ${error instanceof Error ? error.message : String(error)}`);
+			this.recordRuntimeStateChange(agentId, "error");
+			this.appendAgentLog(agentId, "stderr", `bot process error: ${errorMessage}`);
 			console.error(`[agent:${agentId}] failed:`, error);
 		});
 		try {
@@ -227,17 +215,14 @@ export class AgentProcessManager {
 			lifecycle.mark("running");
 			this.persistRuntimeState(agentId, lifecycle.snapshot);
 			this.recordRuntimeEvent(agentId, "start");
+			this.recordRuntimeStateChange(agentId, "running");
+			span("desktop_agent_ready", { pid: child.pid });
 			console.log(`[agent] started ${await this.getAgentStartLabel(agentId)}`);
 		} catch (error) {
 			lifecycle.mark("failed", error instanceof Error ? error.message : String(error));
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
 			if (this.runningAgents.get(agentId) === child) {
-				this.runningAgents.delete(agentId);
-				this.agentStartedAt.delete(agentId);
-				this.agentLifecycles.delete(agentId);
-				this.agentEnvironments.delete(agentId);
-				this.agentProcessRecords.delete(agentId);
-				this.readyAgents.delete(agentId);
+				this.forgetAgentRuntimeState(agentId);
 				clearRuntimeProcessRecord(home);
 				signalAgentProcess(child, "SIGTERM");
 			}
@@ -281,11 +266,10 @@ export class AgentProcessManager {
 		if (lifecycle) {
 			this.persistRuntimeState(agentId, lifecycle.snapshot);
 		}
-		this.agentLifecycles.delete(agentId);
-		this.agentEnvironments.delete(agentId);
-		this.agentProcessRecords.delete(agentId);
+		this.forgetAgentRuntimeState(agentId);
 		clearRuntimeProcessRecord(home);
 		this.recordRuntimeEvent(agentId, "stop", reason);
+		this.recordRuntimeStateChange(agentId, reason);
 		this.appendAgentLog(agentId, "system", "bot stopped");
 	}
 
@@ -295,18 +279,10 @@ export class AgentProcessManager {
 	}
 
 	private getBotLaunchCommand(): { execPath: string; argv: string[] } {
-		const appRoot = this.options.getAppRoot();
-		const runtimeSrc = join(appRoot, "src/runtime/main.ts");
-		const runtimeDist = join(appRoot, "dist/runtime/main.js");
-		const tsxCli = join(appRoot, "node_modules/tsx/dist/cli.mjs");
-		const nodeExecPath = this.options.getNodeExecPath();
-		if (existsSync(tsxCli) && existsSync(runtimeSrc)) {
-			return { execPath: nodeExecPath, argv: [tsxCli, runtimeSrc] };
-		}
-		if (existsSync(runtimeDist)) {
-			return { execPath: nodeExecPath, argv: [runtimeDist] };
-		}
-		throw new Error("找不到 bot runtime 入口；请先运行 npm install 或 npm run build。");
+		return getAgentRuntimeLaunchCommand({
+			appRoot: this.options.getAppRoot(),
+			nodeExecPath: this.options.getNodeExecPath(),
+		});
 	}
 
 	private async getAgentLabel(agentId: string): Promise<string> {
@@ -427,6 +403,24 @@ export class AgentProcessManager {
 		Promise.resolve(this.options.recordRuntimeEvent(agentId, event, reason)).catch((error) => {
 			console.error(`[agent:${agentId}] failed to persist runtime event:`, error);
 		});
+	}
+
+	private recordRuntimeStateChange(agentId: string, reason?: string): void {
+		if (!this.options.recordRuntimeStateChange) {
+			return;
+		}
+		Promise.resolve(this.options.recordRuntimeStateChange(agentId, reason)).catch((error) => {
+			console.error(`[agent:${agentId}] failed to emit runtime state change:`, error);
+		});
+	}
+
+	private forgetAgentRuntimeState(agentId: string): void {
+		this.runningAgents.delete(agentId);
+		this.agentStartedAt.delete(agentId);
+		this.agentLifecycles.delete(agentId);
+		this.agentEnvironments.delete(agentId);
+		this.agentProcessRecords.delete(agentId);
+		this.readyAgents.delete(agentId);
 	}
 
 	private updateLifecycleFromLog(agentId: string, text: string): void {

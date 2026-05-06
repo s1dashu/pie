@@ -1,13 +1,16 @@
 import { AnimatePresence, motion } from "motion/react";
 import { SmileCircleBoldDuotone } from "solar-icon-set";
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import type { AgentDetails } from "../../shared/types";
+import { AgentLoadingIndicator } from "../components/shared/agent-loading-indicator";
 import { AppIcon } from "../components/shared/app-icon";
 import { Button } from "../components/ui/button";
 import { AgentDetailView } from "../features/agents/AgentDetailView";
-import { CreateAgentView } from "../features/agents/CreateAgentView";
-import { GlobalSettingsView } from "../features/settings/GlobalSettingsView";
+import { UsageTipsView } from "../features/docs/UsageTipsView";
 import { useI18n } from "../lib/i18n";
+
+const CreateAgentView = lazy(() => import("../features/agents/CreateAgentView").then((module) => ({ default: module.CreateAgentView })));
+const GlobalSettingsView = lazy(() => import("../features/settings/GlobalSettingsView").then((module) => ({ default: module.GlobalSettingsView })));
 
 const detailPaneMotion = {
 	initial: { opacity: 0, scale: 1.01, filter: "blur(5px)" },
@@ -20,24 +23,28 @@ const detailPaneExitTransition = { duration: 0.15, ease: [0.4, 0, 1, 1] } as con
 
 export function AgentDetailPane({
 	agent,
+	showDocs,
 	showSettings,
 	showCreateAgent,
 	hasAgents,
 	isLoadingAgents,
 	onCreateAgent,
 	onError,
+	onCloseDocs,
 	onCloseSettings,
 	onCancelCreate,
 	onCreated,
 	onDeleted,
 }: {
 	agent?: AgentDetails;
+	showDocs?: boolean;
 	showSettings?: boolean;
 	showCreateAgent?: boolean;
 	hasAgents?: boolean;
 	isLoadingAgents?: boolean;
 	onCreateAgent: () => void;
 	onError: (message: string) => void;
+	onCloseDocs: () => void;
 	onCloseSettings: () => void;
 	onCancelCreate: () => void;
 	onCreated: (agent: AgentDetails) => void;
@@ -50,11 +57,19 @@ export function AgentDetailPane({
 				<AnimatePresence initial={false} mode="wait">
 					{showCreateAgent ? (
 						<AnimatedDetailPane key="create-agent">
-							<CreateAgentView onCancel={onCancelCreate} onCreated={onCreated} onError={onError} />
+							<Suspense fallback={<DetailLoading label={t("loading")} />}>
+								<CreateAgentView onCancel={onCancelCreate} onCreated={onCreated} onError={onError} />
+							</Suspense>
+						</AnimatedDetailPane>
+					) : showDocs ? (
+						<AnimatedDetailPane key="usage-tips">
+							<UsageTipsView onClose={onCloseDocs} />
 						</AnimatedDetailPane>
 					) : showSettings ? (
 						<AnimatedDetailPane key="global-settings">
-							<GlobalSettingsView onError={onError} onClose={onCloseSettings} />
+							<Suspense fallback={<DetailLoading label={t("loading")} />}>
+								<GlobalSettingsView onError={onError} onClose={onCloseSettings} />
+							</Suspense>
 						</AnimatedDetailPane>
 					) : agent ? (
 						<AnimatedDetailPane key={`agent-${agent.id}`}>
@@ -66,23 +81,31 @@ export function AgentDetailPane({
 						</AnimatedDetailPane>
 					) : (
 						<div key="empty" className="drag-region flex h-full items-center justify-center bg-white text-muted-foreground">
-							<div className="no-drag flex flex-col items-center">
-								<AppIcon IconComponent={SmileCircleBoldDuotone} className="mb-4 h-12 w-12 text-[var(--lime-10)]" />
-								<p className="text-sm font-medium text-foreground">
-									{isLoadingAgents ? t("loadingAgents") : hasAgents ? t("selectAgent") : t("noAgents")}
-								</p>
-								{!isLoadingAgents && !hasAgents && (
-									<Button className="mt-5 h-9 rounded-4xl px-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]" onClick={onCreateAgent}>
-										{t("newAgent")}
-									</Button>
-								)}
-							</div>
+							{isLoadingAgents ? (
+								<AgentLoadingIndicator className="no-drag h-20" label={t("loadingAgents")} />
+							) : (
+								<div className="no-drag flex flex-col items-center">
+									<AppIcon IconComponent={SmileCircleBoldDuotone} className="mb-4 h-12 w-12 text-[var(--lime-10)]" />
+									<p className="text-sm font-medium text-foreground">
+										{hasAgents ? t("selectAgent") : t("noAgents")}
+									</p>
+									{!hasAgents && (
+										<Button className="mt-5 h-9 rounded-4xl px-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]" onClick={onCreateAgent}>
+											{t("newAgent")}
+										</Button>
+									)}
+								</div>
+							)}
 						</div>
 					)}
 				</AnimatePresence>
 			</div>
 		</div>
 	);
+}
+
+function DetailLoading({ label }: { label: string }): JSX.Element {
+	return <AgentLoadingIndicator className="h-full bg-white" label={label} />;
 }
 
 function AnimatedDetailPane({ children }: { children: ReactNode }): JSX.Element {

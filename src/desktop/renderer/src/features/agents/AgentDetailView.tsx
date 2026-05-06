@@ -47,6 +47,8 @@ async function withMinimumDuration<T>(operation: () => Promise<T>, minDurationMs
 function isRuntimeUnavailableStartError(message: string): boolean {
 	return message.includes("未检测到 Hermes 运行时") ||
 		message.includes("Hermes 运行时不可用") ||
+		message.includes("未检测到 OpenClaw 运行时") ||
+		message.includes("OpenClaw 运行时不可用") ||
 		message.includes("Bot process exited before it was ready");
 }
 
@@ -164,25 +166,27 @@ export function AgentDetailView({
 	const [wechatAuthPhase, setWechatAuthPhase] = useState<ChannelAuthPhase>("preparing");
 	const [authDialogKind, setAuthDialogKind] = useState<ChannelAuthKind | undefined>();
 	const [resourceHistory, setResourceHistory] = useState<ResourceChartHistory>(() => createEmptyResourceHistory());
+	const [enableOverviewMetrics, setEnableOverviewMetrics] = useState(false);
 	const credentialRequestRef = useRef(0);
 	const modelAutosaveReadyRef = useRef(false);
 	const channelAutosaveReadyRef = useRef(false);
 	const supportsSystemPrompt = agent.harnessKind === "ousia";
 	const isOverviewTab = activeTab === "overview";
+	const canLoadOverviewMetrics = isOverviewTab && enableOverviewMetrics;
 	const isModelTab = activeTab === "model";
 	const isSkillsTab = activeTab === "skills";
 	const usageQuery = useQuery({
 		queryKey: ["agent-usage", agent.id],
 		queryFn: () => window.pie.getAgentUsage(agent.id),
-		enabled: isOverviewTab,
-		refetchInterval: isOverviewTab ? agent.status === "running" ? 5000 : 15000 : false,
+		enabled: canLoadOverviewMetrics,
+		refetchInterval: canLoadOverviewMetrics ? agent.status === "running" ? 5000 : 15000 : false,
 		staleTime: 2000,
 	});
 	const resourceQuery = useQuery({
 		queryKey: ["agent-resources", agent.id],
 		queryFn: () => window.pie.getAgentResources(agent.id),
-		enabled: isOverviewTab,
-		refetchInterval: isOverviewTab ? 2000 : false,
+		enabled: canLoadOverviewMetrics,
+		refetchInterval: canLoadOverviewMetrics ? 2000 : false,
 		staleTime: 1500,
 	});
 	const modelCatalogQuery = useQuery({
@@ -332,6 +336,14 @@ export function AgentDetailView({
 		setHasPendingRestartConfig(false);
 		modelAutosaveReadyRef.current = false;
 		channelAutosaveReadyRef.current = false;
+	}, [agent.id]);
+
+	useEffect(() => {
+		setEnableOverviewMetrics(false);
+		const timer = window.setTimeout(() => {
+			setEnableOverviewMetrics(true);
+		}, 900);
+		return () => window.clearTimeout(timer);
 	}, [agent.id]);
 
 	useEffect(() => {

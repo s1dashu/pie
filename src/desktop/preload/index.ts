@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
 	AgentAvatarUpload,
+	AgentChangeEvent,
 	AgentCreationDraft,
 	AgentDeleteEvent,
 	AgentDraft,
@@ -12,6 +13,7 @@ import type {
 } from "../shared/types.js";
 
 const api: PieDesktopApi = {
+	getDesktopBootstrap: () => ipcRenderer.invoke("desktop:bootstrap"),
 	getSettings: () => ipcRenderer.invoke("settings:get"),
 	updateSettings: (draft: DesktopSettingsDraft) => ipcRenderer.invoke("settings:update", draft),
 	listAgents: () => ipcRenderer.invoke("agents:list"),
@@ -58,6 +60,11 @@ const api: PieDesktopApi = {
 	getAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt", id),
 	openAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt-open", id),
 	getAgentLogs: (id: string) => ipcRenderer.invoke("agents:logs", id),
+	onAgentChange: (callback: (event: AgentChangeEvent) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: AgentChangeEvent) => callback(payload);
+		ipcRenderer.on("agents:change", listener);
+		return () => ipcRenderer.removeListener("agents:change", listener);
+	},
 	onAgentLog: (callback: (entry: AgentLogEntry) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentLogEntry) => callback(payload);
 		ipcRenderer.on("agents:log", listener);
