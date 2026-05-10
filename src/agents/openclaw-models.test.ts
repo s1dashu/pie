@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ensureOpenClawAgentProfile, getOpenClawAgentIdForPieProfile, readOpenClawGatewaySettings } from "./openclaw-models.js";
+import { ensureOpenClawAgentProfile, getOpenClawAgentIdForPieProfile, listImportableOpenClawAgentProfiles, readOpenClawGatewaySettings } from "./openclaw-models.js";
 
 describe("ensureOpenClawAgentProfile", () => {
 	it("upserts a Pie profile as a namespaced official OpenClaw agent", () => {
@@ -99,6 +99,41 @@ describe("ensureOpenClawAgentProfile", () => {
 			assert.equal(settings.gatewayUrl, "ws://127.0.0.1:18888");
 			assert.equal(settings.authMode, "token");
 			assert.equal(settings.token, "official-token");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("lists importable official OpenClaw agent profiles", () => {
+		const root = mkdtempSync(join(tmpdir(), "pie-openclaw-importable-"));
+		try {
+			const stateDir = join(root, "openclaw");
+			mkdirSync(stateDir, { recursive: true });
+			writeFileSync(
+				join(stateDir, "openclaw.json"),
+				`${JSON.stringify({
+					agents: {
+						list: [
+							{
+								id: "official-agent",
+								workspace: join(root, "workspace"),
+								agentDir: join(root, "agent"),
+								model: "kimi-coding/k2p6",
+							},
+						],
+					},
+				}, null, 2)}\n`,
+				"utf8",
+			);
+
+			const profiles = listImportableOpenClawAgentProfiles({ stateDir });
+
+			assert.deepEqual(profiles, [{
+				id: "official-agent",
+				workspace: join(root, "workspace"),
+				agentDir: join(root, "agent"),
+				modelRef: "kimi-coding/k2p6",
+			}]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

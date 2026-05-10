@@ -54,6 +54,8 @@ export const OPENCLAW_BUILT_IN_MODEL_OPTIONS: OpenClawBuiltInModelOption[] = [
 	{ provider: "zai", id: "glm-5v-turbo", name: "glm-5v-turbo", modelRef: "zai/glm-5v-turbo" },
 	{ provider: "zai", id: "glm-4.7", name: "GLM-4.7", modelRef: "zai/glm-4.7" },
 	{ provider: "zai", id: "glm-4.5-air", name: "GLM-4.5-Air", modelRef: "zai/glm-4.5-air" },
+	{ provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", modelRef: "deepseek/deepseek-v4-pro" },
+	{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", modelRef: "deepseek/deepseek-v4-flash" },
 	{ provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax-M2.7", modelRef: "minimax/MiniMax-M2.7" },
 	{ provider: "minimax", id: "MiniMax-M2.7-highspeed", name: "MiniMax-M2.7-highspeed", modelRef: "minimax/MiniMax-M2.7-highspeed" },
 ];

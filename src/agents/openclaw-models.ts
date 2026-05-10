@@ -95,6 +95,13 @@ export interface OpenClawGatewaySettings {
 	password?: string;
 }
 
+export interface ImportableOpenClawAgentProfile {
+	id: string;
+	workspace?: string;
+	agentDir?: string;
+	modelRef?: string;
+}
+
 export function resolveOpenClawStateDir(stateDir?: string): string {
 	return normalizePart(stateDir) || process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
 }
@@ -124,6 +131,33 @@ export function readOpenClawGatewaySettings(options: {
 		...(readString(auth.token) ? { token: readString(auth.token) } : {}),
 		...(readString(auth.password) ? { password: readString(auth.password) } : {}),
 	};
+}
+
+export function listImportableOpenClawAgentProfiles(options: {
+	stateDir?: string;
+	configPath?: string;
+} = {}): ImportableOpenClawAgentProfile[] {
+	const stateDir = resolveOpenClawStateDir(options.stateDir);
+	const configPath = resolveOpenClawConfigPath({ stateDir, configPath: options.configPath });
+	const openClawJson = readJsonObject(configPath);
+	const agents = isObject(openClawJson.agents) ? openClawJson.agents : {};
+	const list = Array.isArray(agents.list) ? agents.list.filter(isObject) : [];
+	const seen = new Set<string>();
+	const profiles: ImportableOpenClawAgentProfile[] = [];
+	for (const agent of list) {
+		const id = readString(agent.id);
+		if (!id || seen.has(id)) {
+			continue;
+		}
+		seen.add(id);
+		profiles.push({
+			id,
+			workspace: readString(agent.workspace),
+			agentDir: readString(agent.agentDir),
+			modelRef: normalizeOpenClawModelRef(readString(agent.model) ?? readString(agent.modelRef)),
+		});
+	}
+	return profiles;
 }
 
 export function toOpenClawModelRef(provider: string | undefined, model: string | undefined): string | undefined {
