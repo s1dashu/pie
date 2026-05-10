@@ -9,14 +9,14 @@ import {
 	extractLastAssistantError,
 	type AgentConversationSessionPool,
 } from "../../agents/session-runtime.js";
-import { getAgentRoundInputText, type AgentRoundInputLike } from "../../agents/types.js";
+import { getAgentPromptInputText, type AgentPromptInputLike } from "../../agents/types.js";
 import {
 	getOwnerSessionBinding,
 	loadConfigStore,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
-import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
+import type { AgentRunInput, AgentRunOutput, AgentRunPort, AgentSessionStatus, ManagedRuntime } from "../../runtime/types.js";
+import { buildAgentPromptInputFromMessageParts } from "../common/channel-model.js";
 import {
 	AssistantTextPresentationBuffer,
 	ThinkingPresentationBuffer,
@@ -28,8 +28,8 @@ import {
 	formatAgentTaskPrompt,
 	isSilentAgentTask,
 	rememberOwnerSessionBinding,
-	ScheduledTurnQueue,
-} from "../common/turn-orchestration.js";
+	ScheduledRunQueue,
+} from "../common/run-orchestration.js";
 import { resolveWechatMessageAttachments } from "./attachments.js";
 import { loadConfig, type WechatBotConfig } from "./config.js";
 import { loginWechatWithQr } from "./login.js";
@@ -98,7 +98,7 @@ function formatDelay(ms: number): string {
 interface QueuedWechatTurn {
 	message: WechatMessage;
 	promptText: string;
-	promptInput: AgentRoundInputLike;
+	promptInput: AgentPromptInputLike;
 	resolve: (result: { assistantText: string; interrupted: boolean }) => void;
 	reject: (error: unknown) => void;
 }
@@ -112,8 +112,8 @@ class WechatConversationController {
 		private readonly runtime: WechatBotRuntime,
 	) {}
 
-	async submit(message: WechatMessage, promptInput: AgentRoundInputLike): Promise<{ assistantText: string; interrupted: boolean }> {
-		const promptText = getAgentRoundInputText(promptInput);
+	async submit(message: WechatMessage, promptInput: AgentPromptInputLike): Promise<{ assistantText: string; interrupted: boolean }> {
+		const promptText = getAgentPromptInputText(promptInput);
 		let resolvePromise: (result: { assistantText: string; interrupted: boolean }) => void = () => undefined;
 		let rejectPromise: (error: unknown) => void = () => undefined;
 		const completion = new Promise<{ assistantText: string; interrupted: boolean }>((resolve, reject) => {
@@ -241,7 +241,7 @@ class WechatConversationController {
 			request.resolve({ assistantText, interrupted: false });
 		} catch (error) {
 			const message = formatError(error);
-			console.error(chalk.red(`Wechat turn failed: ${message}`));
+			console.error(chalk.red(`Wechat run failed: ${message}`));
 			await flushActiveAssistantText();
 			await assistantSendQueue.catch(() => undefined);
 			await flushToolLines();
@@ -255,12 +255,12 @@ class WechatConversationController {
 	}
 }
 
-export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
+export class WechatBotRuntime implements ManagedRuntime, AgentRunPort {
 	readonly identity;
 	private readonly abortController = new AbortController();
 	private readonly dedup = new MessageDedup();
 	private readonly conversations = new Map<string, WechatConversationController>();
-	private readonly scheduledTurns = new ScheduledTurnQueue();
+	private readonly scheduledRuns = new ScheduledRunQueue();
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly contextTokens: ContextTokenStore;
 	private shutdownExitCode = 0;
@@ -373,8 +373,35 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 	}
 
-	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
-		return this.enqueueScheduledAgentTurn(request);
+	async deliverRun(request: AgentRunInput): Promise<{ sessionKey: string; assistantText: string }> {
+		return this.enqueueScheduledAgentRun(request);
+	}
+
+	async createSession(sessionKey: string): Promise<void> {
+		await this.sessionPool.getSession(sessionKey);
+	}
+
+	async getSessionStatus(sessionKey: string): Promise<AgentSessionStatus> {
+		if (this.sessionPool.getSessionStatus) {
+			return this.sessionPool.getSessionStatus(sessionKey);
+		}
+		const session = await this.sessionPool.getSession(sessionKey);
+		return { totalMessages: session.state?.messages.length ?? 0 };
+	}
+
+	async compactSession(sessionKey: string): Promise<{ summary?: string }> {
+		if (!this.sessionPool.compactSession) {
+			throw new Error("This agent harness does not support /compact yet. Use /new to start a fresh session.");
+		}
+		return this.sessionPool.compactSession(sessionKey);
+	}
+
+	async clearSession(sessionKey: string): Promise<void> {
+		if (!this.sessionPool.resetSession) {
+			throw new Error("This agent harness does not support /clear yet.");
+		}
+		await this.sessionPool.resetSession(sessionKey);
+		this.conversations.delete(sessionKey);
 	}
 
 	private async ensureLoggedIn(): Promise<void> {
@@ -449,7 +476,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 		this.rememberOwnerSessionBinding(message);
 		const messageParts = await resolveWechatMessageAttachments(this.config, message, extractMessageParts(message));
-		const promptInput = await buildAgentRoundInputFromMessageParts(messageParts);
+		const promptInput = await buildAgentPromptInputFromMessageParts(messageParts);
 		const promptText = promptInput.text;
 		if (!promptText && !promptInput.images?.length) {
 			await this.sendPlainReply(message, "Only text messages are supported.");
@@ -548,7 +575,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		}
 	}
 
-	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentTurnInput): WechatMessage {
+	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentRunInput): WechatMessage {
 		return {
 			message_id: Date.now(),
 			from_user_id: ownerSession.chatId,
@@ -560,7 +587,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+	private async handleScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -592,7 +619,7 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
+	private resolveScheduledRunQueueKey(request: AgentRunInput): string {
 		if (isSilentAgentTask(request)) {
 			return request.sessionKey;
 		}
@@ -602,11 +629,11 @@ export class WechatBotRuntime implements ManagedRuntime, AgentTurnPort {
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
-		return this.scheduledTurns.enqueue(
+	private async enqueueScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
+		return this.scheduledRuns.enqueue(
 			request,
-			(turn) => this.handleScheduledAgentTurn(turn),
-			(turn) => this.resolveScheduledTurnQueueKey(turn),
+			(run) => this.handleScheduledAgentRun(run),
+			(run) => this.resolveScheduledRunQueueKey(run),
 		);
 	}
 }

@@ -44,6 +44,21 @@ const defaultRules: PresentationRules = {
 	promptHints: [],
 };
 
+const FEISHU_PROMPT_HINTS = [
+	"Never use Markdown tables in Feishu replies; use bullet lists, numbered lists, or plain text instead.",
+	"Reply in Chinese unless the user explicitly asks for another language.",
+] as const;
+
+export function formatPresentationPromptHints(rules: Pick<PresentationRules, "promptHints">): string | undefined {
+	if (!rules.promptHints.length) {
+		return undefined;
+	}
+	return [
+		"## Channel response rules",
+		...rules.promptHints.map((hint) => `- ${hint}`),
+	].join("\n");
+}
+
 export function getPresentationRules(input: {
 	channel: PieChannelKind;
 	surface?: PresentationSurface;
@@ -87,12 +102,13 @@ export function getPresentationRules(input: {
 			...defaultRules,
 			markdown: {
 				mode: "card",
-				allowTables: true,
+				allowTables: false,
 			},
 			thinking: {
 				enabled: false,
 				format: "hidden",
 			},
+			promptHints: FEISHU_PROMPT_HINTS,
 		};
 	}
 	if (input.channel === "feishu") {
@@ -102,9 +118,7 @@ export function getPresentationRules(input: {
 				mode: "no-tables",
 				allowTables: false,
 			},
-			promptHints: [
-				"Do not output Markdown tables in Feishu bubble messages; use bullet lists or plain text instead.",
-			],
+			promptHints: FEISHU_PROMPT_HINTS,
 		};
 	}
 	return defaultRules;

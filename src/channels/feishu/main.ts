@@ -14,14 +14,14 @@ import {
 	loadConfigStore,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime } from "../../runtime/types.js";
-import { buildAgentRoundInputFromMessageParts } from "../common/channel-model.js";
+import type { AgentRunInput, AgentRunOutput, AgentRunPort, AgentSessionStatus, ManagedRuntime } from "../../runtime/types.js";
+import { buildAgentPromptInputFromMessageParts } from "../common/channel-model.js";
 import {
 	formatAgentTaskPrompt,
 	isSilentAgentTask,
 	rememberOwnerSessionBinding,
-	ScheduledTurnQueue,
-} from "../common/turn-orchestration.js";
+	ScheduledRunQueue,
+} from "../common/run-orchestration.js";
 import { handleImCommand, parseImCommand } from "../common/im-commands.js";
 import {
 	extractMessageParts,
@@ -41,13 +41,13 @@ function formatRuntimeTitle(kind: FeishuBotConfig["harnessKind"]): string {
 	return `${getAgentHarnessLabel(kind)} Feishu channel ready`;
 }
 
-export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
+export class FeishuBotRuntime implements ManagedRuntime, AgentRunPort {
 	readonly identity;
 	private readonly dedup = new MessageDedup();
 	private readonly abortController = new AbortController();
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, ConversationController>();
-	private readonly scheduledTurns = new ScheduledTurnQueue();
+	private readonly scheduledRuns = new ScheduledRunQueue();
 	private currentBotOpenId: string | undefined;
 	private larkClient: LarkClient | undefined;
 	private shutdownExitCode = 0;
@@ -111,8 +111,35 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		this.abortController.abort();
 	}
 
-	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
-		return this.enqueueScheduledAgentTurn(request);
+	async deliverRun(request: AgentRunInput): Promise<{ sessionKey: string; assistantText: string }> {
+		return this.enqueueScheduledAgentRun(request);
+	}
+
+	async createSession(sessionKey: string): Promise<void> {
+		await this.sessionPool.getSession(sessionKey);
+	}
+
+	async getSessionStatus(sessionKey: string): Promise<AgentSessionStatus> {
+		if (this.sessionPool.getSessionStatus) {
+			return this.sessionPool.getSessionStatus(sessionKey);
+		}
+		const session = await this.sessionPool.getSession(sessionKey);
+		return { totalMessages: session.state?.messages.length ?? 0 };
+	}
+
+	async compactSession(sessionKey: string): Promise<{ summary?: string }> {
+		if (!this.sessionPool.compactSession) {
+			throw new Error("This agent harness does not support /compact yet. Use /new to start a fresh session.");
+		}
+		return this.sessionPool.compactSession(sessionKey);
+	}
+
+	async clearSession(sessionKey: string): Promise<void> {
+		if (!this.sessionPool.resetSession) {
+			throw new Error("This agent harness does not support /clear yet.");
+		}
+		await this.sessionPool.resetSession(sessionKey);
+		this.conversations.delete(sessionKey);
 	}
 
 	private printStartupSummary(): void {
@@ -132,7 +159,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		console.log(lines.join("\n"));
 	}
 
-	private createSyntheticTaskEvent(ownerSession: OwnerSessionBinding, request: AgentTurnInput): LarkMessageEvent {
+	private createSyntheticTaskEvent(ownerSession: OwnerSessionBinding, request: AgentRunInput): LarkMessageEvent {
 		const now = Date.now();
 		return {
 			sender: {
@@ -171,7 +198,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		});
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+	private async handleScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -202,7 +229,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private resolveScheduledTurnQueueKey(request: AgentTurnInput): string {
+	private resolveScheduledRunQueueKey(request: AgentRunInput): string {
 		if (isSilentAgentTask(request)) {
 			return request.sessionKey;
 		}
@@ -212,11 +239,11 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 	}
 
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
-		return this.scheduledTurns.enqueue(
+	private async enqueueScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
+		return this.scheduledRuns.enqueue(
 			request,
-			(turn) => this.handleScheduledAgentTurn(turn),
-			(turn) => this.resolveScheduledTurnQueueKey(turn),
+			(run) => this.handleScheduledAgentRun(run),
+			(run) => this.resolveScheduledRunQueueKey(run),
 		);
 	}
 
@@ -241,7 +268,11 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 		if (!isRecentMessage(event, this.config.startedAtMs)) {
 			return;
 		}
-		if (!shouldHandleMessage(event, botOpenId)) {
+		const ownerSession = getOwnerSessionBinding(loadConfigStore());
+		if (!shouldHandleMessage(event, botOpenId, {
+			ownerOpenId: ownerSession?.openId,
+			groupResponseMode: this.config.groupResponseMode,
+		})) {
 			return;
 		}
 		this.rememberOwnerSessionBinding(event);
@@ -251,7 +282,7 @@ export class FeishuBotRuntime implements ManagedRuntime, AgentTurnPort {
 			event,
 			extractMessageParts(event, botOpenId),
 		);
-		const promptInput = await buildAgentRoundInputFromMessageParts(messageParts);
+		const promptInput = await buildAgentPromptInputFromMessageParts(messageParts);
 		const promptText = promptInput.text;
 		if (!promptText && !promptInput.images?.length) {
 			await sendPlainReply(this.config.feishu, event, "Only text messages are supported.");

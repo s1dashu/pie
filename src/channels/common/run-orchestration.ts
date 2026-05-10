@@ -5,7 +5,7 @@ import {
 	setOwnerSessionBinding,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnOutput } from "../../runtime/types.js";
+import type { AgentRunInput, AgentRunOutput } from "../../runtime/types.js";
 
 export function formatAgentTaskPrompt(prompt: string): string {
 	const trimmed = prompt.trim();
@@ -15,7 +15,7 @@ export function formatAgentTaskPrompt(prompt: string): string {
 	return trimmed.startsWith("Task:") ? trimmed : `Task: ${trimmed}`;
 }
 
-export function isSilentAgentTask(request: AgentTurnInput): boolean {
+export function isSilentAgentTask(request: AgentRunInput): boolean {
 	return request.kind === "agent_task" && request.metadata?.deliveryMode === "silent";
 }
 
@@ -36,28 +36,28 @@ export function rememberOwnerSessionBinding(ownerSession: OwnerSessionBinding, o
 	saveConfigStore(setOwnerSessionBinding(store, ownerSession));
 }
 
-export function resolveOwnerSessionQueueKey(request: AgentTurnInput): string {
+export function resolveOwnerSessionQueueKey(request: AgentRunInput): string {
 	if (isSilentAgentTask(request) || request.kind !== "agent_task") {
 		return request.sessionKey;
 	}
 	return getOwnerSessionBinding(loadConfigStore())?.sessionKey ?? request.sessionKey;
 }
 
-export class ScheduledTurnQueue {
+export class ScheduledRunQueue {
 	private readonly queues = new Map<string, Promise<void>>();
 
 	async enqueue(
-		request: AgentTurnInput,
-		runTurn: (request: AgentTurnInput) => Promise<AgentTurnOutput>,
-		resolveQueueKey: (request: AgentTurnInput) => string = resolveOwnerSessionQueueKey,
-	): Promise<AgentTurnOutput> {
-		let result: AgentTurnOutput | undefined;
+		request: AgentRunInput,
+		runAgent: (request: AgentRunInput) => Promise<AgentRunOutput>,
+		resolveQueueKey: (request: AgentRunInput) => string = resolveOwnerSessionQueueKey,
+	): Promise<AgentRunOutput> {
+		let result: AgentRunOutput | undefined;
 		const queueKey = resolveQueueKey(request);
 		const previous = this.queues.get(queueKey) ?? Promise.resolve();
 		const current = previous
 			.catch(() => undefined)
 			.then(async () => {
-				result = await runTurn(request);
+				result = await runAgent(request);
 			})
 			.finally(() => {
 				if (this.queues.get(queueKey) === current) {
@@ -67,7 +67,7 @@ export class ScheduledTurnQueue {
 		this.queues.set(queueKey, current);
 		await current;
 		if (!result) {
-			throw new Error("Scheduled agent turn produced no result.");
+			throw new Error("Scheduled agent run produced no result.");
 		}
 		return result;
 	}

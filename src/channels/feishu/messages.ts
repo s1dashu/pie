@@ -1,5 +1,6 @@
 import type { LarkMessageEvent } from "./platform/index.js";
 import type { ChannelMessagePart } from "../common/channel-model.js";
+import { shouldRespondToImMessage, type ImGroupResponseMode } from "../../core/im-behavior.js";
 
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
 
@@ -50,14 +51,21 @@ export function isBotMentioned(event: LarkMessageEvent, botOpenId: string | unde
 	);
 }
 
-export function shouldHandleMessage(event: LarkMessageEvent, botOpenId: string | undefined): boolean {
+export function shouldHandleMessage(
+	event: LarkMessageEvent,
+	botOpenId: string | undefined,
+	options?: { ownerOpenId?: string; groupResponseMode?: ImGroupResponseMode },
+): boolean {
 	if (wasSentByBot(event, botOpenId)) {
 		return false;
 	}
-	if (event.message.chat_type === "group" && !isBotMentioned(event, botOpenId)) {
-		return false;
-	}
-	return true;
+	return shouldRespondToImMessage({
+		isDirectMessage: event.message.chat_type === "p2p",
+		isBotMentioned: isBotMentioned(event, botOpenId),
+		senderId: event.sender.sender_id.open_id,
+		ownerId: options?.ownerOpenId,
+		groupResponseMode: options?.groupResponseMode ?? "owner_mention",
+	});
 }
 
 export function isRecentMessage(event: LarkMessageEvent, startedAtMs: number): boolean {

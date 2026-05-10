@@ -7,15 +7,18 @@ import { getAgentHarnessDefinition } from "../../agents/harness-registry.js";
 import { loadAgentEnvIntoProcess, resolveAgentHomeDir } from "../../core/agent-home.js";
 import {
 	type AgentHarnessKind,
+	getImBehavior,
 	getProfileModel,
 	getStoredProfile,
 	loadConfigStore,
 	type AgentConfigStore,
 	type AgentProfile,
 } from "../../core/config-store.js";
+import { DEFAULT_IM_GROUP_RESPONSE_MODE, isImGroupResponseMode, type ImGroupResponseMode } from "../../core/im-behavior.js";
 import { resolveDefaultRuntimeHomeDir } from "../../core/profile-registry.js";
 import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js";
 import type { PieChannelKind } from "../../runtime/types.js";
+import { formatPresentationPromptHints, getPresentationRules } from "./presentation-rules.js";
 import { DEFAULT_TOOL_CALL_IM_MAX_LENGTH, type ToolCallImMaxLength } from "./tool-call-im.js";
 
 type BuiltinToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
@@ -47,6 +50,7 @@ export interface CommonChannelRuntimeConfig {
 	outputToolCallsToIm: boolean;
 	outputToolCallImMaxLength: ToolCallImMaxLength;
 	outputThinkingToIm: boolean;
+	groupResponseMode: ImGroupResponseMode;
 	startedAtMs: number;
 }
 
@@ -79,6 +83,16 @@ function parseToolCallImMaxLength(value: string | undefined): ToolCallImMaxLengt
 		return value === "none" ? "none" : Number(value) as ToolCallImMaxLength;
 	}
 	throw new Error(`Invalid tool call IM truncation value: ${value}`);
+}
+
+function parseImGroupResponseMode(value: string | undefined): ImGroupResponseMode {
+	if (!value) {
+		return DEFAULT_IM_GROUP_RESPONSE_MODE;
+	}
+	if (isImGroupResponseMode(value)) {
+		return value;
+	}
+	throw new Error(`Invalid IM group response mode: ${value}`);
 }
 
 function parseThinkingLevel(value: string | undefined, label: string): ThinkingLevel {
@@ -176,8 +190,22 @@ function resolveModel(
 	return { model, label: `${provider}/${modelId}` };
 }
 
-function resolveAssistantSystemPrompt(env: RuntimeEnv, promptKey: string, defaultPath: string): { path: string; content: string } {
-	const filePath = resolve(env[promptKey] ?? defaultPath);
+function joinSystemPromptParts(...parts: Array<string | undefined>): string | undefined {
+	const content = parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part)).join("\n\n");
+	return content || undefined;
+}
+
+function supportsAssistantSystemPrompt(kind: AgentHarnessKind): boolean {
+	return kind === "pi" || kind === "ousia" || kind === "codex" || kind === "hermes";
+}
+
+function resolveAssistantSystemPrompt(env: RuntimeEnv, promptKey: string, defaultPath?: string): { path?: string; content?: string } {
+	const configuredPath = env[promptKey]?.trim();
+	const promptPath = configuredPath || defaultPath;
+	if (!promptPath) {
+		return {};
+	}
+	const filePath = resolve(promptPath);
 	if (!existsSync(filePath)) {
 		throw new Error(`Missing system prompt file: ${filePath}`);
 	}
@@ -188,6 +216,10 @@ function resolveAssistantSystemPrompt(env: RuntimeEnv, promptKey: string, defaul
 function mergeStoredModelIntoEnv(env: RuntimeEnv, prefix: string, store: AgentConfigStore): void {
 	const profile = getStoredProfile(store);
 	const model = getProfileModel(profile);
+	const imBehavior = getImBehavior(profile);
+	if (env[`${prefix}_BOT_IM_GROUP_RESPONSE_MODE`] === undefined && imBehavior.groupResponseMode) {
+		env[`${prefix}_BOT_IM_GROUP_RESPONSE_MODE`] = imBehavior.groupResponseMode;
+	}
 	if (!model) {
 		return;
 	}
@@ -234,10 +266,15 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		harnessKind,
 	);
 	const { tools, label: toolLabel } = resolveTools(env[`${options.envPrefix}_BOT_TOOLS`], `${options.envPrefix}_BOT_TOOLS`);
-	const assistantSystemPrompt =
-		lifecycleHooks?.systemPrompt
-			? resolveAssistantSystemPrompt(env, `${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`, lifecycleHooks.systemPrompt.defaultPath)
-			: undefined;
+	const assistantSystemPromptFile = resolveAssistantSystemPrompt(
+		env,
+		`${options.envPrefix}_BOT_SYSTEM_PROMPT_FILE`,
+		lifecycleHooks?.systemPrompt?.defaultPath,
+	);
+	const channelSystemPrompt = supportsAssistantSystemPrompt(harnessKind)
+		? formatPresentationPromptHints(getPresentationRules({ channel: options.channelKind }))
+		: undefined;
+	const assistantSystemPrompt = joinSystemPromptParts(assistantSystemPromptFile.content, channelSystemPrompt);
 	const defaultResumeSessions = getDefaultResumeSessionsForHarness(harnessKind);
 	return {
 		homeDir: resolveAgentHomeDir(),
@@ -248,8 +285,8 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		model,
 		modelId,
 		modelLabel,
-		assistantSystemPrompt: assistantSystemPrompt?.content,
-		assistantSystemPromptPath: assistantSystemPrompt?.path,
+		assistantSystemPrompt,
+		assistantSystemPromptPath: assistantSystemPromptFile.path,
 		thinkingLevel: parseThinkingLevel(env[`${options.envPrefix}_BOT_THINKING`], `${options.envPrefix}_BOT_THINKING`),
 		tools,
 		toolLabel,
@@ -260,6 +297,7 @@ export function loadCommonChannelConfig(options: CommonConfigOptions): CommonCha
 		outputToolCallsToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_TOOL_CALLS`], true),
 		outputToolCallImMaxLength: parseToolCallImMaxLength(env[`${options.envPrefix}_BOT_IM_TOOL_CALL_MAX_LENGTH`]),
 		outputThinkingToIm: parseBooleanFlag(env[`${options.envPrefix}_BOT_IM_THINKING`], false),
+		groupResponseMode: parseImGroupResponseMode(env[`${options.envPrefix}_BOT_IM_GROUP_RESPONSE_MODE`]),
 		startedAtMs: Date.now(),
 	};
 }

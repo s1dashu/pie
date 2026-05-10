@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { PieChannelKind } from "../../runtime/types.js";
-import type { AgentRoundInput } from "../../agents/types.js";
+import type { AgentPromptInput } from "../../agents/types.js";
 
 const IMAGE_ONLY_PROMPT = "Please respond to the attached image.";
 
@@ -23,6 +23,7 @@ export interface IncomingChannelMessage {
 	parts: ChannelMessagePart[];
 	createdAtMs: number;
 	isDirectMessage: boolean;
+	isBotMentioned?: boolean;
 	senderId?: string;
 }
 
@@ -90,9 +91,9 @@ async function readImagePart(part: Extract<ChannelMessagePart, { type: "image" }
 	return Buffer.from(await response.arrayBuffer());
 }
 
-export async function buildAgentRoundInputFromMessageParts(parts: ChannelMessagePart[]): Promise<AgentRoundInput> {
+export async function buildAgentPromptInputFromMessageParts(parts: ChannelMessagePart[]): Promise<AgentPromptInput> {
 	const text = extractTextPart(parts) ?? "";
-	const images: AgentRoundInput["images"] = [];
+	const images: AgentPromptInput["images"] = [];
 	for (const part of parts) {
 		if (part.type !== "image") {
 			continue;

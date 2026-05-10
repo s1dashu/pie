@@ -6,12 +6,12 @@ import { afterEach, describe, it } from "node:test";
 import type {
 	AgentConversationSession,
 	AgentConversationSessionPool,
-	AgentRoundInputLike,
+	AgentPromptInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 } from "../../agents/types.js";
 import { loadConfigStore, saveConfigStore, type AgentConfigStore } from "../../core/config-store.js";
-import type { AgentTurnInput } from "../../runtime/types.js";
+import type { AgentRunInput } from "../../runtime/types.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import type { ChannelTarget, IncomingChannelMessage, TextChannelAdapter } from "./channel-model.js";
 import { TextChannelRuntime } from "./text-channel-runtime.js";
@@ -70,6 +70,7 @@ function createConfig(homeDir: string, overrides: Partial<CommonChannelRuntimeCo
 		outputToolCallsToIm: true,
 		outputToolCallImMaxLength: 60,
 		outputThinkingToIm: false,
+		groupResponseMode: "mention",
 		startedAtMs: 1_700_000_000_000,
 		...overrides,
 	};
@@ -84,6 +85,7 @@ function createMessage(overrides: Partial<IncomingChannelMessage> = {}): Incomin
 		parts: [{ type: "text", text: "hello" }],
 		createdAtMs: 1_700_000_001_000,
 		isDirectMessage: true,
+		isBotMentioned: false,
 		senderId: "user-1",
 		...overrides,
 	};
@@ -114,19 +116,19 @@ class FakeTextChannelAdapter implements TextChannelAdapter {
 class FakeAgentSession implements AgentConversationSession {
 	readonly capabilities = CAPABILITIES;
 	readonly state: { messages: unknown[] } = { messages: [] };
-	readonly prompts: AgentRoundInputLike[] = [];
+	readonly prompts: AgentPromptInputLike[] = [];
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
 
 	constructor(
 		private readonly conversationKey: string,
-		private readonly reply: (input: AgentRoundInputLike, conversationKey: string) => string | Promise<string>,
+		private readonly reply: (input: AgentPromptInputLike, conversationKey: string) => string | Promise<string>,
 	) {}
 
 	get isStreaming(): boolean {
 		return false;
 	}
 
-	async prompt(input: AgentRoundInputLike): Promise<void> {
+	async prompt(input: AgentPromptInputLike): Promise<void> {
 		this.prompts.push(input);
 		const text = await this.reply(input, this.conversationKey);
 		this.state.messages.push({
@@ -150,7 +152,7 @@ class FakeAgentSessionPool implements AgentConversationSessionPool {
 	readonly sessions = new Map<string, FakeAgentSession>();
 
 	constructor(
-		private readonly reply: (input: AgentRoundInputLike, conversationKey: string) => string | Promise<string> = (input) =>
+		private readonly reply: (input: AgentPromptInputLike, conversationKey: string) => string | Promise<string> = (input) =>
 			`reply:${typeof input === "string" ? input : input.text}`,
 	) {}
 
@@ -233,6 +235,44 @@ describe("TextChannelRuntime integration", () => {
 		assert.equal(adapter.sent.length, 1);
 	});
 
+	it("applies group response policy before prompting the agent", async () => {
+		const homeDir = createTempHome();
+		const { adapter, sessionPool } = await createRuntime({
+			homeDir,
+			config: { groupResponseMode: "owner_mention" },
+		});
+
+		await adapter.receive(createMessage({
+			id: "owner-dm",
+			conversationKey: "owner-conversation",
+			target: { channelId: "owner-chat", userId: "owner-user" },
+			senderId: "owner-user",
+			isDirectMessage: true,
+		}));
+		await adapter.receive(createMessage({
+			id: "group-other-mention",
+			conversationKey: "group-conversation",
+			target: { channelId: "group-chat", userId: "other-user" },
+			senderId: "other-user",
+			isDirectMessage: false,
+			isBotMentioned: true,
+			parts: [{ type: "text", text: "other mention" }],
+		}));
+		await adapter.receive(createMessage({
+			id: "group-owner-mention",
+			conversationKey: "group-conversation",
+			target: { channelId: "group-chat", userId: "owner-user" },
+			senderId: "owner-user",
+			isDirectMessage: false,
+			isBotMentioned: true,
+			parts: [{ type: "text", text: "owner mention" }],
+		}));
+
+		assert.equal(sessionPool.sessions.get("group-conversation")?.prompts.length, 1);
+		assert.deepEqual(sessionPool.sessions.get("group-conversation")?.prompts[0], { text: "owner mention" });
+		assert.equal(adapter.sent.filter((item) => item.target.channelId === "group-chat").length, 1);
+	});
+
 	it("routes non-silent scheduled tasks to the bound owner session and silent tasks to their own session", async () => {
 		const homeDir = createTempHome();
 		const { adapter, runtime, sessionPool } = await createRuntime({ homeDir, channelKind: "feishu" });
@@ -250,7 +290,7 @@ describe("TextChannelRuntime integration", () => {
 		assert.equal(store.ownerSession?.sessionKey, "owner-conversation");
 		assert.equal(store.ownerSession?.openId, "owner-user");
 
-		const visibleTask = await runtime.deliverTurn({
+		const visibleTask = await runtime.deliverRun({
 			kind: "agent_task",
 			sessionKey: "task-session",
 			prompt: "run visible task",
@@ -261,13 +301,13 @@ describe("TextChannelRuntime integration", () => {
 		assert.equal(adapter.sent.at(-1)?.text, "reply:Task: run visible task");
 
 		const beforeSilentSendCount = adapter.sent.length;
-		const silentTask: AgentTurnInput = {
+		const silentTask: AgentRunInput = {
 			kind: "agent_task",
 			sessionKey: "silent-session",
 			prompt: "run silent task",
 			metadata: { deliveryMode: "silent" },
 		};
-		const silentResult = await runtime.deliverTurn(silentTask);
+		const silentResult = await runtime.deliverRun(silentTask);
 		assert.equal(silentResult.sessionKey, "silent-session");
 		assert.equal(silentResult.assistantText, "reply:run silent task");
 		assert.equal(sessionPool.sessions.get("silent-session")?.prompts.at(-1), "run silent task");

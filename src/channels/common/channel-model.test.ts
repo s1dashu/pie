@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { buildAgentRoundInputFromMessageParts, extractTextPart, type ChannelMessagePart } from "./channel-model.js";
+import { buildAgentPromptInputFromMessageParts, extractTextPart, type ChannelMessagePart } from "./channel-model.js";
 
 const PNG_1X1 = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -51,7 +51,7 @@ describe("channel model", () => {
 		const filePath = join(dir, "pixel.png");
 		await writeFile(filePath, PNG_1X1);
 
-		const input = await buildAgentRoundInputFromMessageParts([
+		const input = await buildAgentPromptInputFromMessageParts([
 			{ type: "text", text: "describe this" },
 			{ type: "image", filePath, mimeType: "application/octet-stream" },
 		]);
@@ -68,7 +68,7 @@ describe("channel model", () => {
 		const filePath = join(dir, "pixel.png");
 		await writeFile(filePath, PNG_1X1);
 
-		const input = await buildAgentRoundInputFromMessageParts([{ type: "image", filePath }]);
+		const input = await buildAgentPromptInputFromMessageParts([{ type: "image", filePath }]);
 
 		assert.equal(input.text, "Please respond to the attached image.");
 		assert.equal(input.images?.length, 1);
@@ -89,7 +89,7 @@ describe("channel model", () => {
 		assert(address && typeof address === "object");
 		const baseUrl = `http://127.0.0.1:${address.port}`;
 
-		const input = await buildAgentRoundInputFromMessageParts([
+		const input = await buildAgentPromptInputFromMessageParts([
 			{ type: "image", url: `${baseUrl}/pixel.png` },
 			{ type: "image", url: `${baseUrl}/notes.txt` },
 		]);

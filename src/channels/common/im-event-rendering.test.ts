@@ -4,27 +4,27 @@ import type { AgentSessionEvent } from "../../agents/types.js";
 import { AssistantTextPresentationBuffer, formatThinkingForIm, ThinkingPresentationBuffer } from "./im-event-rendering.js";
 
 function thinkingDelta(delta: string): AgentSessionEvent {
-	return { type: "thinking_delta", roundId: "round", turnId: "turn", thinkingId: "thinking", delta };
+	return { type: "thinking_delta", runId: "round", turnId: "turn", thinkingId: "thinking", delta };
 }
 
 function thinkingFinished(thinking: string): AgentSessionEvent {
-	return { type: "thinking_finished", roundId: "round", turnId: "turn", thinkingId: "thinking", thinking };
+	return { type: "thinking_finished", runId: "round", turnId: "turn", thinkingId: "thinking", thinking };
 }
 
 function textStart(): AgentSessionEvent {
-	return { type: "text_start", roundId: "round", turnId: "turn", textId: "text" };
+	return { type: "text_start", runId: "round", turnId: "turn", textId: "text" };
 }
 
 function textDelta(delta: string): AgentSessionEvent {
-	return { type: "text_delta", roundId: "round", turnId: "turn", textId: "text", delta };
+	return { type: "text_delta", runId: "round", turnId: "turn", textId: "text", delta };
 }
 
 function textFinished(text: string): AgentSessionEvent {
-	return { type: "text_finished", roundId: "round", turnId: "turn", textId: "text", text };
+	return { type: "text_finished", runId: "round", turnId: "turn", textId: "text", text };
 }
 
 function turnFinished(): AgentSessionEvent {
-	return { type: "turn_finished", roundId: "round", turnId: "turn", status: "success" };
+	return { type: "turn_finished", runId: "round", turnId: "turn", status: "success" };
 }
 
 describe("IM event rendering", () => {

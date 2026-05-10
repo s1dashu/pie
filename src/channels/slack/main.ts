@@ -82,9 +82,6 @@ class SlackAdapter implements TextChannelAdapter {
 		const rawText = typeof event.text === "string" ? event.text : "";
 		const isDirectMessage = event.channel_type === "im";
 		const mentioned = this.botUserId ? rawText.includes(`<@${this.botUserId}>`) : false;
-		if (!isDirectMessage && !mentioned) {
-			return undefined;
-		}
 		const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : ts;
 		const text = stripBotMention(rawText, this.botUserId);
 		return {
@@ -95,6 +92,7 @@ class SlackAdapter implements TextChannelAdapter {
 			parts: text ? [{ type: "text", text }] : [],
 			createdAtMs: Math.floor(Number(ts.split(".")[0] ?? Date.now() / 1000) * 1000),
 			isDirectMessage,
+			isBotMentioned: mentioned,
 			senderId: userId,
 		};
 	}

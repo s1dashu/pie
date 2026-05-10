@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createAgentProfile, getPrimaryFeishuChannel, getPrimaryWechatChannel, getProfileModel } from "../../core/config-store.js";
+import { createAgentProfile, getImBehavior, getPrimaryFeishuChannel, getPrimaryWechatChannel, getProfileModel } from "../../core/config-store.js";
 import { planAgentProfileMutation } from "./agent-profile-mutation.js";
 
 describe("planAgentProfileMutation", () => {
@@ -92,6 +92,30 @@ describe("planAgentProfileMutation", () => {
 
 		assert.equal(getProfileModel(openClawPlan.nextProfile)?.resumeSessions, false);
 		assert.equal(getProfileModel(codexPlan.nextProfile)?.resumeSessions, true);
+	});
+
+	it("updates IM behavior independently from channel credentials", () => {
+		const currentProfile = createAgentProfile({
+			harness: { kind: "pi" },
+			channels: [
+				{
+					kind: "feishu",
+					id: "feishu",
+					enabled: true,
+					appId: "cli_a",
+				},
+			],
+		});
+
+		const plan = planAgentProfileMutation({
+			currentProfile,
+			draft: { imGroupResponseMode: "owner_mention" },
+			env: { FEISHU_APP_SECRET: "secret" },
+		});
+
+		assert.equal(getImBehavior(plan.nextProfile).groupResponseMode, "owner_mention");
+		assert.deepEqual(plan.envUpdates, {});
+		assert.equal(plan.hasFeishuUpdate, false);
 	});
 
 	it("validates new Slack credentials before producing mutations", () => {

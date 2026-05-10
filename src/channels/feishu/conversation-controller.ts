@@ -9,7 +9,7 @@ import {
 	type AgentConversationSessionPool,
 	wasLastAssistantMessageAborted,
 } from "../../agents/session-runtime.js";
-import { getAgentRoundInputText, type AgentRoundInputLike } from "../../agents/types.js";
+import { getAgentPromptInputText, type AgentPromptInputLike } from "../../agents/types.js";
 import type { LarkMessageEvent } from "./platform/index.js";
 import {
 	formatLarkError,
@@ -27,7 +27,7 @@ interface ConversationRequest {
 	id: number;
 	event: LarkMessageEvent;
 	promptText: string;
-	promptInput: AgentRoundInputLike;
+	promptInput: AgentPromptInputLike;
 	reporter: ConversationReporter;
 	receivedAtMs: number;
 	interrupted: boolean;
@@ -73,8 +73,8 @@ export class ConversationController {
 		));
 	}
 
-	async submit(event: LarkMessageEvent, promptInput: AgentRoundInputLike): Promise<ConversationResult> {
-		const promptText = getAgentRoundInputText(promptInput);
+	async submit(event: LarkMessageEvent, promptInput: AgentPromptInputLike): Promise<ConversationResult> {
+		const promptText = getAgentPromptInputText(promptInput);
 		const requestId = this.nextRequestId++;
 		this.logQueue("submit_received", requestId, event, `processing=${this.processing} pending=${this.pendingRequests.length} text=${formatLogValue(promptText)}`);
 		const reporter = this.createReporter(event);
@@ -109,12 +109,12 @@ export class ConversationController {
 		return completion;
 	}
 
-	private logTurnTiming(stage: string, elapsedMs: number, details?: string): void {
+	private logRunTiming(stage: string, elapsedMs: number, details?: string): void {
 		if (!this.config.verboseLogs) {
 			return;
 		}
 		const suffix = details ? ` ${details}` : "";
-		console.log(chalk.gray(`> turn_timing ${this.conversationKey} stage=${stage} elapsed=${elapsedMs}ms${suffix}`));
+		console.log(chalk.gray(`> run_timing ${this.conversationKey} stage=${stage} elapsed=${elapsedMs}ms${suffix}`));
 	}
 
 	private logQueue(stage: string, requestId: number | undefined, event: LarkMessageEvent | undefined, details?: string): void {
@@ -123,9 +123,9 @@ export class ConversationController {
 		const messagePart = messageId ? ` message_id=${formatLogValue(messageId)}` : "";
 		const suffix = details ? ` ${details}` : "";
 		if (this.shouldPrintQueueStage(stage)) {
-			console.log(chalk.gray(`> feishu_turn ${this.conversationKey} stage=${stage}${requestPart}${messagePart}${suffix}`));
+			console.log(chalk.gray(`> feishu_run ${this.conversationKey} stage=${stage}${requestPart}${messagePart}${suffix}`));
 		}
-		appendFeishuTurnLog(this.config.homeDir, {
+		appendFeishuRunLog(this.config.homeDir, {
 			ts: new Date().toISOString(),
 			conversationKey: this.conversationKey,
 			stage,
@@ -178,7 +178,7 @@ export class ConversationController {
 		this.logQueue("session_get_start", request.id, request.event, `elapsed=${Date.now() - request.receivedAtMs}ms`);
 		const session = await this.sessionPool.getSession(this.conversationKey);
 		this.logQueue("session_get_done", request.id, request.event, `elapsed=${Date.now() - request.receivedAtMs}ms streaming=${session.isStreaming}`);
-		this.logTurnTiming("session_ready", Date.now() - request.receivedAtMs);
+		this.logRunTiming("session_ready", Date.now() - request.receivedAtMs);
 		if (request.interrupted) {
 			this.logQueue("request_interrupted_before_prompt", request.id, request.event);
 			await request.reporter.dispose();
@@ -193,7 +193,7 @@ export class ConversationController {
 			request.reporter.onSessionEvent(event);
 			if (!sawFirstResponse && isFirstResponseSignal(event)) {
 				sawFirstResponse = true;
-				this.logTurnTiming(
+				this.logRunTiming(
 					"first_response",
 					Date.now() - request.receivedAtMs,
 					`since_prompt=${Date.now() - promptStartedAt}ms signal=${event.type}`,
@@ -204,7 +204,7 @@ export class ConversationController {
 		let result: ConversationResult = { assistantText: "", interrupted: true };
 		let failure: unknown;
 		try {
-			this.logTurnTiming("prompt_start", promptStartedAt - request.receivedAtMs);
+			this.logRunTiming("prompt_start", promptStartedAt - request.receivedAtMs);
 			this.logQueue("prompt_start", request.id, request.event, `elapsed=${promptStartedAt - request.receivedAtMs}ms`);
 			await session.prompt(request.promptInput);
 			this.logQueue("prompt_done", request.id, request.event, `elapsed=${Date.now() - request.receivedAtMs}ms interrupted=${request.interrupted}`);
@@ -217,7 +217,7 @@ export class ConversationController {
 				this.logQueue("reporter_finish_start", request.id, request.event, `assistant_chars=${responseText.length}`);
 				await request.reporter.finish(responseText);
 				this.logQueue("reporter_finish_done", request.id, request.event, `assistant_chars=${responseText.length}`);
-				this.logTurnTiming(
+				this.logRunTiming(
 					"prompt_complete",
 					Date.now() - request.receivedAtMs,
 					`since_prompt=${Date.now() - promptStartedAt}ms`,
@@ -229,7 +229,7 @@ export class ConversationController {
 		} catch (error) {
 			if (!request.interrupted && !isAbortLikeError(error)) {
 				const errorMessage = formatLarkError(error);
-				this.logTurnTiming(
+				this.logRunTiming(
 					"prompt_error",
 					Date.now() - request.receivedAtMs,
 					`since_prompt=${Date.now() - promptStartedAt}ms`,
@@ -262,15 +262,15 @@ function formatLogValue(value: string): string {
 	return JSON.stringify(value.length > 160 ? `${value.slice(0, 160)}...` : value);
 }
 
-function appendFeishuTurnLog(homeDir: string | undefined, entry: Record<string, unknown>): void {
+function appendFeishuRunLog(homeDir: string | undefined, entry: Record<string, unknown>): void {
 	if (!homeDir) {
 		return;
 	}
 	try {
 		const runtimeDir = join(homeDir, "runtime");
 		mkdirSync(runtimeDir, { recursive: true });
-		appendFileSync(join(runtimeDir, "feishu-turns.jsonl"), `${JSON.stringify(entry)}\n`);
+		appendFileSync(join(runtimeDir, "feishu-runs.jsonl"), `${JSON.stringify(entry)}\n`);
 	} catch {
-		// Console output remains the primary live signal; file logging should never break a turn.
+		// Console output remains the primary live signal; file logging should never break a run.
 	}
 }

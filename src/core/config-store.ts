@@ -3,6 +3,11 @@ import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { resolveAgentHomeDir } from "./agent-home.js";
 import {
+	DEFAULT_IM_GROUP_RESPONSE_MODE,
+	isImGroupResponseMode,
+	type ImBehaviorRules,
+} from "./im-behavior.js";
+import {
 	isFeishuMessageOutputMode,
 	isToolCallImMaxLength,
 	type FeishuMessageOutputMode,
@@ -107,6 +112,7 @@ export type ChannelProfile =
 export interface AgentProfile {
 	schemaVersion: 1;
 	harness: AgentHarnessProfile;
+	imBehavior?: ImBehaviorRules;
 	runtime?: {
 		workDir?: string;
 	};
@@ -310,9 +316,21 @@ function normalizeAgentRuntime(value: unknown): AgentProfile["runtime"] {
 	return workDir ? { workDir } : undefined;
 }
 
+function normalizeImBehavior(value: unknown): ImBehaviorRules | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	return {
+		groupResponseMode: isImGroupResponseMode(value.groupResponseMode)
+			? value.groupResponseMode
+			: DEFAULT_IM_GROUP_RESPONSE_MODE,
+	};
+}
+
 export function createAgentProfile(opts: {
 	harness?: AgentHarnessProfile;
 	backend?: AgentHarnessProfile;
+	imBehavior?: ImBehaviorRules;
 	runtime?: AgentProfile["runtime"];
 	model?: ModelProfile;
 	channels?: ChannelProfile[];
@@ -325,6 +343,7 @@ export function createAgentProfile(opts: {
 			kind: "pi",
 			...(opts.model ? { model: opts.model } : {}),
 		},
+		...(opts.imBehavior ? { imBehavior: opts.imBehavior } : {}),
 		...(opts.runtime ? { runtime: opts.runtime } : {}),
 		channels: channels.map((channel) =>
 			channel.kind === "feishu"
@@ -370,9 +389,24 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 		.filter((channel): channel is ChannelProfile => Boolean(channel));
 	return createAgentProfile({
 		harness: normalizeAgentHarness(harnessValue),
+		imBehavior: normalizeImBehavior(value.imBehavior),
 		runtime: normalizeAgentRuntime(value.runtime),
 		channels,
 	});
+}
+
+export function getImBehavior(profile: AgentProfile | undefined): ImBehaviorRules {
+	return {
+		groupResponseMode: profile?.imBehavior?.groupResponseMode ?? DEFAULT_IM_GROUP_RESPONSE_MODE,
+	};
+}
+
+export function setImBehavior(profile: AgentProfile | undefined, imBehavior: ImBehaviorRules): AgentProfile {
+	const base = profile ?? createAgentProfile({});
+	return {
+		...base,
+		imBehavior,
+	};
 }
 
 export function getProfileModel(profile: AgentProfile | undefined): ModelProfile | undefined {

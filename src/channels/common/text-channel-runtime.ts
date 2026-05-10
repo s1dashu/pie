@@ -13,11 +13,12 @@ import {
 	loadConfigStore,
 	type OwnerSessionBinding,
 } from "../../core/config-store.js";
-import type { AgentTurnInput, AgentTurnOutput, AgentTurnPort, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
-import type { AgentRoundInputLike } from "../../agents/types.js";
+import { shouldRespondToImMessage } from "../../core/im-behavior.js";
+import type { AgentRunInput, AgentRunOutput, AgentRunPort, AgentSessionStatus, ManagedRuntime, PieChannelKind } from "../../runtime/types.js";
+import type { AgentPromptInputLike } from "../../agents/types.js";
 import type { CommonChannelRuntimeConfig } from "./config.js";
 import {
-	buildAgentRoundInputFromMessageParts,
+	buildAgentPromptInputFromMessageParts,
 	type IncomingChannelMessage,
 	type TextChannelAdapter,
 } from "./channel-model.js";
@@ -30,24 +31,24 @@ import {
 	formatAgentTaskPrompt,
 	isSilentAgentTask,
 	rememberOwnerSessionBinding,
-	ScheduledTurnQueue,
-} from "./turn-orchestration.js";
+	ScheduledRunQueue,
+} from "./run-orchestration.js";
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-interface QueuedTextTurn {
+interface QueuedTextRun {
 	message: IncomingChannelMessage;
 	promptText: string;
-	promptInput: AgentRoundInputLike;
+	promptInput: AgentPromptInputLike;
 	resolve: (result: { assistantText: string; interrupted: boolean }) => void;
 	reject: (error: unknown) => void;
 }
 
 class TextConversationController {
 	private processing = false;
-	private readonly pendingRequests: QueuedTextTurn[] = [];
+	private readonly pendingRequests: QueuedTextRun[] = [];
 
 	constructor(
 		private readonly conversationKey: string,
@@ -57,7 +58,7 @@ class TextConversationController {
 	async submit(
 		message: IncomingChannelMessage,
 		promptText: string,
-		promptInput: AgentRoundInputLike,
+		promptInput: AgentPromptInputLike,
 	): Promise<{ assistantText: string; interrupted: boolean }> {
 		let resolvePromise: (result: { assistantText: string; interrupted: boolean }) => void = () => undefined;
 		let rejectPromise: (error: unknown) => void = () => undefined;
@@ -87,7 +88,7 @@ class TextConversationController {
 		}
 	}
 
-	private async executeRequest(request: QueuedTextTurn): Promise<void> {
+	private async executeRequest(request: QueuedTextRun): Promise<void> {
 		let unsubscribe: (() => void) | undefined;
 		let pendingToolLines: string[] = [];
 		let toolSendQueue = Promise.resolve();
@@ -152,7 +153,7 @@ class TextConversationController {
 			request.resolve({ assistantText, interrupted: false });
 		} catch (error) {
 			const message = formatError(error);
-			console.error(chalk.red(`${this.runtime.channelLabel} turn failed: ${message}`));
+			console.error(chalk.red(`${this.runtime.channelLabel} run failed: ${message}`));
 			await flushToolLines();
 			await this.runtime.sendPlainReply(request.message, `消息处理失败：${message}`).catch(() => undefined);
 			request.reject(error);
@@ -163,14 +164,14 @@ class TextConversationController {
 	}
 }
 
-export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
+export class TextChannelRuntime implements ManagedRuntime, AgentRunPort {
 	readonly identity;
 	readonly channelLabel: string;
 	private readonly presentationRules: PresentationRules;
 	private readonly sessionPool: AgentConversationSessionPool;
 	private readonly conversations = new Map<string, TextConversationController>();
 	private readonly seenMessageIds = new Set<string>();
-	private readonly scheduledTurns = new ScheduledTurnQueue();
+	private readonly scheduledRuns = new ScheduledRunQueue();
 	private shutdownExitCode = 0;
 
 	constructor(
@@ -255,8 +256,35 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		});
 	}
 
-	async deliverTurn(request: AgentTurnInput): Promise<{ sessionKey: string; assistantText: string }> {
-		return this.enqueueScheduledAgentTurn(request);
+	async deliverRun(request: AgentRunInput): Promise<{ sessionKey: string; assistantText: string }> {
+		return this.enqueueScheduledAgentRun(request);
+	}
+
+	async createSession(sessionKey: string): Promise<void> {
+		await this.sessionPool.getSession(sessionKey);
+	}
+
+	async getSessionStatus(sessionKey: string): Promise<AgentSessionStatus> {
+		if (this.sessionPool.getSessionStatus) {
+			return this.sessionPool.getSessionStatus(sessionKey);
+		}
+		const session = await this.sessionPool.getSession(sessionKey);
+		return { totalMessages: session.state?.messages.length ?? 0 };
+	}
+
+	async compactSession(sessionKey: string): Promise<{ summary?: string }> {
+		if (!this.sessionPool.compactSession) {
+			throw new Error("This agent harness does not support /compact yet. Use /new to start a fresh session.");
+		}
+		return this.sessionPool.compactSession(sessionKey);
+	}
+
+	async clearSession(sessionKey: string): Promise<void> {
+		if (!this.sessionPool.resetSession) {
+			throw new Error("This agent harness does not support /clear yet.");
+		}
+		await this.sessionPool.resetSession(sessionKey);
+		this.conversations.delete(sessionKey);
 	}
 
 	private printStartupSummary(): void {
@@ -305,8 +333,20 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		if (message.createdAtMs < this.config.startedAtMs - 5000) {
 			return;
 		}
+		const ownerSession = getOwnerSessionBinding(loadConfigStore());
+		const shouldRespond = shouldRespondToImMessage({
+			isDirectMessage: message.isDirectMessage,
+			isBotMentioned: message.isBotMentioned,
+			senderId: message.senderId,
+			ownerId: ownerSession?.openId,
+			groupResponseMode: this.config.groupResponseMode,
+		});
+		if (!shouldRespond) {
+			console.log(chalk.gray(`${this.channelLabel} message ignored: group_policy ${message.conversationKey}`));
+			return;
+		}
 		this.rememberOwnerSessionBinding(message);
-		const promptInput = await buildAgentRoundInputFromMessageParts(message.parts);
+		const promptInput = await buildAgentPromptInputFromMessageParts(message.parts);
 		const promptText = promptInput.text;
 		if (!promptText && !promptInput.images?.length) {
 			console.log(chalk.gray(`${this.channelLabel} message ignored: empty_text ${message.conversationKey}`));
@@ -326,7 +366,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		await this.getConversationController(message.conversationKey).submit(message, promptText, promptInput);
 	}
 
-	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentTurnInput): IncomingChannelMessage {
+	private createSyntheticTaskMessage(ownerSession: OwnerSessionBinding, request: AgentRunInput): IncomingChannelMessage {
 		return {
 			id: `task:${request.sessionKey}:${Date.now()}`,
 			channel: this.config.channelKind,
@@ -339,7 +379,7 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		};
 	}
 
-	private async handleScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
+	private async handleScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
 		if (isSilentAgentTask(request)) {
 			const session = await this.sessionPool.getSession(request.sessionKey);
 			await session.prompt(request.prompt);
@@ -360,8 +400,8 @@ export class TextChannelRuntime implements ManagedRuntime, AgentTurnPort {
 		return { sessionKey: request.sessionKey, assistantText: extractAssistantText(session) };
 	}
 
-	private async enqueueScheduledAgentTurn(request: AgentTurnInput): Promise<AgentTurnOutput> {
-		return this.scheduledTurns.enqueue(request, (turn) => this.handleScheduledAgentTurn(turn));
+	private async enqueueScheduledAgentRun(request: AgentRunInput): Promise<AgentRunOutput> {
+		return this.scheduledRuns.enqueue(request, (run) => this.handleScheduledAgentRun(run));
 	}
 }
 

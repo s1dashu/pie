@@ -82,7 +82,7 @@ function createSyntheticLabEvent(input: {
 }
 
 describe("live Feishu Lab", { skip: !LIVE }, () => {
-	it(`sends ${BATCH_COUNT} real Feishu replies for ${BATCH_COUNT} rapid turns`, { timeout: TIMEOUT_MS }, async (t) => {
+	it(`sends ${BATCH_COUNT} real Feishu replies for ${BATCH_COUNT} rapid runs`, { timeout: TIMEOUT_MS }, async (t) => {
 		const config = loadConfig(["--home", env("PIE_AGENT_HOME") ?? ""]);
 		const lab = resolveLabChat();
 		if (!lab.chatId || !lab.conversationKey) {

@@ -6,7 +6,9 @@ import {
 	getPrimaryTelegramChannel,
 	getPrimaryWechatChannel,
 	getProfileModel,
+	getImBehavior,
 	setProfileModel,
+	setImBehavior,
 	upsertDiscordChannel,
 	upsertFeishuChannel,
 	upsertSlackChannel,
@@ -56,6 +58,7 @@ export function planAgentProfileMutation(options: {
 		draft.appSecret !== undefined ||
 		draft.brand !== undefined ||
 		draft.feishuMessageOutputMode !== undefined;
+	const hasImBehaviorDraft = draft.imGroupResponseMode !== undefined;
 	const hasWechatDraft =
 		draft.wechatAccountId !== undefined ||
 		draft.wechatBaseUrl !== undefined ||
@@ -160,7 +163,13 @@ export function planAgentProfileMutation(options: {
 			botUsername: draft.telegramBotUsername ?? telegramChannel?.botUsername,
 		});
 	}
-	const nextProfileBase = setProfileModel(nextProfileWithChannel, {
+	const nextProfileWithImBehavior = hasImBehaviorDraft
+		? setImBehavior(nextProfileWithChannel, {
+				...getImBehavior(nextProfileWithChannel),
+				groupResponseMode: draft.imGroupResponseMode ?? getImBehavior(nextProfileWithChannel).groupResponseMode,
+			})
+		: nextProfileWithChannel;
+	const nextProfileBase = setProfileModel(nextProfileWithImBehavior, {
 		...model,
 		provider: draft.provider ?? model.provider,
 		model: draft.model ?? model.model,

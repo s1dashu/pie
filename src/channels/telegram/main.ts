@@ -54,6 +54,10 @@ class TelegramAdapter implements TextChannelAdapter {
 		const messageId = String(message.message_id);
 		const text = "text" in message && typeof message.text === "string" ? message.text : undefined;
 		const caption = "caption" in message && typeof message.caption === "string" ? message.caption : undefined;
+		const mentioned = Boolean(
+			this.config.telegram.botUsername &&
+			((text ?? caption ?? "").includes(`@${this.config.telegram.botUsername}`)),
+		);
 		const parts: ChannelMessagePart[] = text || caption ? [{ type: "text", text: text ?? caption ?? "" }] : [];
 		if ("photo" in message && message.photo?.length) {
 			parts.push({ type: "image" as const, altText: caption });
@@ -73,6 +77,7 @@ class TelegramAdapter implements TextChannelAdapter {
 			parts,
 			createdAtMs: message.date * 1000,
 			isDirectMessage: message.chat.type === "private",
+			isBotMentioned: mentioned,
 			senderId: message.from?.id ? String(message.from.id) : undefined,
 		};
 	}

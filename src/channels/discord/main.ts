@@ -93,12 +93,6 @@ class DiscordAdapter implements TextChannelAdapter {
 			this.logIgnoredMessage(message, "guild_mismatch");
 			return undefined;
 		}
-		if (!isDirectMessage && !mentioned) {
-			if (this.config.verboseLogs) {
-				this.logIgnoredMessage(message, "not_mentioned");
-			}
-			return undefined;
-		}
 		const parts = buildDiscordMessageParts({
 			content: message.content,
 			botId,
@@ -117,6 +111,7 @@ class DiscordAdapter implements TextChannelAdapter {
 			parts,
 			createdAtMs: message.createdTimestamp,
 			isDirectMessage,
+			isBotMentioned: mentioned,
 			senderId: message.author.id,
 		};
 	}
