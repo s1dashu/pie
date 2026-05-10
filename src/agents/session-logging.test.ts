@@ -43,9 +43,9 @@ describe("attachAgentSessionLogging", () => {
 				logs.push(String(message ?? ""));
 			};
 			attachAgentSessionLogging(session, homeDir);
-			session.emit({ type: "turn_started", roundId: "round", turnId: "turn", index: 1 });
-			session.emit({ type: "text_delta", roundId: "round", turnId: "turn", textId: "text", delta: "动态" });
-			session.emit({ type: "text_finished", roundId: "round", turnId: "turn", textId: "text", text: "动态清零，静态挨饿。⚖️" });
+			session.emit({ type: "turn_started", runId: "round", turnId: "turn", index: 1 });
+			session.emit({ type: "text_delta", runId: "round", turnId: "turn", textId: "text", delta: "动态" });
+			session.emit({ type: "text_finished", runId: "round", turnId: "turn", textId: "text", text: "动态清零，静态挨饿。⚖️" });
 
 			assert.deepEqual(
 				logs.map((line) => line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")),

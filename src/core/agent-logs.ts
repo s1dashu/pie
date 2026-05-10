@@ -1,8 +1,16 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AgentLogEntry } from "../desktop/shared/types.js";
 
 const LOG_FILE = "agent-logs.jsonl";
+
+export interface AgentLogEntry {
+	id: number;
+	agentId: string;
+	stream: "stdout" | "stderr" | "system";
+	text: string;
+	timestamp: string;
+	updated?: boolean;
+}
 
 export function getAgentLogsFilePath(homeDir: string): string {
 	return join(homeDir, "runtime", LOG_FILE);

@@ -13,11 +13,18 @@ function makeId(prefix: string, value: unknown, fallback: string): string {
 	return readString(value) ?? `${prefix}_${fallback}`;
 }
 
+function scopeContentId(runId: string, turnId: string, id: string): string {
+	return `${runId}:${turnId}:${id}`;
+}
+
 export class AgentEventNormalizer {
-	private roundIndex = 0;
-	private currentRoundId = "";
+	private runIndex = 0;
+	private currentRunId = "";
 	private currentTurnId = "";
 	private currentTurnIndex = 0;
+	private nextImplicitTextIndex = 0;
+	private activeImplicitTextId = "";
+	private activeImplicitText = "";
 
 	constructor(private readonly session: AgentConversationSession) {}
 
@@ -28,16 +35,16 @@ export class AgentEventNormalizer {
 		return this.normalizePiEvent(event);
 	}
 
-	private ensureRound(): string {
-		if (!this.currentRoundId) {
-			this.roundIndex += 1;
-			this.currentRoundId = `round_${this.roundIndex}`;
+	private ensureRun(): string {
+		if (!this.currentRunId) {
+			this.runIndex += 1;
+			this.currentRunId = `run_${this.runIndex}`;
 		}
-		return this.currentRoundId;
+		return this.currentRunId;
 	}
 
 	private ensureTurn(): string {
-		this.ensureRound();
+		this.ensureRun();
 		if (!this.currentTurnId) {
 			this.currentTurnIndex += 1;
 			this.currentTurnId = `turn_${this.currentTurnIndex}`;
@@ -48,52 +55,56 @@ export class AgentEventNormalizer {
 	private normalizePiEvent(event: PiAgentSessionEvent): AgentSessionEvent[] {
 		switch (event.type) {
 			case "agent_start": {
-				this.roundIndex += 1;
-				this.currentRoundId = `round_${this.roundIndex}`;
+				this.runIndex += 1;
+				this.currentRunId = `run_${this.runIndex}`;
 				this.currentTurnId = "";
 				this.currentTurnIndex = 0;
-				return [{ type: "round_started", roundId: this.currentRoundId }];
+				this.resetImplicitTextBlock();
+				return [{ type: "agent_run_started", runId: this.currentRunId }];
 			}
 			case "agent_end": {
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const finalText = extractAssistantText(this.session);
 				const status = wasLastAssistantMessageAborted(this.session)
 					? "aborted"
 					: extractLastAssistantError(this.session)
 						? "error"
 						: "success";
-				this.currentRoundId = "";
+				this.currentRunId = "";
 				this.currentTurnId = "";
-				return [{ type: "round_finished", roundId, status, finalText, usage: extractLastAssistantUsage(this.session) }];
+				this.resetImplicitTextBlock();
+				return [{ type: "agent_run_finished", runId, status, finalText, usage: extractLastAssistantUsage(this.session) }];
 			}
 			case "turn_start": {
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const source = readObject(event);
 				const index = typeof source?.turnIndex === "number" ? source.turnIndex : this.currentTurnIndex + 1;
 				this.currentTurnIndex = index;
 				this.currentTurnId = `turn_${index}`;
-				return [{ type: "turn_started", roundId, turnId: this.currentTurnId, index }];
+				this.resetImplicitTextBlock();
+				return [{ type: "turn_started", runId, turnId: this.currentTurnId, index }];
 			}
 			case "turn_end": {
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const turnId = this.ensureTurn();
 				const status = wasLastAssistantMessageAborted(this.session)
 					? "aborted"
 					: extractLastAssistantError(this.session)
 						? "error"
 						: "success";
+				const events = this.finishImplicitTextBlock();
 				this.currentTurnId = "";
-				return [{ type: "turn_finished", roundId, turnId, status }];
+				return [...events, { type: "turn_finished", runId, turnId, status }];
 			}
 			case "message_update":
 				return this.normalizeAssistantMessageEvent(event);
 			case "tool_execution_start": {
 				const source = readObject(event);
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const turnId = this.ensureTurn();
-				return [{
+				return [...this.finishImplicitTextBlock(), {
 					type: "tool_call_started",
-					roundId,
+					runId,
 					turnId,
 					toolCallId: makeId("tool", source?.toolCallId, `${this.currentTurnIndex}`),
 					name: String(source?.toolName ?? "tool"),
@@ -102,11 +113,11 @@ export class AgentEventNormalizer {
 			}
 			case "tool_execution_update": {
 				const source = readObject(event);
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const turnId = this.ensureTurn();
 				return [{
 					type: "tool_call_updated",
-					roundId,
+					runId,
 					turnId,
 					toolCallId: makeId("tool", source?.toolCallId, `${this.currentTurnIndex}`),
 					name: String(source?.toolName ?? "tool"),
@@ -116,11 +127,11 @@ export class AgentEventNormalizer {
 			}
 			case "tool_execution_end": {
 				const source = readObject(event);
-				const roundId = this.ensureRound();
+				const runId = this.ensureRun();
 				const turnId = this.ensureTurn();
 				return [{
 					type: "tool_call_finished",
-					roundId,
+					runId,
 					turnId,
 					toolCallId: makeId("tool", source?.toolCallId, `${this.currentTurnIndex}`),
 					name: String(source?.toolName ?? "tool"),
@@ -145,34 +156,83 @@ export class AgentEventNormalizer {
 		}
 		const assistantType = assistantEvent?.type;
 		const contentIndex = assistantEvent?.contentIndex;
-		const roundId = this.ensureRound();
+		const runId = this.ensureRun();
 		const turnId = this.ensureTurn();
+		const textId = this.resolveTextId(runId, turnId, contentIndex);
+		const thinkingId = scopeContentId(runId, turnId, makeId("thinking", contentIndex, "0"));
 		if (assistantType === "text_start") {
-			return [{ type: "text_start", roundId, turnId, textId: makeId("text", contentIndex, "0") }];
+			return [{ type: "text_start", runId, turnId, textId }];
 		}
 		if (assistantType === "text_delta") {
-			return [{ type: "text_delta", roundId, turnId, textId: makeId("text", contentIndex, "0"), delta: String(assistantEvent.delta ?? "") }];
+			const delta = String(assistantEvent.delta ?? "");
+			if (contentIndex === undefined) {
+				this.activeImplicitText += delta;
+			}
+			return [{ type: "text_delta", runId, turnId, textId, delta }];
 		}
 		if (assistantType === "text_end") {
-			return [{ type: "text_finished", roundId, turnId, textId: makeId("text", contentIndex, "0"), text: String(assistantEvent.content ?? "") }];
+			const text = contentIndex === undefined && this.activeImplicitTextId === textId
+				? this.activeImplicitText || String(assistantEvent.content ?? "")
+				: String(assistantEvent.content ?? "");
+			if (contentIndex === undefined && this.activeImplicitTextId === textId) {
+				this.resetActiveImplicitTextBlock();
+			}
+			return [{ type: "text_finished", runId, turnId, textId, text }];
 		}
 		if (assistantType === "thinking_start") {
-			return [{ type: "thinking_start", roundId, turnId, thinkingId: makeId("thinking", contentIndex, "0") }];
+			return [{ type: "thinking_start", runId, turnId, thinkingId }];
 		}
 		if (assistantType === "thinking_delta") {
-			return [{ type: "thinking_delta", roundId, turnId, thinkingId: makeId("thinking", contentIndex, "0"), delta: String(assistantEvent.delta ?? "") }];
+			return [{ type: "thinking_delta", runId, turnId, thinkingId, delta: String(assistantEvent.delta ?? "") }];
 		}
 		if (assistantType === "thinking_end") {
-			return [{ type: "thinking_finished", roundId, turnId, thinkingId: makeId("thinking", contentIndex, "0"), thinking: String(assistantEvent.content ?? "") }];
+			return [{ type: "thinking_finished", runId, turnId, thinkingId, thinking: String(assistantEvent.content ?? "") }];
 		}
 		return [];
+	}
+
+	private resolveTextId(runId: string, turnId: string, contentIndex: unknown): string {
+		if (contentIndex !== undefined) {
+			return scopeContentId(runId, turnId, makeId("text", contentIndex, "0"));
+		}
+		if (!this.activeImplicitTextId) {
+			this.activeImplicitTextId = scopeContentId(runId, turnId, `text_${this.nextImplicitTextIndex}`);
+			this.nextImplicitTextIndex += 1;
+			this.activeImplicitText = "";
+		}
+		return this.activeImplicitTextId;
+	}
+
+	private finishImplicitTextBlock(): AgentSessionEvent[] {
+		if (!this.activeImplicitTextId) {
+			return [];
+		}
+		const event: AgentSessionEvent = {
+			type: "text_finished",
+			runId: this.ensureRun(),
+			turnId: this.ensureTurn(),
+			textId: this.activeImplicitTextId,
+			text: this.activeImplicitText,
+		};
+		this.resetActiveImplicitTextBlock();
+		return [event];
+	}
+
+	private resetActiveImplicitTextBlock(): void {
+		this.activeImplicitTextId = "";
+		this.activeImplicitText = "";
+	}
+
+	private resetImplicitTextBlock(): void {
+		this.nextImplicitTextIndex = 0;
+		this.resetActiveImplicitTextBlock();
 	}
 }
 
 function isPieEvent(event: PiAgentSessionEvent | AgentSessionEvent): event is AgentSessionEvent {
 	return [
-		"round_started",
-		"round_finished",
+		"agent_run_started",
+		"agent_run_finished",
 		"token_usage",
 		"turn_started",
 		"turn_finished",

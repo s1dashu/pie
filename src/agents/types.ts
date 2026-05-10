@@ -7,81 +7,90 @@ export type PiAgentSessionEvent = Parameters<AgentSession["subscribe"]>[0] exten
 	? TEvent
 	: never;
 
-export type AgentRoundStatus = "success" | "error" | "aborted";
+export type AgentRunStatus = "success" | "error" | "aborted";
 
 export type AgentSessionEvent =
 	| {
-			type: "round_started";
-			roundId: string;
+			type: "user_message";
+			runId?: string;
+			messageId?: string;
+			text: string;
+			status?: "pending" | "sent" | "failed";
+			errorText?: string;
+			source?: string;
+	  }
+	| {
+			type: "agent_run_started";
+			runId: string;
 	  }
 	  | {
-			type: "round_finished";
-			roundId: string;
-			status: AgentRoundStatus;
+			type: "agent_run_finished";
+			runId: string;
+			status: AgentRunStatus;
 			finalText?: string;
 			usage?: unknown;
 	  }
 	| {
 			type: "token_usage";
-			roundId?: string;
+			runId?: string;
 			turnId?: string;
 			usage: unknown;
 	  }
 	| {
 			type: "turn_started";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			index?: number;
 	  }
 	| {
 			type: "turn_finished";
-			roundId: string;
+			runId: string;
 			turnId: string;
-			status: AgentRoundStatus;
+			status: AgentRunStatus;
 	  }
 	| {
 			type: "text_start";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			textId: string;
 	  }
 	| {
 			type: "text_delta";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			textId: string;
 			delta: string;
 	  }
 	| {
 			type: "text_finished";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			textId: string;
 			text: string;
 	  }
 	| {
 			type: "thinking_start";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			thinkingId: string;
 	  }
 	| {
 			type: "thinking_delta";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			thinkingId: string;
 			delta: string;
 	  }
 	| {
 			type: "thinking_finished";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			thinkingId: string;
 			thinking: string;
 	  }
 	| {
 			type: "tool_call_started";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			toolCallId: string;
 			name: string;
@@ -89,7 +98,7 @@ export type AgentSessionEvent =
 	  }
 	| {
 			type: "tool_call_updated";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			toolCallId: string;
 			name: string;
@@ -98,7 +107,7 @@ export type AgentSessionEvent =
 	  }
 	| {
 			type: "tool_call_finished";
-			roundId: string;
+			runId: string;
 			turnId: string;
 			toolCallId: string;
 			name: string;
@@ -151,18 +160,18 @@ export function isFirstResponseSignal(event: AgentSessionEvent): boolean {
 	return false;
 }
 
-export interface AgentRoundInput {
+export interface AgentPromptInput {
 	text: string;
 	images?: ImageContent[];
 }
 
-export type AgentRoundInputLike = string | AgentRoundInput;
+export type AgentPromptInputLike = string | AgentPromptInput;
 
-export function getAgentRoundInputText(input: AgentRoundInputLike): string {
+export function getAgentPromptInputText(input: AgentPromptInputLike): string {
 	return typeof input === "string" ? input : input.text;
 }
 
-export function normalizeAgentRoundInput(input: AgentRoundInputLike): AgentRoundInput {
+export function normalizeAgentPromptInput(input: AgentPromptInputLike): AgentPromptInput {
 	return typeof input === "string" ? { text: input } : input;
 }
 
@@ -170,15 +179,27 @@ export interface AgentConversationSession {
 	readonly isStreaming: boolean;
 	readonly capabilities: AgentSessionCapabilities;
 	readonly state?: { messages: unknown[] };
-	prompt(input: AgentRoundInputLike): Promise<void>;
+	prompt(input: AgentPromptInputLike): Promise<void>;
 	abort(): Promise<void>;
 	steer?(text: string): Promise<void>;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 }
 
+export interface AgentSessionContextUsage {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
+}
+
+export interface AgentSessionStatus {
+	totalMessages: number;
+	contextUsage?: AgentSessionContextUsage;
+}
+
 export interface AgentConversationSessionPool {
 	readonly capabilities: AgentSessionCapabilities;
 	getSession(conversationKey: string): Promise<AgentConversationSession>;
+	getSessionStatus?(conversationKey: string): Promise<AgentSessionStatus>;
 	compactSession?(conversationKey: string): Promise<{ summary?: string }>;
 	resetSession?(conversationKey: string): Promise<void>;
 }

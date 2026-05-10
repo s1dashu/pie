@@ -157,7 +157,7 @@ export function attachAgentSessionLogging(session: AgentConversationSession, hom
 				assistantStreamText = finalText || assistantStreamText;
 				break;
 			}
-			case "round_finished": {
+			case "agent_run_finished": {
 				flushStream();
 				const finalText = event.finalText ?? extractAssistantText(session);
 				const usage = normalizeUsagePayload(event.usage ?? extractLastAssistantUsage(session));
