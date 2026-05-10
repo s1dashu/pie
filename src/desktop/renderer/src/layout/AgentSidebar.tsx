@@ -91,7 +91,7 @@ export function AgentSidebar({
 												isSelected ? "text-foreground" : "text-foreground/75 shadow-none hover:text-foreground hover:opacity-95",
 											)}
 										>
-											<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} />
+											<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={40} label={agent.name} />
 											<div className="min-w-0 flex-1">
 												<div className="truncate text-sm font-medium">{agent.name}</div>
 												<div className="mt-1 truncate text-xs text-muted-foreground opacity-80">

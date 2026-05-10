@@ -331,7 +331,7 @@ function QuitOverlay({ agents }: { agents: QuitOverlayAgent[] }): JSX.Element {
 								key={agent.id}
 								className="grid h-9 w-full shrink-0 grid-cols-[28px_minmax(0,132px)_1fr_20px] items-center gap-2"
 							>
-								<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={28} />
+								<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={28} label={agent.name} />
 								<span className="min-w-0 truncate text-sm font-medium leading-5 text-foreground">
 									{agent.name} {t("quittingExited")}
 								</span>
@@ -430,7 +430,7 @@ function MenuBarAgentItem({ agent }: { agent: AgentSummary }): JSX.Element {
 			className="pie-smooth-corner flex h-[64px] w-full items-center gap-3 rounded-[18px] px-2.5 text-left transition hover:bg-[var(--slate-3)] active:scale-[0.99]"
 			onClick={() => void window.pie.openAgentFromMenuBar(agent.id)}
 		>
-			<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={38} />
+			<AgentAvatar seed={agent.avatarSeed} src={agent.avatarUrl} size={38} label={agent.name} />
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-sm font-medium leading-5 text-foreground">{agent.name}</div>
 				<div className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">

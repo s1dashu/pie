@@ -1,20 +1,20 @@
 import {
 	ChartSquareBoldDuotone,
+	ChatRoundDotsBoldDuotone,
 	CodeSquareBoldDuotone,
 	NotesMinimalisticBoldDuotone,
 	RadioMinimalisticBoldDuotone,
-	ShieldStarBoldDuotone,
 	type SolarIconProps,
 } from "solar-icon-set";
 import type { AgentSummary, AgentUsageStats, DesktopLanguage, DesktopThinkingLevel, RuntimeEnvironmentLifecycleState } from "../../../shared/types";
 
-export type AgentTab = "overview" | "logs" | "model" | "skills" | "channels";
+export type AgentTab = "chat" | "overview" | "logs" | "model" | "channels";
 
-export const tabs: Array<{ id: AgentTab; labelKey: "overview" | "logs" | "model" | "skills" | "channels"; icon: (props: SolarIconProps) => JSX.Element }> = [
+export const tabs: Array<{ id: AgentTab; labelKey: "chat" | "overview" | "logs" | "model" | "channels"; icon: (props: SolarIconProps) => JSX.Element }> = [
+	{ id: "chat", labelKey: "chat", icon: ChatRoundDotsBoldDuotone },
 	{ id: "overview", labelKey: "overview", icon: ChartSquareBoldDuotone },
 	{ id: "logs", labelKey: "logs", icon: NotesMinimalisticBoldDuotone },
 	{ id: "model", labelKey: "model", icon: CodeSquareBoldDuotone },
-	{ id: "skills", labelKey: "skills", icon: ShieldStarBoldDuotone },
 	{ id: "channels", labelKey: "channels", icon: RadioMinimalisticBoldDuotone },
 ];
 

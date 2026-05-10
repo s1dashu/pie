@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import type * as React from "react";
 import { EyeBold, EyeClosedBold, FolderOpenBoldDuotone, RestartCircleBoldDuotone } from "solar-icon-set";
-import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopFeishuMessageOutputMode, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
+import type { AgentDetails, AgentDraft, AgentResourceStats, AgentSkillSource, AgentSystemPromptSource, AgentUsageStats, DesktopFeishuMessageOutputMode, DesktopImGroupResponseMode, DesktopModelOption, DesktopThinkingLevel } from "../../../shared/types";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { AgentLoadingIndicator } from "../../components/shared/agent-loading-indicator";
@@ -17,6 +17,15 @@ import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLe
 import { ProviderSelect } from "./ProviderSelect";
 
 const AgentLogsPanel = lazy(() => import("./AgentLogsPanel").then((module) => ({ default: module.AgentLogsPanel })));
+const AgentChatPanel = lazy(() => import("./AgentChatPanel").then((module) => ({ default: module.AgentChatPanel })));
+
+const imGroupResponseOptions = [
+	{ value: "collect_only", labelKey: "imGroupResponseCollectOnly" },
+	{ value: "owner_mention", labelKey: "imGroupResponseOwnerMention" },
+	{ value: "mention", labelKey: "imGroupResponseMention" },
+	{ value: "owner", labelKey: "imGroupResponseOwner" },
+	{ value: "any", labelKey: "imGroupResponseAny" },
+] as const satisfies Array<{ value: DesktopImGroupResponseMode; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }>;
 
 export interface ResourceChartHistory {
 	updatedAt?: string;
@@ -96,15 +105,11 @@ export function AgentContentPanels({
 	const hasFeishuChannel = Boolean(agent.channelKinds?.includes("feishu") || agent.appId);
 	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
-	const hasSlackChannel = Boolean(agent.channelKinds?.includes("slack") || agent.slack);
 	const hasDiscordChannel = Boolean(agent.channelKinds?.includes("discord") || agent.discord);
-	const hasTelegramChannel = Boolean(agent.channelKinds?.includes("telegram") || agent.telegram);
 	const channelKinds = [
 		...(hasFeishuChannel ? ["feishu"] : []),
 		...(hasWechatChannel ? ["wechat"] : []),
-		...(hasSlackChannel ? ["slack"] : []),
 		...(hasDiscordChannel ? ["discord"] : []),
-		...(hasTelegramChannel ? ["telegram"] : []),
 	];
 	const usesCodexCli = draft.provider === "codex-cli" || agent.harnessKind === "codex";
 	const showsSystemPrompt = agent.harnessKind === "ousia";
@@ -112,8 +117,12 @@ export function AgentContentPanels({
 	const showsTokenUsage = supportsTokenUsage(agent.harnessKind);
 
 	return (
-		<div className={activeTab === "logs" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
-			{activeTab === "overview" ? (
+		<div className={activeTab === "logs" || activeTab === "chat" ? "mx-auto flex h-full min-h-0 max-w-6xl flex-col" : ""}>
+			{activeTab === "chat" ? (
+				<Suspense fallback={<PanelLoading label={t("loading")} />}>
+					<AgentChatPanel agent={agent} resources={resources} />
+				</Suspense>
+			) : activeTab === "overview" ? (
 				<div className="mx-auto max-w-6xl space-y-4">
 					<div className={cn("grid gap-4 max-[760px]:gap-3 max-[560px]:grid-cols-2", showsTokenUsage ? "grid-cols-4" : "grid-cols-3")}>
 						<UsageMetric
@@ -215,17 +224,6 @@ export function AgentContentPanels({
 								</SelectContent>
 							</Select>
 						</Field>
-						<label className="flex cursor-pointer items-start gap-3 py-2.5">
-							<Checkbox
-								checked={!(draft.resumeSessions ?? false)}
-								onCheckedChange={(checked) => onUpdateField("resumeSessions", !checked)}
-								className="mt-0.5"
-							/>
-							<span className="min-w-0 flex-1">
-								<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("startFreshOnRestart")}</span>
-								<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("startFreshOnRestartDesc")}</span>
-							</span>
-						</label>
 						{!usesCodexCli ? (
 							<Field label="API Key">
 								<SecretInput
@@ -244,26 +242,25 @@ export function AgentContentPanels({
 							onOpen={onOpenSystemPrompt}
 						/>
 					) : null}
-				</div>
-			) : activeTab === "skills" ? (
-				<div className="pie-smooth-corner mx-auto max-w-5xl rounded-[42px] bg-[var(--slate-2)] px-5 py-5">
-					<div className="flex items-start justify-between gap-4 px-1">
-						<SectionTitle title={t("skillsManagement")} description={t("skillsManagementDesc")} />
-					</div>
-					<div className="mt-5 grid gap-4">
-						{isLoadingSkillSources ? (
-							<AgentLoadingIndicator className="pie-smooth-corner h-24 rounded-[36px] bg-white" label={t("readingSkills")} />
-						) : (
-							visibleSkillSources.map((source) => (
-								<SkillSourceRow
-									key={source.id}
-									source={source}
-									isOpening={openingSkillSourceId === source.id}
-									onOpen={() => onOpenSkillSource(source.id)}
-									onOpenSkill={(skillName) => onOpenSkillFolder(source.id, skillName)}
-								/>
-							))
-						)}
+					<div className="pie-smooth-corner rounded-[42px] bg-[var(--slate-2)] px-5 py-5">
+						<div className="flex items-start justify-between gap-4 px-1">
+							<SectionTitle title={t("skillsManagement")} description={t("skillsManagementDesc")} />
+						</div>
+						<div className="mt-5 grid gap-4">
+							{isLoadingSkillSources ? (
+								<AgentLoadingIndicator className="pie-smooth-corner h-24 rounded-[36px] bg-white" label={t("readingSkills")} />
+							) : (
+								visibleSkillSources.map((source) => (
+									<SkillSourceRow
+										key={source.id}
+										source={source}
+										isOpening={openingSkillSourceId === source.id}
+										onOpen={() => onOpenSkillSource(source.id)}
+										onOpenSkill={(skillName) => onOpenSkillFolder(source.id, skillName)}
+									/>
+								))
+							)}
+						</div>
 					</div>
 				</div>
 			) : activeTab === "channels" ? (
@@ -355,19 +352,6 @@ export function AgentContentPanels({
 							</Field>
 						</div>
 					) : null}
-					{hasSlackChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
-							<SectionTitle title="Slack" description={t("slackDesc")} />
-							<div className="grid grid-cols-2 gap-4">
-								<Field label="Bot Token">
-									<SecretInput value={channelDraft.slackBotToken ?? ""} onChange={(event) => onUpdateChannelField("slackBotToken", event.target.value)} />
-								</Field>
-								<Field label="App Token">
-									<SecretInput value={channelDraft.slackAppToken ?? ""} onChange={(event) => onUpdateChannelField("slackAppToken", event.target.value)} />
-								</Field>
-							</div>
-						</div>
-					) : null}
 					{hasDiscordChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
 							<div className="flex items-start justify-between gap-4">
@@ -399,15 +383,35 @@ export function AgentContentPanels({
 							</div>
 						</div>
 					) : null}
-					{hasTelegramChannel ? (
-						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
-							<SectionTitle title="Telegram" description={t("telegramDesc")} />
-							<Field label="Bot Token">
-								<SecretInput value={channelDraft.telegramBotToken ?? ""} onChange={(event) => onUpdateChannelField("telegramBotToken", event.target.value)} />
+					{channelKinds.length ? (
+						<div className="pie-smooth-corner space-y-3 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title={t("imChannelBehavior")} />
+							<Field label={t("imGroupResponseMode")}>
+								<Select
+									value={channelDraft.imGroupResponseMode ?? "owner_mention"}
+									onValueChange={(value) => onUpdateChannelField("imGroupResponseMode", value as DesktopImGroupResponseMode)}
+								>
+									<SelectTrigger>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{imGroupResponseOptions.map((item) => (
+											<SelectItem key={item.value} value={item.value}>{t(item.labelKey)}</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
 							</Field>
-							<Field label="Bot Username">
-								<Input value={channelDraft.telegramBotUsername ?? ""} onChange={(event) => onUpdateChannelField("telegramBotUsername", event.target.value)} />
-							</Field>
+							<label className="flex cursor-pointer items-start gap-3 py-2.5">
+								<Checkbox
+									checked={!(channelDraft.resumeSessions ?? false)}
+									onCheckedChange={(checked) => onUpdateChannelField("resumeSessions", !checked)}
+									className="mt-0.5"
+								/>
+								<span className="min-w-0 flex-1">
+									<span className="block text-sm font-medium leading-snug text-foreground text-balance">{t("startFreshOnRestart")}</span>
+									<span className="mt-0.5 block text-xs font-normal leading-5 text-muted-foreground text-pretty">{t("startFreshOnRestartDesc")}</span>
+								</span>
+							</label>
 						</div>
 					) : null}
 					{channelKinds.length ? (

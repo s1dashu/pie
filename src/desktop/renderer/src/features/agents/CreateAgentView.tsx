@@ -1,15 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { RestartCircleBoldDuotone } from "solar-icon-set";
+import { GalleryAddLineDuotone, RestartCircleBoldDuotone } from "solar-icon-set";
 import type {
+	AgentAvatarUpload,
 	AgentCreationSession,
 	AgentDetails,
 	AgentOnboardEvent,
 	AgentSummary,
-	BotAvatarOption,
 	DesktopAgentHarness,
 	DesktopCodexDiagnostic,
 	DesktopCodexWebSearchMode,
@@ -20,9 +20,18 @@ import type {
 	DesktopRuntimeDiagnostic,
 	DesktopThinkingLevel,
 	DesktopWechatCredentials,
+	ImportableHarnessProfile,
 } from "../../../shared/types";
-import { HERMES_MODEL_OPTIONS, mergeModelOptions, providersFromModels } from "../../../../shared/model-catalog";
+import {
+	DEFAULT_OPENAI_MODEL_ID,
+	defaultModelForProvider,
+	defaultProviderFromModels,
+	HERMES_MODEL_OPTIONS,
+	mergeModelOptions,
+	providersFromModels,
+} from "../../../../shared/model-catalog";
 import { AppIcon } from "../../components/shared/app-icon";
+import { AgentAvatar } from "../../components/shared/agent-avatar";
 import { Field } from "../../components/shared/field";
 import { AceternityTooltip } from "../../components/shared/tooltip";
 import { Button } from "../../components/ui/button";
@@ -39,13 +48,12 @@ const channelOptions = [
 	{ value: "feishu", labelKey: "feishu", enabled: true, developerOnly: false },
 	{ value: "wechat", labelKey: "wechat", enabled: true, developerOnly: false },
 	{ value: "discord", label: "Discord", enabled: true, developerOnly: false },
-	{ value: "telegram", label: "Telegram", enabled: false, developerOnly: true },
-	{ value: "slack", label: "Slack", enabled: false, developerOnly: true },
 ] as const;
 
-const manualChannelKinds: DesktopChannelKind[] = ["discord", "telegram", "slack"];
+const manualChannelKinds: DesktopChannelKind[] = ["discord"];
 const controlSurfaceClass = "border-transparent bg-[var(--slate-2)] hover:border-transparent focus-visible:border-transparent";
 type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model" | "runtime";
+type AgentCreationMode = "create" | "import";
 type InstallStepTone = "active" | "done" | "error";
 type InstallStep = { id: number; message: string; tone: InstallStepTone };
 
@@ -144,19 +152,18 @@ export function CreateAgentView({
 	const [step, setStep] = useState<CreateAgentStep>("config");
 	const [stepHistory, setStepHistory] = useState<CreateAgentStep[]>([]);
 	const [name, setName] = useState("");
-	const [avatarId, setAvatarId] = useState("");
+	const [avatarUpload, setAvatarUpload] = useState<AgentAvatarUpload | undefined>();
+	const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+	const [creationMode, setCreationMode] = useState<AgentCreationMode>("create");
+	const [importedHarnessProfileId, setImportedHarnessProfileId] = useState("");
 	const [feishu, setFeishu] = useState<DesktopFeishuAppCredentials | undefined>();
 	const [wechat, setWechat] = useState<DesktopWechatCredentials | undefined>();
 	const [channels, setChannels] = useState<DesktopChannelKind[]>(["feishu"]);
-	const [slackBotToken, setSlackBotToken] = useState("");
-	const [slackAppToken, setSlackAppToken] = useState("");
 	const [discordBotToken, setDiscordBotToken] = useState("");
 	const [discordApplicationId, setDiscordApplicationId] = useState("");
 	const [discordGuildId, setDiscordGuildId] = useState("");
 	const [discordProfile, setDiscordProfile] = useState<DesktopDiscordBotProfile | undefined>();
 	const [discordSyncStatus, setDiscordSyncStatus] = useState("");
-	const [telegramBotToken, setTelegramBotToken] = useState("");
-	const [telegramBotUsername, setTelegramBotUsername] = useState("");
 	const [qrEvent, setQrEvent] = useState<AgentOnboardEvent | undefined>();
 	const [qrExpiresAt, setQrExpiresAt] = useState<number | undefined>();
 	const [qrExpired, setQrExpired] = useState(false);
@@ -183,10 +190,19 @@ export function CreateAgentView({
 		queryFn: () => window.pie.getSettings(),
 	});
 	const developerMode = settings.data?.developerMode === true;
-	const botAvatars = useQuery({
-		queryKey: ["bot-avatars"],
-		queryFn: () => window.pie.listBotAvatars(),
-		enabled: channels.includes("wechat") || channels.includes("discord"),
+	const importableOpenClawProfiles = useQuery({
+		queryKey: ["importable-harness-profiles", "openclaw"],
+		queryFn: () => window.pie.listImportableHarnessProfiles("openclaw"),
+		enabled: creationMode === "import",
+		refetchOnWindowFocus: false,
+		retry: false,
+	});
+	const importableHermesProfiles = useQuery({
+		queryKey: ["importable-harness-profiles", "hermes"],
+		queryFn: () => window.pie.listImportableHarnessProfiles("hermes"),
+		enabled: creationMode === "import",
+		refetchOnWindowFocus: false,
+		retry: false,
 	});
 	const codexDiagnostic = useQuery({
 		queryKey: ["codex-diagnostic"],
@@ -219,6 +235,12 @@ export function CreateAgentView({
 	});
 	const applyFeishuApp = (created: DesktopFeishuAppCredentials) => {
 		setFeishu(created);
+		if (!importedHarnessProfileId || !requiresIdentity) {
+			if (created.appName?.trim()) {
+				setName(created.appName.trim());
+			}
+			return;
+		}
 		if (created.appName?.trim()) {
 			setName(created.appName.trim());
 		}
@@ -255,8 +277,8 @@ export function CreateAgentView({
 		onSuccess: (created) => {
 			setSession(created);
 			setName(created.name);
-			const defaultProvider = created.providers[0] ?? "openai";
-			const defaultModel = created.models.find((item) => item.provider === defaultProvider)?.id ?? "";
+			const defaultProvider = defaultProviderFromModels(created.models);
+			const defaultModel = defaultModelForProvider(created.models, defaultProvider);
 			setProvider(defaultProvider);
 			setModel(defaultModel);
 			void prefillProviderApiKey(defaultProvider, created.profileId, true);
@@ -321,7 +343,7 @@ export function CreateAgentView({
 			if (profile.applicationId) {
 				setDiscordApplicationId(profile.applicationId);
 			}
-			if (profile.botName?.trim()) {
+			if (!importedHarnessProfileId && profile.botName?.trim()) {
 				setName(profile.botName.trim());
 			}
 			setDiscordSyncStatus(t("discordProfileFetched"));
@@ -345,14 +367,8 @@ export function CreateAgentView({
 			if (channels.includes("wechat") && !wechat) {
 				throw new Error(t("wechatAuthIncomplete"));
 			}
-			if (channels.includes("slack") && (!slackBotToken.trim() || !slackAppToken.trim())) {
-				throw new Error(t("slackTokensRequired"));
-			}
 			if (channels.includes("discord") && !discordBotToken.trim()) {
 				throw new Error(t("discordTokenRequired"));
-			}
-			if (channels.includes("telegram") && !telegramBotToken.trim()) {
-				throw new Error(t("telegramTokenRequired"));
 			}
 			if (harness === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
 				throw new Error(t("codexNeedInstalled"));
@@ -363,19 +379,12 @@ export function CreateAgentView({
 			return window.pie.completeAgentCreation({
 				sessionId: session.sessionId,
 				harness,
+				...(importedHarnessProfileId ? { importedHarnessProfileId } : {}),
 				name,
-				avatarId: channels.includes("wechat") || channels.includes("discord") ? avatarId : undefined,
+				...(avatarUpload ? { avatarUpload } : {}),
 				channels,
 				...(feishu ? { feishu } : {}),
 				...(wechat ? { wechat } : {}),
-				...(channels.includes("slack")
-					? {
-							slack: {
-								botToken: slackBotToken,
-								appToken: slackAppToken,
-							},
-						}
-					: {}),
 				...(channels.includes("discord")
 					? {
 							discord: {
@@ -386,9 +395,6 @@ export function CreateAgentView({
 								avatarUrl: discordProfile?.avatarUrl,
 							},
 						}
-					: {}),
-				...(channels.includes("telegram")
-					? { telegram: { botToken: telegramBotToken, botUsername: telegramBotUsername } }
 					: {}),
 				provider,
 				model,
@@ -410,7 +416,7 @@ export function CreateAgentView({
 			const optimisticAgent = createOptimisticStartingAgent({
 				session,
 				name,
-				avatarUrl: botAvatars.data?.find((avatar) => avatar.id === avatarId)?.dataUrl,
+				avatarUrl: avatarUpload?.dataUrl,
 				harness,
 				channels,
 				feishu,
@@ -420,6 +426,7 @@ export function CreateAgentView({
 				model,
 				thinkingLevel,
 				resumeSessions: !startFreshOnRestart,
+				importedHarnessProfileId,
 			});
 			await queryClient.cancelQueries({ queryKey: ["agents"] });
 			await queryClient.cancelQueries({ queryKey: ["agent", session.sessionId] });
@@ -543,12 +550,6 @@ export function CreateAgentView({
 	}, []);
 
 	useEffect(() => {
-		if ((channels.includes("wechat") || channels.includes("discord")) && !avatarId && botAvatars.data?.[0]) {
-			setAvatarId(botAvatars.data[0].id);
-		}
-	}, [avatarId, botAvatars.data, channels]);
-
-	useEffect(() => {
 		if (harness === "hermes" && hermesDiagnostic.data?.ready) {
 			setHermesRuntimeReady(true);
 		}
@@ -630,12 +631,12 @@ export function CreateAgentView({
 				if (event.discord.applicationId) {
 					setDiscordApplicationId(event.discord.applicationId);
 				}
-				if (event.discord.botName?.trim()) {
+				if (!importedHarnessProfileId && event.discord.botName?.trim()) {
 					setName(event.discord.botName.trim());
 				}
 			}
 		});
-	}, [queryClient, session?.sessionId]);
+	}, [importedHarnessProfileId, queryClient, session?.sessionId]);
 
 	useEffect(() => {
 		if (!qrExpiresAt) {
@@ -659,6 +660,15 @@ export function CreateAgentView({
 	const providers = activeModelOptions.length ? providersFromModels(activeModelOptions) : [provider];
 	const codexModels = session?.codexModels ?? [];
 	const hermesDefaultModel = HERMES_MODEL_OPTIONS[0];
+	const importableProfiles = [
+		...(importableOpenClawProfiles.data ?? []),
+		...(importableHermesProfiles.data ?? []),
+	];
+	const selectedImportKey = importedHarnessProfileId ? `${harness}:${importedHarnessProfileId}` : "";
+	const importProfilesLoading = importableOpenClawProfiles.isLoading ||
+		importableOpenClawProfiles.isFetching ||
+		importableHermesProfiles.isLoading ||
+		importableHermesProfiles.isFetching;
 	const selectedCodexModel = codexModels.find((item) => item.id === model);
 	const codexThinkingOptions = (selectedCodexModel?.supportedThinkingLevels.length
 		? selectedCodexModel.supportedThinkingLevels
@@ -671,17 +681,18 @@ export function CreateAgentView({
 	};
 	const updateProviderSelection = (nextProvider: string) => {
 		setProvider(nextProvider);
-		setModel(activeModelOptions.find((item) => item.provider === nextProvider)?.id ?? "");
+		setModel(defaultModelForProvider(activeModelOptions, nextProvider));
 		void prefillProviderApiKey(nextProvider, session?.profileId, true);
 	};
 	const updateHarnessSelection = (nextHarness: DesktopAgentHarness) => {
 		setHarness(nextHarness);
+		setImportedHarnessProfileId("");
 		setStartFreshOnRestart(!getDefaultResumeSessionsForHarness(nextHarness));
 		setHermesRuntimeReady(nextHarness === "hermes" && hermesDiagnostic.data?.ready === true);
 		if (nextHarness === "codex") {
 			const defaultCodexModel = session?.codexModels[0];
 			setProvider("codex-cli");
-			setModel(defaultCodexModel?.id ?? "gpt-5.5");
+			setModel(defaultCodexModel?.id ?? DEFAULT_OPENAI_MODEL_ID);
 			setThinkingLevel(defaultCodexModel?.defaultThinkingLevel ?? defaultCodexModel?.supportedThinkingLevels[0] ?? "medium");
 			setApiKey("");
 			return;
@@ -709,17 +720,53 @@ export function CreateAgentView({
 			return;
 		}
 		if (provider === "codex-cli") {
-			const defaultProvider = session?.providers[0] ?? "openai";
+			const defaultProvider = session?.models ? defaultProviderFromModels(session.models) : "openai";
 			setProvider(defaultProvider);
-			setModel(session?.models.find((item) => item.provider === defaultProvider)?.id ?? "");
+			setModel(defaultModelForProvider(session?.models ?? [], defaultProvider));
+			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
+		}
+	};
+	const applyImportedHarnessProfile = (imported: ImportableHarnessProfile) => {
+		setHarness(imported.harness);
+		setImportedHarnessProfileId(imported.id);
+		setStartFreshOnRestart(!getDefaultResumeSessionsForHarness(imported.harness));
+		if (requiresIdentity) {
+			setName(imported.id);
+		}
+		if (imported.provider) {
+			setProvider(imported.provider);
+		}
+		if (imported.model) {
+			setModel(imported.model);
+		}
+		if (imported.provider) {
+			void prefillProviderApiKey(imported.provider, session?.profileId, true);
+		}
+	};
+	const updateCreationMode = (nextMode: AgentCreationMode) => {
+		setCreationMode(nextMode);
+		setImportedHarnessProfileId("");
+		if (nextMode === "create") {
+			setHarness("pi");
+			const defaultProvider = session?.models ? defaultProviderFromModels(session.models) : "kimi-coding";
+			setProvider(defaultProvider);
+			setModel(defaultModelForProvider(session?.models ?? [], defaultProvider));
 			void prefillProviderApiKey(defaultProvider, session?.profileId, true);
 		}
 	};
 	const selectChannel = (channel: DesktopChannelKind) => {
 		setChannels([channel]);
+		if (
+			creationMode === "import" &&
+			importedHarnessProfileId &&
+			(channel === "wechat" || channel === "discord")
+		) {
+			setName((current) => current.trim() ? current : importedHarnessProfileId);
+		}
 	};
 	const requiresQrAuth = channels.includes("feishu") || channels.includes("wechat");
-	const requiresIdentity = (channels.includes("wechat") && !channels.some((channel) => channel === "feishu")) || channels.includes("discord");
+	const requiresIdentity = (channels.includes("wechat") && !channels.some((channel) => channel === "feishu")) ||
+		channels.includes("discord");
 	const requiresManualCredentials = channels.some((channel) => manualChannelKinds.includes(channel));
 	const authPrompt = channels.includes("wechat")
 		? t("useWechatScan")
@@ -735,7 +782,7 @@ export function CreateAgentView({
 		requiresRuntimeInstall: requiresRuntimeInstall || step === "runtime",
 	});
 	const stepDescription = {
-		config: t("chooseHarnessAndChannel"),
+		config: creationMode === "import" ? t("chooseExistingAgent") : t("chooseHarnessAndChannel"),
 		identity: channels.includes("discord") ? t("setDiscordNameAvatar") : t("setWechatNameAvatar"),
 		auth: t("authSelectedChannels"),
 		credentials: t("fillChannelCredentials"),
@@ -743,7 +790,7 @@ export function CreateAgentView({
 		runtime: t("installRuntimeDesc"),
 	}[step];
 	const stepTitle = {
-		config: t("chooseAgentType"),
+		config: creationMode === "import" ? t("importMyAgent") : t("chooseAgentType"),
 		identity: t("setAgentInfo"),
 		auth: t("scanAuth"),
 		credentials: t("connectChannel"),
@@ -756,6 +803,19 @@ export function CreateAgentView({
 			setQrEvent(undefined);
 			setQrExpiresAt(undefined);
 			setQrExpired(false);
+			if (creationMode === "import") {
+				if (requiresManualCredentials) {
+					goToStep("credentials");
+				} else if (requiresIdentity) {
+					goToStep("identity");
+				} else if (requiresQrAuth) {
+					goToStep("auth");
+					authenticateChannels.mutate();
+				} else {
+					goToStep("model");
+				}
+				return;
+			}
 			if (channels.includes("discord") && requiresManualCredentials) {
 				goToStep("credentials");
 			} else if (requiresIdentity) {
@@ -799,8 +859,8 @@ export function CreateAgentView({
 	};
 	const nextDisabled = begin.isPending
 		|| !session
-		|| (step === "config" && !channels.length)
-		|| (step === "identity" && (!name.trim() || botAvatars.isLoading))
+		|| (step === "config" && (creationMode === "import" ? !importedHarnessProfileId : !channels.length))
+		|| (step === "identity" && !name.trim())
 		|| (step === "model" && harness === "openclaw" && openClawCatalog.isLoading)
 		|| (step === "model" && (complete.isPending || installCodex.isPending))
 		|| (step === "runtime" && (
@@ -811,6 +871,7 @@ export function CreateAgentView({
 			(harness === "openclaw" && !isOpenClawRuntimeReady)
 		));
 	const currentStepIndex = visibleSteps.indexOf(step);
+	const canUploadCreationAvatar = step === "identity" && !channels.includes("feishu");
 
 	return (
 		<div className="flex h-full flex-col overflow-hidden bg-white">
@@ -851,7 +912,7 @@ export function CreateAgentView({
 			</header>
 
 			<div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
-				<div className="flex min-h-full items-center justify-center">
+				<div className="flex min-h-full justify-center pt-8">
 					<div className="w-full max-w-md">
 						{begin.isPending || !session ? (
 							<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
@@ -862,20 +923,43 @@ export function CreateAgentView({
 								<h2 className="text-center text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
 								{step === "config" ? (
 									<div className="space-y-6">
-										<HarnessPicker selected={harness} developerMode={developerMode} onSelect={updateHarnessSelection} />
-										<ChannelPicker selected={channels[0]} developerMode={developerMode} onSelect={selectChannel} />
+										<CreationModeSwitch value={creationMode} onChange={updateCreationMode} />
+										{creationMode === "import" ? (
+											<>
+												<ChannelPicker selected={channels[0]} developerMode={developerMode} onSelect={selectChannel} />
+												<ImportHarnessProfileList
+													profiles={importableProfiles}
+													selectedKey={selectedImportKey}
+													isLoading={importProfilesLoading}
+													onRefresh={() => {
+														void importableOpenClawProfiles.refetch();
+														void importableHermesProfiles.refetch();
+													}}
+													onSelect={applyImportedHarnessProfile}
+												/>
+											</>
+										) : (
+											<>
+												<HarnessPicker selected={harness} developerMode={developerMode} onSelect={updateHarnessSelection} />
+												<ChannelPicker selected={channels[0]} developerMode={developerMode} onSelect={selectChannel} />
+											</>
+										)}
 									</div>
 								) : step === "identity" ? (
 									<div className="space-y-6">
 										<Field label={t("agentName")}>
 											<Input className={controlSurfaceClass} value={name} onChange={(event) => setName(event.target.value)} />
 										</Field>
-										<AvatarPicker
-											avatars={botAvatars.data ?? []}
-											isLoading={botAvatars.isLoading}
-											selectedId={avatarId}
-											onSelect={setAvatarId}
-										/>
+										{canUploadCreationAvatar && (
+											<DefaultAvatarUploader
+												name={name}
+												seed={session.sessionId}
+												upload={avatarUpload}
+												fileInputRef={avatarFileInputRef}
+												onUpload={setAvatarUpload}
+												onError={onError}
+											/>
+										)}
 									</div>
 								) : step === "auth" ? (
 									<div className="space-y-4 text-center">
@@ -916,24 +1000,16 @@ export function CreateAgentView({
 									<div className="space-y-4">
 										<ManualChannelCredentials
 											channels={channels}
-											slackBotToken={slackBotToken}
-											slackAppToken={slackAppToken}
 											discordBotToken={discordBotToken}
 											discordApplicationId={discordApplicationId}
 											discordGuildId={discordGuildId}
 											discordProfile={discordProfile}
 											discordSyncStatus={discordSyncStatus}
 											isSyncingDiscord={syncDiscordProfile.isPending}
-											telegramBotToken={telegramBotToken}
-											telegramBotUsername={telegramBotUsername}
-											setSlackBotToken={setSlackBotToken}
-											setSlackAppToken={setSlackAppToken}
 											setDiscordBotToken={setDiscordBotToken}
 											setDiscordApplicationId={setDiscordApplicationId}
 											setDiscordGuildId={setDiscordGuildId}
 											onSyncDiscordProfile={() => syncDiscordProfile.mutate()}
-											setTelegramBotToken={setTelegramBotToken}
-											setTelegramBotUsername={setTelegramBotUsername}
 										/>
 									</div>
 								) : step === "runtime" && harness === "hermes" ? (
@@ -1176,6 +1252,7 @@ function createOptimisticStartingAgent({
 	model,
 	thinkingLevel,
 	resumeSessions,
+	importedHarnessProfileId,
 }: {
 	session: AgentCreationSession;
 	name: string;
@@ -1189,9 +1266,14 @@ function createOptimisticStartingAgent({
 	model: string;
 	thinkingLevel: DesktopThinkingLevel;
 	resumeSessions: boolean;
+	importedHarnessProfileId: string;
 }): AgentDetails {
 	const now = new Date().toISOString();
-	const displayName = feishu?.appName?.trim() || name.trim() || session.name;
+	const displayName = importedHarnessProfileId
+		? channels.includes("wechat") || channels.includes("discord")
+			? name.trim() || importedHarnessProfileId
+			: feishu?.appName?.trim() || importedHarnessProfileId
+		: feishu?.appName?.trim() || name.trim() || session.name;
 	return {
 		id: session.sessionId,
 		name: displayName,
@@ -1515,11 +1597,6 @@ function HarnessPicker({
 						>
 							<span className="flex min-w-0 flex-col items-center gap-0.5">
 								<span className="line-clamp-1 min-w-0">{option.label}</span>
-								{!isEnabled && (
-									<span className="line-clamp-1 text-[9px] font-normal leading-none text-muted-foreground">
-										{t("inDevelopment")}
-									</span>
-								)}
 							</span>
 						</button>
 					);
@@ -1562,11 +1639,6 @@ function ChannelPicker({
 							>
 								<span className="flex min-w-0 flex-col items-center gap-0.5">
 									<span className="line-clamp-1 min-w-0">{"labelKey" in channel ? t(channel.labelKey) : channel.label}</span>
-									{!isEnabled && (
-										<span className="line-clamp-1 text-[9px] font-normal leading-none text-muted-foreground">
-											{t("inDevelopment")}
-										</span>
-									)}
 								</span>
 							</button>
 						);
@@ -1582,39 +1654,20 @@ function ChannelPicker({
 
 function ManualChannelCredentials(props: {
 	channels: DesktopChannelKind[];
-	slackBotToken: string;
-	slackAppToken: string;
 	discordBotToken: string;
 	discordApplicationId: string;
 	discordGuildId: string;
 	discordProfile: DesktopDiscordBotProfile | undefined;
 	discordSyncStatus: string;
 	isSyncingDiscord: boolean;
-	telegramBotToken: string;
-	telegramBotUsername: string;
-	setSlackBotToken: (value: string) => void;
-	setSlackAppToken: (value: string) => void;
 	setDiscordBotToken: (value: string) => void;
 	setDiscordApplicationId: (value: string) => void;
 	setDiscordGuildId: (value: string) => void;
 	onSyncDiscordProfile: () => void;
-	setTelegramBotToken: (value: string) => void;
-	setTelegramBotUsername: (value: string) => void;
 }): JSX.Element {
 	const { t } = useI18n();
 	return (
 		<div className="space-y-3">
-			{props.channels.includes("slack") ? (
-				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-sm font-semibold leading-snug text-foreground">Slack</div>
-					<Field label="Bot Token">
-						<Input className={controlSurfaceClass} type="password" value={props.slackBotToken} onChange={(event) => props.setSlackBotToken(event.target.value)} placeholder="xoxb-..." />
-					</Field>
-					<Field label="App Token">
-						<Input className={controlSurfaceClass} type="password" value={props.slackAppToken} onChange={(event) => props.setSlackAppToken(event.target.value)} placeholder="xapp-..." />
-					</Field>
-				</div>
-			) : null}
 			{props.channels.includes("discord") ? (
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
 					<div className="flex items-center justify-between gap-3">
@@ -1658,17 +1711,6 @@ function ManualChannelCredentials(props: {
 							</div>
 						</div>
 					) : null}
-				</div>
-			) : null}
-			{props.channels.includes("telegram") ? (
-				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
-					<div className="text-sm font-semibold leading-snug text-foreground">Telegram</div>
-					<Field label="Bot Token">
-						<Input className={controlSurfaceClass} type="password" value={props.telegramBotToken} onChange={(event) => props.setTelegramBotToken(event.target.value)} />
-					</Field>
-					<Field label="Bot Username">
-						<Input className={controlSurfaceClass} value={props.telegramBotUsername} onChange={(event) => props.setTelegramBotUsername(event.target.value)} placeholder="@your_bot" />
-					</Field>
 				</div>
 			) : null}
 		</div>
@@ -1723,58 +1765,184 @@ function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | u
 	);
 }
 
-function AvatarPicker({
-	avatars,
+function CreationModeSwitch({
+	value,
+	onChange,
+}: {
+	value: AgentCreationMode;
+	onChange: (value: AgentCreationMode) => void;
+}): JSX.Element {
+	const { t } = useI18n();
+	return (
+		<div className="grid grid-cols-2 gap-1 rounded-2xl bg-[var(--slate-3)] p-1">
+			{([
+				["create", t("createNewAgent")],
+				["import", t("importMyAgent")],
+			] as const).map(([mode, label]) => (
+				<button
+					key={mode}
+					type="button"
+					className={cn(
+						"h-10 rounded-xl px-3 text-sm font-medium transition-[background-color,color,box-shadow,transform] active:scale-[0.96]",
+						value === mode
+							? "bg-white text-foreground shadow-none"
+							: "text-muted-foreground hover:text-foreground",
+					)}
+					onClick={() => onChange(mode)}
+				>
+					{label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function ImportHarnessProfileList({
+	profiles,
+	selectedKey,
 	isLoading,
-	selectedId,
+	onRefresh,
 	onSelect,
 }: {
-	avatars: BotAvatarOption[];
+	profiles: ImportableHarnessProfile[];
+	selectedKey: string;
 	isLoading: boolean;
-	selectedId: string;
-	onSelect: (id: string) => void;
-}): JSX.Element | null {
+	onRefresh: () => void;
+	onSelect: (profile: ImportableHarnessProfile) => void;
+}): JSX.Element {
 	const { t } = useI18n();
-	if (isLoading) {
-		return (
-			<Field label={t("agentAvatar")}>
-				<div className="grid grid-cols-8 gap-2">
-					{Array.from({ length: 8 }).map((_, index) => (
-						<div key={index} className="aspect-square animate-pulse rounded-full bg-muted" />
-					))}
+	return (
+		<Field label={t("importExistingProfile")}>
+			<div className="space-y-3">
+				<div className="flex items-center justify-between gap-3">
+					<div className="min-w-0 text-xs leading-5 text-muted-foreground text-pretty">
+						{t("importExistingProfileDesc")}
+					</div>
+					<Button type="button" variant="secondary" onClick={onRefresh} disabled={isLoading}>
+						{isLoading ? t("checking") : t("refresh")}
+					</Button>
 				</div>
-			</Field>
-		);
-	}
-	if (!avatars.length) {
-		return null;
-	}
+				{isLoading ? (
+					<div className="space-y-2">
+						{Array.from({ length: 3 }).map((_, index) => (
+							<div key={index} className="h-[68px] animate-pulse rounded-2xl bg-[var(--slate-3)]" />
+						))}
+					</div>
+				) : profiles.length ? (
+					<div className="space-y-2">
+						{profiles.map((profile) => {
+							const key = `${profile.harness}:${profile.id}`;
+							const selected = key === selectedKey;
+							return (
+								<button
+									key={key}
+									type="button"
+									className={cn(
+										"flex min-h-[68px] w-full items-center gap-3 rounded-2xl px-3 text-left transition-[background-color,box-shadow,transform] active:scale-[0.96]",
+										selected
+											? "bg-[var(--slate-3)] shadow-none"
+											: "bg-[var(--slate-2)] shadow-none hover:bg-[var(--slate-3)]",
+									)}
+									onClick={() => onSelect(profile)}
+								>
+									<AgentAvatar seed={key} size={42} label={profile.id} />
+									<div className="min-w-0 flex-1">
+										<div className="truncate text-sm font-medium text-foreground">{profile.label || profile.id}</div>
+										<div className="mt-0.5 truncate text-xs text-muted-foreground">
+											{profile.harness === "openclaw" ? "OpenClaw" : "Hermes"}
+											{profile.model ? ` · ${profile.model}` : ""}
+										</div>
+									</div>
+								</button>
+							);
+						})}
+					</div>
+				) : (
+					<div className="rounded-2xl bg-[var(--slate-2)] px-3 py-4 text-center text-sm text-muted-foreground">
+						{t("noImportableProfiles")}
+					</div>
+				)}
+			</div>
+		</Field>
+	);
+}
+
+function readAvatarUpload(file: File): Promise<AgentAvatarUpload> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const dataUrl = typeof reader.result === "string" ? reader.result : "";
+			if (!dataUrl.startsWith("data:image/")) {
+				reject(new Error("请选择图片文件"));
+				return;
+			}
+			resolve({ fileName: file.name, dataUrl });
+		};
+		reader.onerror = () => reject(new Error("读取图片失败"));
+		reader.readAsDataURL(file);
+	});
+}
+
+function DefaultAvatarUploader({
+	name,
+	seed,
+	upload,
+	fileInputRef,
+	onUpload,
+	onError,
+}: {
+	name: string;
+	seed: string;
+	upload: AgentAvatarUpload | undefined;
+	fileInputRef: RefObject<HTMLInputElement | null>;
+	onUpload: (upload: AgentAvatarUpload | undefined) => void;
+	onError: (message: string) => void;
+}): JSX.Element {
+	const { t } = useI18n();
+	const previewUrl = upload?.dataUrl;
+	const handleFile = async (file: File | undefined) => {
+		if (!file) {
+			return;
+		}
+		try {
+			onUpload(await readAvatarUpload(file));
+		} catch (error) {
+			onError(error instanceof Error ? error.message : String(error));
+		}
+	};
 	return (
 		<Field label={t("agentAvatar")}>
-			<div className="grid grid-cols-8 gap-2">
-				{avatars.map((avatar) => {
-					const selected = avatar.id === selectedId;
-					return (
-						<div
-							key={avatar.id}
-							className={cn(
-								"group/avatar relative aspect-square rounded-full ring-2 ring-offset-2 ring-offset-[var(--slate-2)] transition-[transform]",
-								selected ? "ring-[var(--lime-8)]" : "ring-transparent",
-							)}
-						>
-							<AceternityTooltip content={avatar.label} className="block h-full w-full">
-								<button
-									type="button"
-									className="block h-full w-full overflow-hidden rounded-full transition-[opacity,transform] active:scale-[0.96]"
-									onClick={() => onSelect(avatar.id)}
-									aria-label={avatar.label}
-								>
-									<img src={avatar.dataUrl} alt={avatar.label} className="h-full w-full object-cover" draggable={false} />
-								</button>
-							</AceternityTooltip>
-						</div>
-					);
-				})}
+			<div className="flex items-center gap-4 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
+				<button
+					type="button"
+					className="group/avatar-upload relative rounded-full outline-none transition-transform active:scale-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+					onClick={() => fileInputRef.current?.click()}
+					aria-label={t("changeAvatar")}
+				>
+					<AgentAvatar seed={seed} src={previewUrl} size={64} label={name} />
+					<span className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/35 text-white opacity-0 transition-opacity group-hover/avatar-upload:opacity-100 group-focus-visible/avatar-upload:opacity-100">
+						<AppIcon IconComponent={GalleryAddLineDuotone} className="size-6" />
+					</span>
+				</button>
+				<div className="min-w-0 flex-1">
+					<div className="text-sm font-medium text-foreground">{previewUrl ? t("customAvatarSelected") : t("defaultAvatarReady")}</div>
+					<div className="mt-0.5 text-xs leading-5 text-muted-foreground text-pretty">{t("uploadAvatarHint")}</div>
+					{previewUrl ? (
+						<Button type="button" variant="secondary" size="small" className="mt-2" onClick={() => onUpload(undefined)}>
+							{t("reset")}
+						</Button>
+					) : null}
+				</div>
+				<input
+					ref={fileInputRef}
+					type="file"
+					accept="image/png,image/jpeg,image/webp"
+					className="hidden"
+					onChange={(event) => {
+						void handleFile(event.currentTarget.files?.[0]);
+						event.currentTarget.value = "";
+					}}
+				/>
 			</div>
 		</Field>
 	);

@@ -1,4 +1,10 @@
-export function AgentAvatar({ seed, src, size = 44 }: { seed: string; src?: string; size?: number }): JSX.Element {
+function avatarInitial(label: string | undefined, seed: string): string {
+	const clean = label?.trim() || seed.trim() || "A";
+	const first = Array.from(clean)[0] ?? "A";
+	return first.toLocaleUpperCase();
+}
+
+export function AgentAvatar({ seed, src, size = 44, label }: { seed: string; src?: string; size?: number; label?: string }): JSX.Element {
 	return (
 		<div
 			className="agent-avatar-frame shrink-0 overflow-hidden rounded-full bg-white"
@@ -8,8 +14,16 @@ export function AgentAvatar({ seed, src, size = 44 }: { seed: string; src?: stri
 			{src ? (
 				<img src={src} alt="" className="h-full w-full object-cover" draggable={false} />
 			) : (
-				<div className="grid h-full w-full place-items-center bg-[linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%),linear-gradient(45deg,rgba(15,23,42,0.08)_25%,transparent_25%,transparent_75%,rgba(15,23,42,0.08)_75%)] bg-[length:12px_12px] bg-[position:0_0,6px_6px]">
-					<span className="h-[42%] w-[42%] rounded-full border border-dashed border-muted-foreground/60" />
+				<div
+					className="grid h-full w-full place-items-center"
+					style={{
+						backgroundColor: "var(--lime-9)",
+						color: "var(--lime-1)",
+					}}
+				>
+					<span className="font-semibold leading-none tracking-normal" style={{ fontSize: Math.max(12, Math.round(size * 0.42)) }}>
+						{avatarInitial(label, seed)}
+					</span>
 				</div>
 			)}
 		</div>

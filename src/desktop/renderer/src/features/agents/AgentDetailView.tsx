@@ -12,6 +12,7 @@ import type {
 	DesktopThinkingLevel,
 	RuntimeEnvironmentLifecycleState,
 } from "../../../shared/types";
+import { defaultModelForProvider, providersFromModels } from "../../../../shared/model-catalog";
 import { cn } from "../../lib/utils";
 import { AppIcon } from "@/components/shared/app-icon";
 import { AgentContentPanels, type ResourceChartHistory } from "./AgentContentPanels";
@@ -48,13 +49,15 @@ function isRuntimeUnavailableStartError(message: string): boolean {
 	return message.includes("未检测到 Hermes 运行时") ||
 		message.includes("Hermes 运行时不可用") ||
 		message.includes("未检测到 OpenClaw 运行时") ||
-		message.includes("OpenClaw 运行时不可用") ||
-		message.includes("Bot process exited before it was ready");
+		message.includes("OpenClaw 运行时不可用");
 }
 
 function getFriendlyStartError(message: string, t: ReturnType<typeof useI18n>["t"]): string {
 	if (message.includes("Bot did not become ready within 30s")) {
 		return t("startTimeout");
+	}
+	if (message.includes("Bot process exited before it was ready")) {
+		return t("startExitedBeforeReady");
 	}
 	if (isRuntimeUnavailableStartError(message)) {
 		return t("startRuntimeUnavailable");
@@ -121,7 +124,7 @@ export function AgentDetailView({
 }): JSX.Element {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
-	const [activeTab, setActiveTab] = useState<AgentTab>("overview");
+	const [activeTab, setActiveTab] = useState<AgentTab>("chat");
 	const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | undefined>();
 	const [draft, setDraft] = useState<AgentDraft>({
 		name: agent.name,
@@ -139,6 +142,7 @@ export function AgentDetailView({
 		appSecret: agent.appSecret ?? "",
 		brand: agent.brand ?? "feishu",
 		feishuMessageOutputMode: agent.feishuMessageOutputMode ?? "bubble",
+		imGroupResponseMode: agent.imGroupResponseMode ?? "owner_mention",
 		wechatAccountId: agent.wechat?.accountId ?? "",
 		wechatBaseUrl: agent.wechat?.baseUrl ?? "https://ilinkai.weixin.qq.com",
 		wechatBotToken: agent.wechat?.botToken ?? "",
@@ -152,6 +156,7 @@ export function AgentDetailView({
 		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 		outputToolCallImMaxLength: agent.model?.outputToolCallImMaxLength ?? 60,
 		outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
+		resumeSessions: agent.model?.resumeSessions ?? false,
 	});
 	const [hasPendingRestartConfig, setHasPendingRestartConfig] = useState(false);
 	const [feishuAuthStatus, setFeishuAuthStatus] = useState<string | undefined>();
@@ -174,7 +179,6 @@ export function AgentDetailView({
 	const isOverviewTab = activeTab === "overview";
 	const canLoadOverviewMetrics = isOverviewTab && enableOverviewMetrics;
 	const isModelTab = activeTab === "model";
-	const isSkillsTab = activeTab === "skills";
 	const usageQuery = useQuery({
 		queryKey: ["agent-usage", agent.id],
 		queryFn: () => window.pie.getAgentUsage(agent.id),
@@ -198,7 +202,7 @@ export function AgentDetailView({
 	const skillSourcesQuery = useQuery({
 		queryKey: ["agent-skill-sources", agent.id],
 		queryFn: () => window.pie.getAgentSkillSources(agent.id),
-		enabled: isSkillsTab,
+		enabled: isModelTab,
 		staleTime: 10_000,
 	});
 	const systemPromptQuery = useQuery({
@@ -211,12 +215,13 @@ export function AgentDetailView({
 	const resources = resourceQuery.data;
 	const detailContentPadding = "px-3 pb-4";
 	const providerOptions = useMemo(() => {
-		const values = new Set(modelCatalogQuery.data?.providers ?? []);
+		const models = modelCatalogQuery.data?.models ?? [];
+		const values = new Set(providersFromModels(models));
 		if (draft.provider) {
 			values.add(draft.provider);
 		}
-		return [...values].sort((left, right) => left.localeCompare(right));
-	}, [draft.provider, modelCatalogQuery.data?.providers]);
+		return providersFromModels([...models, ...[...values].map((provider) => ({ provider, id: "", name: provider }))]);
+	}, [draft.provider, modelCatalogQuery.data?.models]);
 	const allModelOptions = modelCatalogQuery.data?.models ?? [];
 	const modelOptions = useMemo<DesktopModelOption[]>(() => {
 		const provider = draft.provider ?? "";
@@ -245,6 +250,7 @@ export function AgentDetailView({
 		appSecret: agent.appSecret ?? "",
 		brand: agent.brand ?? "feishu",
 		feishuMessageOutputMode: agent.feishuMessageOutputMode ?? "bubble",
+		imGroupResponseMode: agent.imGroupResponseMode ?? "owner_mention",
 		wechatAccountId: agent.wechat?.accountId ?? "",
 		wechatBaseUrl: agent.wechat?.baseUrl ?? "https://ilinkai.weixin.qq.com",
 		wechatBotToken: agent.wechat?.botToken ?? "",
@@ -258,6 +264,7 @@ export function AgentDetailView({
 		outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 		outputToolCallImMaxLength: agent.model?.outputToolCallImMaxLength ?? 60,
 		outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
+		resumeSessions: agent.model?.resumeSessions ?? false,
 	}), [
 		agent.appId,
 		agent.appSecret,
@@ -266,7 +273,9 @@ export function AgentDetailView({
 		agent.discord?.botToken,
 		agent.discord?.guildId,
 		agent.feishuMessageOutputMode,
+		agent.imGroupResponseMode,
 		agent.model?.outputThinkingToIm,
+		agent.model?.resumeSessions,
 		agent.model?.outputToolCallImMaxLength,
 		agent.model?.outputToolCallsToIm,
 		agent.slack?.appToken,
@@ -282,6 +291,7 @@ export function AgentDetailView({
 		appSecret: channelDraft.appSecret,
 		brand: channelDraft.brand,
 		feishuMessageOutputMode: channelDraft.feishuMessageOutputMode,
+		imGroupResponseMode: channelDraft.imGroupResponseMode,
 		wechatAccountId: channelDraft.wechatAccountId,
 		wechatBaseUrl: channelDraft.wechatBaseUrl,
 		wechatBotToken: channelDraft.wechatBotToken,
@@ -295,6 +305,7 @@ export function AgentDetailView({
 		outputToolCallsToIm: channelDraft.outputToolCallsToIm,
 		outputToolCallImMaxLength: channelDraft.outputToolCallImMaxLength,
 		outputThinkingToIm: channelDraft.outputThinkingToIm,
+		resumeSessions: channelDraft.resumeSessions,
 	}), [channelDraft]);
 	const hasUnsavedModelConfig = !sameDraftPart(nextModelDraft, savedModelDraft);
 	const hasUnsavedChannelConfig = !sameDraftPart(nextChannelDraft, savedChannelDraft);
@@ -316,6 +327,7 @@ export function AgentDetailView({
 			appSecret: agent.appSecret ?? "",
 			brand: agent.brand ?? "feishu",
 			feishuMessageOutputMode: agent.feishuMessageOutputMode ?? "bubble",
+			imGroupResponseMode: agent.imGroupResponseMode ?? "owner_mention",
 			wechatAccountId: agent.wechat?.accountId ?? "",
 			wechatBaseUrl: agent.wechat?.baseUrl ?? "https://ilinkai.weixin.qq.com",
 			wechatBotToken: agent.wechat?.botToken ?? "",
@@ -329,6 +341,7 @@ export function AgentDetailView({
 			outputToolCallsToIm: agent.model?.outputToolCallsToIm ?? true,
 			outputToolCallImMaxLength: agent.model?.outputToolCallImMaxLength ?? 60,
 			outputThinkingToIm: agent.model?.outputThinkingToIm ?? false,
+			resumeSessions: agent.model?.resumeSessions ?? false,
 		});
 	}, [agent]);
 
@@ -755,7 +768,7 @@ export function AgentDetailView({
 	};
 
 	const updateProviderSelection = (nextProvider: string) => {
-		const nextModel = allModelOptions.find((item) => item.provider === nextProvider)?.id ?? draft.model ?? "";
+		const nextModel = defaultModelForProvider(allModelOptions, nextProvider) || draft.model || "";
 		const nextApiKey = nextProvider === agent.model?.provider ? agent.model?.apiKey ?? "" : "";
 		updateModelSelection({ ...draft, provider: nextProvider, model: nextModel, apiKey: nextApiKey });
 		if (nextProvider !== agent.model?.provider) {
@@ -870,10 +883,10 @@ export function AgentDetailView({
 					onDelete={() => remove.mutate()}
 					deleteError={remove.error instanceof Error ? remove.error.message : undefined}
 				/>
-				<div className="px-7 bg-white">
-					<TabsList variant="line" className="h-10 w-full justify-start gap-4 -ml-2">
+				<div className="bg-white px-7">
+					<TabsList variant="line" className="-ml-2 h-8 justify-start gap-5">
 						{tabs.map((tab) => (
-							<TabsTrigger key={tab.id} value={tab.id} className="gap-1.5 px-2">
+							<TabsTrigger key={tab.id} value={tab.id} className="flex-none gap-2 px-2.5 text-sm">
 								<AppIcon IconComponent={tab.icon} className="size-3.5" />
 								{t(tab.labelKey)}
 							</TabsTrigger>
@@ -882,7 +895,7 @@ export function AgentDetailView({
 				</div>
 				<div
 					className={cn(
-						"flex-1 bg-white pt-4",
+						"flex-1 bg-white pt-2",
 						"min-h-0 overflow-hidden",
 						detailContentPadding,
 					)}
@@ -890,7 +903,7 @@ export function AgentDetailView({
 					<div
 						className={cn(
 							"h-full min-h-0",
-							activeTab === "logs" ? "overflow-hidden px-4" : "overflow-y-auto px-4 [scrollbar-gutter:stable]",
+							activeTab === "logs" || activeTab === "chat" ? "overflow-hidden px-4" : "overflow-y-auto px-4 [scrollbar-gutter:stable]",
 						)}
 					>
 						<AgentContentPanels
