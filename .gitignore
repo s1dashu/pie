@@ -10,6 +10,7 @@ config.json
 tasks/
 skills/
 tmp/
+im-commands.js
 src/**/ref/
 .crush/
 .firecrawl/
