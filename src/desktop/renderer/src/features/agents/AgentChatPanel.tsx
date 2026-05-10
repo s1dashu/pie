@@ -26,6 +26,7 @@ const COMMAND_BUTTON_CLASS =
 const COMMON_CHAT_COMMANDS = ["new", "resume", "clear"] as const;
 const COMPACT_CHAT_COMMAND_HARNESSES = new Set(["pi", "ousia"]);
 const STATUS_CHAT_COMMAND_HARNESSES = new Set(["pi", "ousia", "hermes", "openclaw"]);
+const AUTO_FOLLOW_BOTTOM_THRESHOLD = 12;
 
 function createClientMessageId(): string {
 	return `desktop-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -96,22 +97,28 @@ export function AgentChatPanel({
 		});
 	};
 
-	const pauseAutoFollowForUserScroll = (force = false) => {
+	const handleChatScroll = (forcePause = false) => {
 		if (programmaticScrollRef.current) {
 			return;
 		}
 		const node = scrollRef.current;
-		if (node && node.scrollHeight - node.scrollTop - node.clientHeight < 4) {
+		if (!node) {
+			return;
+		}
+		const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+		if (distanceToBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD) {
+			lastScrollTopRef.current = node.scrollTop;
+			if (!autoFollowRef.current) {
+				autoFollowRef.current = true;
+				setIsAutoFollowPaused(false);
+			}
+			return;
+		}
+		if (!forcePause && node.scrollTop >= lastScrollTopRef.current) {
 			lastScrollTopRef.current = node.scrollTop;
 			return;
 		}
-		if (!force && node && node.scrollTop >= lastScrollTopRef.current) {
-			lastScrollTopRef.current = node.scrollTop;
-			return;
-		}
-		if (node) {
-			lastScrollTopRef.current = node.scrollTop;
-		}
+		lastScrollTopRef.current = node.scrollTop;
 		autoFollowRef.current = false;
 		setIsAutoFollowPaused(true);
 	};
@@ -425,13 +432,13 @@ export function AgentChatPanel({
 				<div className="relative flex min-h-0 flex-1 overflow-hidden">
 					<div
 						ref={scrollRef}
-						onScroll={() => pauseAutoFollowForUserScroll()}
+						onScroll={() => handleChatScroll()}
 						onWheel={(event) => {
 							if (event.deltaY < 0) {
-								pauseAutoFollowForUserScroll(true);
+								handleChatScroll(true);
 							}
 						}}
-						onTouchMove={() => pauseAutoFollowForUserScroll(true)}
+						onTouchMove={() => handleChatScroll(true)}
 						className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 py-2 [scrollbar-gutter:stable]"
 					>
 						{renderItems.length ? (
