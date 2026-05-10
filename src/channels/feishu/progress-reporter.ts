@@ -38,6 +38,19 @@ interface ToolRunImBlock {
 	lastRendered: string;
 }
 
+interface CardRunBlock {
+	kind: "assistant" | "thinking" | "tool";
+	content: string;
+}
+
+interface CardRunState {
+	blocks: CardRunBlock[];
+	currentAssistantBlock?: CardRunBlock;
+	messageId?: string;
+	messageEditCount: number;
+	lastRendered: string;
+}
+
 function truncate(text: string, max = 600): string {
 	return text.length > max ? `${text.slice(0, max)}...` : text;
 }
@@ -342,6 +355,7 @@ export class LarkProgressReporter {
 	private visibleResponseStarted = false;
 	private assistantDeliverySucceeded = false;
 	private lastDeliveryError?: unknown;
+	private cardRun?: CardRunState;
 
 	constructor(
 		private readonly event: LarkMessageEvent,
@@ -368,6 +382,11 @@ export class LarkProgressReporter {
 	}
 
 	onSessionEvent = (event: SessionEvent): void => {
+		if (this.messageOutputMode === "card") {
+			this.onCardSessionEvent(event);
+			return;
+		}
+
 		switch (event.type) {
 			case "turn_started": {
 				this.finalizeActiveSegment();
@@ -419,13 +438,17 @@ export class LarkProgressReporter {
 			clearTimeout(this.flushTimer);
 			this.flushTimer = undefined;
 		}
-		if (this.activeSegment?.kind === "assistant") {
+		if (this.messageOutputMode === "card") {
+			this.finishCardRun(finalText);
+		} else if (this.activeSegment?.kind === "assistant") {
 			const normalizedFinalText = finalText.trim();
 			if (normalizedFinalText) {
 				this.activeSegment.content = normalizedFinalText;
 			}
 		}
-		this.finalizeActiveSegment();
+		if (this.messageOutputMode !== "card") {
+			this.finalizeActiveSegment();
+		}
 		await this.pending;
 		await this.ensureFinalDelivered(finalText);
 		await this.clearReaction();
@@ -457,6 +480,20 @@ export class LarkProgressReporter {
 
 		const cause = this.lastDeliveryError ? ` after delivery failure: ${formatLarkError(this.lastDeliveryError)}` : "";
 		console.warn(chalk.gray(`Lark final reply fallback triggered${cause}`));
+		if (this.messageOutputMode === "card") {
+			try {
+				const result = await this.delivery.sendStyledReply(
+					this.config,
+					this.event,
+					normalizedFinalText,
+					this.messageOutputMode,
+				);
+				this.recordSendSuccess(result, "final_fallback");
+				return;
+			} catch (error) {
+				this.recordDeliveryFailure(error, "final_card_fallback");
+			}
+		}
 		const result = await this.delivery.sendPlainReply(this.config, this.event, normalizedFinalText);
 		this.recordSendSuccess(result, "final_fallback");
 	}
@@ -525,7 +562,11 @@ export class LarkProgressReporter {
 		}
 		this.flushTimer = setTimeout(() => {
 			this.flushTimer = undefined;
-			this.flushActiveSegment();
+			if (this.messageOutputMode === "card") {
+				this.flushCardRun();
+			} else {
+				this.flushActiveSegment();
+			}
 		}, STREAM_UPDATE_DEBOUNCE_MS);
 	}
 
@@ -632,6 +673,204 @@ export class LarkProgressReporter {
 			}
 		}
 		segment.lastRendered = rendered;
+	}
+
+	private onCardSessionEvent(event: SessionEvent): void {
+		switch (event.type) {
+			case "thinking_delta":
+				if (this.outputThinkingToIm && event.delta) {
+					this.appendThinking(event.delta);
+				}
+				break;
+			case "thinking_finished":
+				if (this.outputThinkingToIm && event.thinking) {
+					this.finishThinking(event.thinking);
+				}
+				break;
+			case "text_start":
+				this.startCardAssistantBlock();
+				break;
+			case "text_delta":
+				if (event.delta) {
+					this.appendToCardAssistantBlock(event.delta);
+				}
+				break;
+			case "text_finished":
+				if (event.text) {
+					this.finishCardAssistantBlock(event.text);
+				}
+				break;
+			case "turn_finished":
+				this.finalizeCardPendingThinking();
+				break;
+			case "tool_call_started":
+				if (this.outputToolCallsToIm) {
+					this.appendCardToolLine(formatToolImLine(event.name, event.args, this.outputToolCallImMaxLength));
+				}
+				break;
+			case "tool_call_finished":
+				if (this.outputToolCallsToIm && event.isError) {
+					this.appendCardToolLine(formatToolImErrorLine(event.name, event.result, this.outputToolCallImMaxLength));
+				}
+				break;
+		}
+	}
+
+	private getCardRun(): CardRunState {
+		if (!this.cardRun) {
+			this.cardRun = {
+				blocks: [],
+				messageEditCount: 0,
+				lastRendered: "",
+			};
+		}
+		return this.cardRun;
+	}
+
+	private startCardAssistantBlock(): void {
+		const run = this.getCardRun();
+		if (run.currentAssistantBlock && !run.currentAssistantBlock.content.trim()) {
+			return;
+		}
+		const thinking = this.outputThinkingToIm ? this.consumePendingThinking() : undefined;
+		if (thinking) {
+			run.blocks.push({ kind: "thinking", content: thinking });
+		}
+		const block: CardRunBlock = { kind: "assistant", content: "" };
+		run.blocks.push(block);
+		run.currentAssistantBlock = block;
+	}
+
+	private appendToCardAssistantBlock(delta: string): void {
+		const run = this.getCardRun();
+		if (!run.currentAssistantBlock) {
+			this.startCardAssistantBlock();
+		}
+		if (!run.currentAssistantBlock) {
+			return;
+		}
+		run.currentAssistantBlock.content += delta;
+		this.scheduleFlush();
+	}
+
+	private finishCardAssistantBlock(content: string): void {
+		const run = this.getCardRun();
+		if (!run.currentAssistantBlock) {
+			this.startCardAssistantBlock();
+		}
+		if (!run.currentAssistantBlock) {
+			return;
+		}
+		run.currentAssistantBlock.content = content;
+		run.currentAssistantBlock = undefined;
+		this.enqueue(() => this.pushCardRun(false));
+	}
+
+	private appendCardToolLine(line: string): void {
+		const run = this.getCardRun();
+		run.currentAssistantBlock = undefined;
+		const last = run.blocks.at(-1);
+		if (last?.kind === "tool") {
+			last.content += `${last.content ? "\n" : ""}${line}`;
+		} else {
+			const thinking = this.outputThinkingToIm ? this.consumePendingThinking() : undefined;
+			if (thinking) {
+				run.blocks.push({ kind: "thinking", content: thinking });
+			}
+			run.blocks.push({ kind: "tool", content: line });
+		}
+		this.enqueue(() => this.pushCardRun(false));
+	}
+
+	private finalizeCardPendingThinking(): void {
+		if (!this.outputThinkingToIm) {
+			this.pendingThinkingContent = "";
+			return;
+		}
+		const thinking = this.consumePendingThinking();
+		if (!thinking) {
+			return;
+		}
+		this.getCardRun().blocks.push({ kind: "thinking", content: thinking });
+		this.enqueue(() => this.pushCardRun(false));
+	}
+
+	private finishCardRun(finalText: string): void {
+		const normalizedFinalText = finalText.trim();
+		const run = this.cardRun;
+		if (!run) {
+			if (normalizedFinalText) {
+				this.getCardRun().blocks.push({ kind: "assistant", content: normalizedFinalText });
+				this.enqueue(() => this.pushCardRun(true));
+			}
+			return;
+		}
+		run.currentAssistantBlock = undefined;
+		if (!run.blocks.some((block) => block.kind === "assistant" && block.content.trim()) && normalizedFinalText) {
+			run.blocks.push({ kind: "assistant", content: normalizedFinalText });
+		}
+		this.finalizeCardPendingThinking();
+		this.enqueue(() => this.pushCardRun(true));
+	}
+
+	private renderCardRun(run: CardRunState): string {
+		return run.blocks
+			.map((block) => {
+				const content = block.content.trim();
+				if (!content) {
+					return "";
+				}
+				if (block.kind === "thinking") {
+					return toQuotedMarkdown(truncate(content, 3000));
+				}
+				return content;
+			})
+			.filter(Boolean)
+			.join("\n\n");
+	}
+
+	private flushCardRun(): void {
+		this.enqueue(() => this.pushCardRun(false));
+	}
+
+	private async pushCardRun(isFinal: boolean): Promise<void> {
+		const run = this.cardRun;
+		if (!run) {
+			return;
+		}
+		const rendered = this.renderCardRun(run).trim();
+		if (!rendered || rendered === run.lastRendered) {
+			return;
+		}
+		const hasAssistantContent = run.blocks.some((block) => block.kind === "assistant" && block.content.trim());
+
+		await this.beginVisibleResponse();
+		if (run.messageId) {
+			if (!isFinal && run.messageEditCount >= MAX_MESSAGE_EDITS - 1) {
+				return;
+			}
+			try {
+				await this.delivery.updateStyledReply(this.config, run.messageId, rendered, this.messageOutputMode);
+				run.messageEditCount += 1;
+				if (hasAssistantContent) {
+					this.recordUpdateSuccess("assistant");
+				}
+			} catch (error) {
+				this.recordDeliveryFailure(error, "card_run_update");
+				return;
+			}
+		} else {
+			try {
+				const result = await this.delivery.sendStyledReply(this.config, this.event, rendered, this.messageOutputMode);
+				this.recordSendSuccess(result, "card_run", hasAssistantContent ? "assistant" : "tool");
+				run.messageId = result.messageId;
+				run.messageEditCount = 0;
+			} catch (error) {
+				this.recordDeliveryFailure(error, "card_run_send");
+				return;
+			}
+		}
+		run.lastRendered = rendered;
 	}
 
 	private appendToolRunLine(line: string): void {

@@ -45,6 +45,10 @@ function createDelivery(overrides: Partial<LarkProgressDeliveryDeps> = {}): Lark
 	};
 }
 
+async function flushDeliveryQueue(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("LarkProgressReporter", () => {
 	it("falls back to plain final text when styled delivery fails", async () => {
 		const calls: Array<{ kind: string; text: string; mode?: FeishuMessageOutputMode }> = [];
@@ -61,7 +65,7 @@ describe("LarkProgressReporter", () => {
 
 		reporter.onSessionEvent({
 			type: "text_finished",
-			roundId: "round_1",
+			runId: "run_1",
 			turnId: "turn_1",
 			textId: "text_1",
 			text: "final answer",
@@ -100,7 +104,7 @@ describe("LarkProgressReporter", () => {
 
 		reporter.onSessionEvent({
 			type: "text_finished",
-			roundId: "round_1",
+			runId: "run_1",
 			turnId: "turn_1",
 			textId: "text_1",
 			text: "final answer",
@@ -132,7 +136,7 @@ describe("LarkProgressReporter", () => {
 
 		reporter.onSessionEvent({
 			type: "tool_call_started",
-			roundId: "round_1",
+			runId: "run_1",
 			turnId: "turn_1",
 			toolCallId: "tool_1",
 			name: "bash",
@@ -143,6 +147,65 @@ describe("LarkProgressReporter", () => {
 		assert.deepEqual(calls, [
 			{ kind: "styled", text: "💻 pwd" },
 			{ kind: "plain", text: "final answer" },
+		]);
+	});
+
+	it("keeps card-mode turns and tool calls in one updated card", async () => {
+		const calls: Array<{ kind: string; messageId?: string; text: string; mode?: FeishuMessageOutputMode }> = [];
+		const reporter = new LarkProgressReporter(
+			createEvent(),
+			{} as LarkConfig,
+			true,
+			"none",
+			false,
+			"card",
+			createDelivery({
+				async sendStyledReply(_config, _event, text, mode) {
+					calls.push({ kind: "send", text, mode });
+					return { messageId: "om_card", chatId: "oc_chat" };
+				},
+				async updateStyledReply(_config, messageId, text, mode) {
+					calls.push({ kind: "update", messageId, text, mode });
+				},
+			}),
+		);
+
+		reporter.onSessionEvent({
+			type: "text_finished",
+			runId: "run_1",
+			turnId: "turn_1",
+			textId: "text_1",
+			text: "I will inspect files.",
+		});
+		await flushDeliveryQueue();
+		reporter.onSessionEvent({
+			type: "tool_call_started",
+			runId: "run_1",
+			turnId: "turn_1",
+			toolCallId: "tool_1",
+			name: "read",
+			args: { path: "/tmp/SKILL.md" },
+		});
+		await flushDeliveryQueue();
+		reporter.onSessionEvent({
+			type: "text_finished",
+			runId: "run_1",
+			turnId: "turn_2",
+			textId: "text_2",
+			text: "Done.",
+		});
+
+		await reporter.finish("Done.");
+
+		assert.deepEqual(calls, [
+			{ kind: "send", text: "I will inspect files.", mode: "card" },
+			{ kind: "update", messageId: "om_card", text: "I will inspect files.\n\n📖 read SKILL.md", mode: "card" },
+			{
+				kind: "update",
+				messageId: "om_card",
+				text: "I will inspect files.\n\n📖 read SKILL.md\n\nDone.",
+				mode: "card",
+			},
 		]);
 	});
 
@@ -166,7 +229,7 @@ describe("LarkProgressReporter", () => {
 
 		reporter.onSessionEvent({
 			type: "text_finished",
-			roundId: "round_1",
+			runId: "run_1",
 			turnId: "turn_1",
 			textId: "text_1",
 			text: "partial answer",
@@ -174,7 +237,7 @@ describe("LarkProgressReporter", () => {
 		await reporter.dispose();
 		reporter.onSessionEvent({
 			type: "text_finished",
-			roundId: "round_1",
+			runId: "run_1",
 			turnId: "turn_1",
 			textId: "text_2",
 			text: "final answer",
