@@ -8,12 +8,19 @@ import { getStoredProfile, loadConfigStore, type AgentProfile } from "../core/co
 import { writeRuntimeStateRecord } from "../core/runtime-process.js";
 import { appendStartupSpan } from "../core/startup-spans.js";
 import { createRuntimeEnvironment, ensureRuntimeEnvironment, RuntimeEnvironmentLifecycle, type AgentRuntimeEnvironment } from "./environment.js";
-import { ensureDailySessionDistillationTask } from "../frameworks/ousia/runtime/session-distillation.js";
 import { createChannelRuntimes, type ChannelRuntime } from "./channel-runtimes.js";
+import { createRuntimeRunGatewayServer } from "./run-gateway.js";
 
 function readPort(value: string | undefined, defaultValue: number): number {
 	const parsed = Number.parseInt(value ?? "", 10);
 	return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+function readBooleanEnv(value: string | undefined): boolean {
+	if (!value) {
+		return false;
+	}
+	return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 function parseAgentHomeFromArgv(argv: string[]): string | undefined {
@@ -49,10 +56,9 @@ function createRuntimePlan(): RuntimePlan {
 	const harnessDefinition = getAgentHarnessDefinition(profile?.harness.kind ?? "pi");
 	const lifecycleHooks = harnessDefinition.lifecycleHooks;
 	lifecycleHooks?.ensureAgentHomeLayout?.(homeDir);
-	if (harnessDefinition.kind === "ousia") {
-		ensureDailySessionDistillationTask(homeDir);
-	}
-	const channelRuntimes = createChannelRuntimes(profile);
+	const channelRuntimes = createChannelRuntimes(profile, {
+		developerMode: readBooleanEnv(process.env.PIE_DEVELOPER_MODE),
+	});
 	if (!channelRuntimes.length) {
 		throw new Error("No enabled channel runtime is available for this profile.");
 	}
@@ -106,15 +112,27 @@ export async function runPie(): Promise<number> {
 				model: profile?.harness.model,
 			})
 		: undefined;
-	const turnGateway = lifecycleHooks?.createTurnGatewayServer
-		? lifecycleHooks.createTurnGatewayServer({
+	const runGateway = lifecycleHooks?.createRunGatewayServer
+		? lifecycleHooks.createRunGatewayServer({
 				homeDir,
 				environment,
 				port: gatewayPort,
 				secret: gatewaySecret,
-				onTurn: (request) => primaryRuntime.deliverTurn(request),
+				onRun: (request) => primaryRuntime.deliverRun(request),
+				onCreateSession: primaryRuntime.createSession ? (sessionKey) => primaryRuntime.createSession!(sessionKey) : undefined,
+				onGetSessionStatus: primaryRuntime.getSessionStatus ? (sessionKey) => primaryRuntime.getSessionStatus!(sessionKey) : undefined,
+				onCompactSession: primaryRuntime.compactSession ? (sessionKey) => primaryRuntime.compactSession!(sessionKey) : undefined,
+				onClearSession: primaryRuntime.clearSession ? (sessionKey) => primaryRuntime.clearSession!(sessionKey) : undefined,
 			})
-		: undefined;
+		: createRuntimeRunGatewayServer({
+				port: gatewayPort,
+				secret: gatewaySecret,
+				onRun: (request) => primaryRuntime.deliverRun(request),
+				onCreateSession: primaryRuntime.createSession ? (sessionKey) => primaryRuntime.createSession!(sessionKey) : undefined,
+				onGetSessionStatus: primaryRuntime.getSessionStatus ? (sessionKey) => primaryRuntime.getSessionStatus!(sessionKey) : undefined,
+				onCompactSession: primaryRuntime.compactSession ? (sessionKey) => primaryRuntime.compactSession!(sessionKey) : undefined,
+				onClearSession: primaryRuntime.clearSession ? (sessionKey) => primaryRuntime.clearSession!(sessionKey) : undefined,
+			});
 	const keepAlive = setInterval(() => undefined, 60_000);
 	const span = (name: string, meta?: Record<string, string | number | boolean | undefined>): void => {
 		try {
@@ -135,7 +153,7 @@ export async function runPie(): Promise<number> {
 		}
 		taskEngine?.stop();
 		void harnessService?.stop();
-		void turnGateway?.stop();
+		void runGateway?.stop();
 		for (const runtime of channelRuntimes) {
 			void runtime.stop();
 		}
@@ -147,8 +165,8 @@ export async function runPie(): Promise<number> {
 	lifecycle.mark("starting");
 	persistLifecycle();
 	span("runtime_starting", { channelCount: channelRuntimes.length });
-	await turnGateway?.start();
-	span("turn_gateway_started", { enabled: Boolean(turnGateway) });
+	await runGateway?.start();
+	span("run_gateway_started", { enabled: Boolean(runGateway) });
 	if (harnessService && harnessDefinition.kind === "openclaw") {
 		void Promise.resolve(harnessService.start()).then(() => {
 			span("harness_service_started", { enabled: true, background: true });
@@ -192,7 +210,7 @@ export async function runPie(): Promise<number> {
 		clearInterval(keepAlive);
 		taskEngine?.stop();
 		await harnessService?.stop();
-		await turnGateway?.stop();
+		await runGateway?.stop();
 		await Promise.all(channelRuntimes.map((runtime) => runtime.stop()));
 		if (!failure) {
 			lifecycle.mark("stopped");

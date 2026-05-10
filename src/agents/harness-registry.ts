@@ -2,11 +2,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentHarnessKind } from "../core/config-store.js";
 import type { HarnessLifecycleHooks } from "../core/agent-harness.js";
-import { OUSIA_LIFECYCLE_HOOKS } from "../frameworks/ousia/harness.js";
 import { codexCliAgentHarnessAdapter } from "./adapters/codex-cli.js";
 import { hermesAgentHarnessAdapter } from "./adapters/hermes.js";
 import { openClawAgentHarnessAdapter } from "./adapters/openclaw.js";
-import { ousiaAgentHarnessAdapter, piAgentHarnessAdapter } from "./adapters/pi.js";
+import { piAgentHarnessAdapter } from "./adapters/pi.js";
+import { OUSIA_LIFECYCLE_HOOKS, ousiaAgentHarnessAdapter } from "./harnesses/ousia.js";
 import type { AgentHarnessManagedServiceManagerFactory } from "./harness-service.js";
 import { createHermesServiceProcessManager } from "./harness-services/hermes.js";
 import { createOpenClawServiceProcessManager } from "./harness-services/openclaw.js";
@@ -15,7 +15,7 @@ import type { AgentHarnessAdapter } from "./types.js";
 export interface AgentSkillSourceRegistration {
 	id: string;
 	label: string;
-	path: string;
+	path: string | ((context: { profileHomeDir: string }) => string);
 }
 
 export interface AgentHarnessDefinition {
@@ -48,7 +48,11 @@ const AGENT_HARNESS_DEFINITIONS: Partial<Record<AgentHarnessKind, AgentHarnessDe
 		label: "Ousia",
 		adapter: ousiaAgentHarnessAdapter,
 		lifecycleHooks: OUSIA_LIFECYCLE_HOOKS,
-		skillSources: [globalSkillSource("agent-type", "Pi Agent Skills", ".pi")],
+		skillSources: [{
+			id: "agent-type",
+			label: "Ousia Skills",
+			path: ({ profileHomeDir }) => join(profileHomeDir, "skills"),
+		}],
 	},
 	codex: {
 		kind: "codex",

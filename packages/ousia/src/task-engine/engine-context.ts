@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { OUSIA_ENV } from "../runtime/env.js";
 
 export const TASK_SPEC_FILE = "task.json";
 export const TASK_STATE_FILE = "state.json";
@@ -29,11 +30,11 @@ function readPort(value: string | undefined, defaultValue: number): number {
 
 export function createTaskEngineContext(env: NodeJS.ProcessEnv = process.env): TaskEngineContext {
 	const homeDir =
-		env.PIE_AGENT_HOME?.trim() ||
-		env.PIE_CWD?.trim() ||
+		env[OUSIA_ENV.home]?.trim() ||
+		env[OUSIA_ENV.workDir]?.trim() ||
 		process.cwd();
-	const parentPid = Number.parseInt(env.PIE_PARENT_PID ?? "", 10);
-	const channel = env.PIE_CHANNEL?.trim() || "unknown";
+	const parentPid = Number.parseInt(env[OUSIA_ENV.parentPid] ?? "", 10);
+	const channel = env[OUSIA_ENV.hostChannel]?.trim() || "unknown";
 	const taskDir = join(homeDir, "tasks");
 	const runtimeDir = join(homeDir, "runtime");
 	return {
@@ -47,8 +48,8 @@ export function createTaskEngineContext(env: NodeJS.ProcessEnv = process.env): T
 		eventLogPath: join(runtimeDir, "task-engine-events.jsonl"),
 		statePath: join(runtimeDir, "task-engine-state.json"),
 		engineLockDir: join(runtimeDir, "task-engine.lock"),
-		gatewayPort: readPort(env.PIE_GATEWAY_PORT, 8766),
-		gatewaySecret: env.PIE_GATEWAY_SECRET?.trim() || undefined,
+		gatewayPort: readPort(env[OUSIA_ENV.runGatewayPort], 8766),
+		gatewaySecret: env[OUSIA_ENV.runGatewaySecret]?.trim() || undefined,
 	};
 }
 

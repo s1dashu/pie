@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { OUSIA_ENV } from "./env.js";
 
 const DISTILLATION_TASK_ID = "session-distillation-daily";
 
@@ -18,7 +19,7 @@ function buildDistillationPrompt(): string {
 }
 
 export function ensureDailySessionDistillationTask(homeDir: string): string | undefined {
-	if (process.env.PIE_DISABLE_OUSIA_DAILY_DISTILLATION === "1") {
+	if (process.env[OUSIA_ENV.disableDailyDistillation] === "1") {
 		return undefined;
 	}
 	const taskDir = join(homeDir, "tasks", DISTILLATION_TASK_ID);

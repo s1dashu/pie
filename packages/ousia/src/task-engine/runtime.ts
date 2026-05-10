@@ -5,13 +5,14 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { OUSIA_ENV } from "../runtime/env.js";
 
 const homeDir =
-	process.env.PIE_AGENT_HOME?.trim() ||
-	process.env.PIE_CWD?.trim() ||
+	process.env[OUSIA_ENV.home]?.trim() ||
+	process.env[OUSIA_ENV.workDir]?.trim() ||
 	process.cwd();
-const parentPid = Number.parseInt(process.env.PIE_PARENT_PID ?? "", 10);
-const channel = process.env.PIE_CHANNEL?.trim() || "unknown";
+const parentPid = Number.parseInt(process.env[OUSIA_ENV.parentPid] ?? "", 10);
+const channel = process.env[OUSIA_ENV.hostChannel]?.trim() || "unknown";
 const runtimeDir = join(homeDir, "runtime");
 const heartbeatLogPath = join(runtimeDir, "heartbeat.jsonl");
 const latestSnapshotPath = join(runtimeDir, "heartbeat-latest.json");

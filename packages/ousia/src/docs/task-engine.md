@@ -1,6 +1,6 @@
 # Ousia Task Engine
 
-Ousia Task Engine is Ousia's unified surface for scheduled work and future agent turns.
+Ousia Task Engine is Ousia's unified surface for scheduled work and future agent runs.
 
 New tasks should use `tasks/<task-id>/task.json`. Link a task to a project with `task.json` `projectId`.
 The engine keeps runtime files next to each spec:
@@ -99,4 +99,4 @@ Ousia Task Engine writes runtime state under `<agent-home>/runtime/`, including:
 2. `task-engine-state.json`
 3. `heartbeat.jsonl`
 4. `heartbeat-latest.json`
-5. `internal-turn-gateway.jsonl`
+5. `internal-run-gateway.jsonl`

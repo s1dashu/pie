@@ -16,19 +16,44 @@ export interface ManagedRuntime {
 	stop(): Promise<void>;
 }
 
-export interface AgentTurnInput {
+export type AgentInputOrigin =
+	| "human"
+	| "im"
+	| "scheduled_task"
+	| "cli"
+	| "http"
+	| "system"
+	| "peer";
+
+export interface AgentRunInput {
 	sessionKey: string;
 	prompt: string;
 	source?: string;
-	kind?: "agent_turn" | "agent_task";
+	origin?: AgentInputOrigin;
+	kind?: "agent_run" | "agent_task";
 	metadata?: Record<string, unknown>;
 }
 
-export interface AgentTurnOutput {
+export interface AgentRunOutput {
 	sessionKey: string;
 	assistantText: string;
 }
 
-export interface AgentTurnPort {
-	deliverTurn(request: AgentTurnInput): Promise<AgentTurnOutput>;
+export interface AgentSessionContextUsage {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
+}
+
+export interface AgentSessionStatus {
+	totalMessages: number;
+	contextUsage?: AgentSessionContextUsage;
+}
+
+export interface AgentRunPort {
+	deliverRun(request: AgentRunInput): Promise<AgentRunOutput>;
+	createSession?(sessionKey: string): Promise<void>;
+	getSessionStatus?(sessionKey: string): Promise<AgentSessionStatus>;
+	compactSession?(sessionKey: string): Promise<{ summary?: string }>;
+	clearSession?(sessionKey: string): Promise<void>;
 }

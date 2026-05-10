@@ -1,5 +1,5 @@
 import type { AgentRuntimeEnvironment } from "../runtime/environment.js";
-import type { AgentTurnInput, AgentTurnOutput, PieChannelKind } from "../runtime/types.js";
+import type { AgentRunInput, AgentRunOutput, AgentSessionStatus, PieChannelKind } from "../runtime/types.js";
 
 export interface HarnessTaskEngineProcessManagerOptions {
 	homeDir: string;
@@ -14,15 +14,19 @@ export interface HarnessTaskEngineProcessManager {
 	stop(): void;
 }
 
-export interface HarnessTurnGatewayOptions {
+export interface HarnessRunGatewayOptions {
 	homeDir: string;
 	environment: AgentRuntimeEnvironment;
 	port: number;
 	secret?: string;
-	onTurn: (request: AgentTurnInput) => Promise<AgentTurnOutput>;
+	onRun: (request: AgentRunInput) => Promise<AgentRunOutput>;
+	onCreateSession?: (sessionKey: string) => Promise<void>;
+	onGetSessionStatus?: (sessionKey: string) => Promise<AgentSessionStatus>;
+	onCompactSession?: (sessionKey: string) => Promise<{ summary?: string }>;
+	onClearSession?: (sessionKey: string) => Promise<void>;
 }
 
-export interface HarnessTurnGatewayServer {
+export interface HarnessRunGatewayServer {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 }
@@ -36,5 +40,5 @@ export interface HarnessLifecycleHooks {
 	createTaskEngineProcessManager?: (
 		options: HarnessTaskEngineProcessManagerOptions,
 	) => HarnessTaskEngineProcessManager;
-	createTurnGatewayServer?: (options: HarnessTurnGatewayOptions) => HarnessTurnGatewayServer;
+	createRunGatewayServer?: (options: HarnessRunGatewayOptions) => HarnessRunGatewayServer;
 }

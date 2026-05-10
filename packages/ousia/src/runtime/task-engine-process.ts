@@ -2,11 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, sep } from "node:path";
-import type { AgentRuntimeEnvironment } from "../../../runtime/environment.js";
+import { OUSIA_ENV } from "./env.js";
 
 export interface TaskEngineProcessManagerOptions {
 	homeDir: string;
-	environment?: AgentRuntimeEnvironment;
+	workDir?: string;
 	channel: string;
 	gatewayPort: number;
 	gatewaySecret?: string;
@@ -17,18 +17,31 @@ export interface TaskEngineProcessManager {
 	stop(): void;
 }
 
-function resolveTsxNodeArgs(currentFile: string): string[] | undefined {
-	const inheritedTsxArgs = process.execArgv.filter((arg) => arg.includes("tsx/dist/") || arg.endsWith("tsx"));
-	if (inheritedTsxArgs.length) {
-		return inheritedTsxArgs;
+export function resolveTsxNodeArgs(currentFile: string, execArgv: readonly string[] = process.execArgv): string[] | undefined {
+	if (execArgv.some((arg) => arg.includes("tsx/dist/") || arg.endsWith("tsx"))) {
+		return [...execArgv];
 	}
-	const rootDir = join(dirname(currentFile), "..", "..", "..", "..");
+	const rootDir = findNearestNodeModulesRoot(dirname(currentFile)) ?? process.cwd();
 	const preflight = join(rootDir, "node_modules", "tsx", "dist", "preflight.cjs");
 	const loader = join(rootDir, "node_modules", "tsx", "dist", "loader.mjs");
 	if (existsSync(preflight) && existsSync(loader)) {
 		return ["--require", preflight, "--import", `file://${loader}`];
 	}
 	return undefined;
+}
+
+function findNearestNodeModulesRoot(startDir: string): string | undefined {
+	let current = startDir;
+	for (;;) {
+		if (existsSync(join(current, "node_modules"))) {
+			return current;
+		}
+		const parent = dirname(current);
+		if (parent === current) {
+			return undefined;
+		}
+		current = parent;
+	}
 }
 
 function resolveTaskEngineEntry(entryName: "runtime" | "engine"): { command: string; args: string[] } {
@@ -80,15 +93,16 @@ export function createTaskEngineProcessManager(
 	function spawnEntry(entryName: "runtime" | "engine"): ChildProcess {
 		const entry = resolveTaskEngineEntry(entryName);
 		const child = spawn(entry.command, entry.args, {
-			cwd: options.environment?.workDir ?? options.homeDir,
+			cwd: options.workDir ?? options.homeDir,
 			env: {
 				...process.env,
 				...(shouldRunAsElectronNode(entry.command) ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-				PIE_AGENT_HOME: options.homeDir,
-				PIE_PARENT_PID: String(process.pid),
-				PIE_CHANNEL: options.channel,
-				PIE_GATEWAY_PORT: String(options.gatewayPort),
-				...(options.gatewaySecret ? { PIE_GATEWAY_SECRET: options.gatewaySecret } : {}),
+				[OUSIA_ENV.home]: options.homeDir,
+				[OUSIA_ENV.workDir]: options.workDir ?? options.homeDir,
+				[OUSIA_ENV.parentPid]: String(process.pid),
+				[OUSIA_ENV.hostChannel]: options.channel,
+				[OUSIA_ENV.runGatewayPort]: String(options.gatewayPort),
+				...(options.gatewaySecret ? { [OUSIA_ENV.runGatewaySecret]: options.gatewaySecret } : {}),
 			},
 			stdio: "ignore",
 		});

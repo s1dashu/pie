@@ -3,6 +3,9 @@
   "productName": "Pie",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "author": "s1dashu",
   "description": "Personal Agent client for desktop-first local agent profiles and IM channels.",
   "license": "MIT",
@@ -29,9 +32,7 @@
       "icon": "build/icon.icon"
     },
     "files": [
-      "dist/**/*.js",
-      "dist/frameworks/ousia/docs/**",
-      "dist/frameworks/ousia/prompts/**",
+      "dist/**",
       "out/**",
       "resources/**",
       "package.json",
@@ -52,10 +53,10 @@
   },
   "scripts": {
     "clean": "shx rm -rf dist",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "check": "npm run check -w @pie/ousia && npm run build -w @pie/ousia && tsc --noEmit -p tsconfig.json",
+    "test": "npm run build -w @pie/ousia && tsx --test \"src/**/*.test.ts\" \"packages/ousia/src/**/*.test.ts\"",
     "test:live": "node scripts/run-live-profile-tests.mjs",
-    "build": "shx rm -rf dist && tsc -p tsconfig.json && shx mkdir -p dist/frameworks/ousia && shx cp -r src/frameworks/ousia/prompts dist/frameworks/ousia/ && shx cp -r src/frameworks/ousia/docs dist/frameworks/ousia/ && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js && shx chmod +x dist/channels/wechat/main.js && shx chmod +x dist/channels/slack/main.js && shx chmod +x dist/channels/discord/main.js && shx chmod +x dist/channels/telegram/main.js",
+    "build": "shx rm -rf dist && npm run build -w @pie/ousia && tsc -p tsconfig.json && shx mkdir -p dist/node_modules/@pie/ousia && shx cp -r packages/ousia/dist dist/node_modules/@pie/ousia/dist && shx cp packages/ousia/package.json dist/node_modules/@pie/ousia/package.json && shx chmod +x dist/cli/index.js && shx chmod +x dist/runtime/main.js && shx chmod +x dist/channels/feishu/main.js && shx chmod +x dist/channels/wechat/main.js && shx chmod +x dist/channels/slack/main.js && shx chmod +x dist/channels/discord/main.js && shx chmod +x dist/channels/telegram/main.js && shx chmod +x dist/node_modules/@pie/ousia/dist/main.js",
     "start": "tsx src/cli/index.ts",
     "start:onboard": "tsx src/cli/index.ts --onboard",
     "dev": "PIE_RUN_MODE=dev tsx src/cli/index.ts",
@@ -73,6 +74,7 @@
     "@mariozechner/pi-agent-core": "^0.71.1",
     "@mariozechner/pi-ai": "^0.71.1",
     "@mariozechner/pi-coding-agent": "^0.71.1",
+    "@pie/ousia": "file:packages/ousia",
     "@radix-ui/colors": "^3.0.0",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/themes": "^3.3.0",
@@ -100,6 +102,7 @@
     "shadcn": "^4.6.0",
     "solar-icon-set": "^2.0.1",
     "sonner": "^2.0.7",
+    "streamdown": "^2.5.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.4",
     "tw-animate-css": "^1.4.0",

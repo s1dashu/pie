@@ -1,5 +1,6 @@
 import { existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { OUSIA_RUNTIME_SECRET_HEADER } from "../runtime/env.js";
 import { appendEngineEvent, type TaskEngineContext } from "./engine-context.js";
 import type { AgentTaskSpec } from "./agent-task-types.js";
 import { getDueCronRunAtMs as getDueCronScheduleRunAtMs, getDueIntervalRunAtMs, getDueOnceRunAtMs } from "./schedule.js";
@@ -104,14 +105,14 @@ async function deliverAgentTask(params: {
 				"Content-Type": "application/json",
 				...(ctx.gatewaySecret
 					? {
-							"x-pie-runtime-secret": ctx.gatewaySecret,
-							"x-pie-secret": ctx.gatewaySecret,
+							[OUSIA_RUNTIME_SECRET_HEADER]: ctx.gatewaySecret,
 						}
 					: {}),
 			},
 			body: JSON.stringify({
 				kind: "agent_task",
 				source: "agent_task",
+				origin: "scheduled_task",
 				sessionKey: entry.spec.sessionKey ?? `task:${entry.spec.id}`,
 				prompt: buildAgentTaskPrompt(entry.spec, due.scheduledFor),
 					metadata: {

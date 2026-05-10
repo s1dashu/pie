@@ -1,0 +1,44 @@
+{
+  "name": "@pie/ousia",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./task-engine": {
+      "types": "./dist/task-engine/index.d.ts",
+      "import": "./dist/task-engine/index.js"
+    }
+  },
+  "bin": {
+    "ousia": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "build": "shx rm -rf dist && tsc -p tsconfig.build.json && node dist/copy-assets.js dist && shx chmod +x dist/main.js"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.71.1",
+    "@mariozechner/pi-ai": "^0.71.1",
+    "@mariozechner/pi-coding-agent": "^0.71.1",
+    "chalk": "^5.6.2",
+    "cron-parser": "^5.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "shx": "^0.4.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}

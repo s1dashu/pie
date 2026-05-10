@@ -17,8 +17,8 @@ Each task also has local engine-owned state in its own directory.
 4. `task-engine-state.json`  
    Current loaded task snapshot.
 
-5. `internal-turn-gateway.jsonl`  
-   Local internal turn gateway request history.
+5. `internal-run-gateway.jsonl`  
+   Local internal run gateway request history.
 
 6. `runtime/task-engine.lock/lock.json`  
    Single-instance lock for the scheduler process.

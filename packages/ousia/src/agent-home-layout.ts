@@ -1,12 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { getOusiaDocsDir } from "./assets.js";
 
-/** Durable Ousia workspace layout under `PIE_AGENT_HOME`. */
-export const OUSIA_AGENT_HOME_SUBDIRS = ["tasks", "projects", "runtime", "docs"] as const;
+/** Durable Ousia workspace layout under `OUSIA_HOME`. */
+export const OUSIA_AGENT_HOME_SUBDIRS = ["tasks", "projects", "runtime", "docs", "skills"] as const;
 export type OusiaWorkspaceSubdir = (typeof OUSIA_AGENT_HOME_SUBDIRS)[number];
 
-const OUSIA_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".");
 const OUSIA_DOCS = ["task-engine.md", "task-engine-observability.md"] as const;
 
 export function ensureOusiaAgentHomeLayout(homeDir: string): void {
@@ -16,13 +15,16 @@ export function ensureOusiaAgentHomeLayout(homeDir: string): void {
 	ensureOusiaRuntimeDocs(homeDir);
 }
 
+export function getOusiaSkillsDir(homeDir: string): string {
+	return join(homeDir, "skills");
+}
+
 function ensureOusiaRuntimeDocs(homeDir: string): void {
 	const targetDir = join(homeDir, "docs");
 	mkdirSync(targetDir, { recursive: true });
 	for (const name of OUSIA_DOCS) {
 		const sourcePath = firstExistingPath([
-			join(OUSIA_ROOT, "docs", name),
-			join(process.cwd(), "src", "frameworks", "ousia", "docs", name),
+			join(getOusiaDocsDir(), name),
 		]);
 		const targetPath = join(targetDir, name);
 		const body = readUtf8IfExists(sourcePath);
