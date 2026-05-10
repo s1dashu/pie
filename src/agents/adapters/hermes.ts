@@ -1,9 +1,11 @@
-import { getAgentRoundInputText } from "../types.js";
+import { existsSync } from "node:fs";
+import { getAgentPromptInputText } from "../types.js";
+import { resolveHermesLaunchCommand } from "../harness-services/hermes.js";
 import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
-	AgentRoundInputLike,
+	AgentPromptInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
@@ -277,8 +279,8 @@ class HermesSession implements AgentConversationSession {
 		this.activeRunId = undefined;
 	}
 
-	async prompt(input: AgentRoundInputLike): Promise<void> {
-		const prompt = getAgentRoundInputText(input).trim();
+	async prompt(input: AgentPromptInputLike): Promise<void> {
+		const prompt = getAgentPromptInputText(input).trim();
 		if (!prompt) {
 			throw new Error("Prompt is empty.");
 		}
@@ -464,7 +466,7 @@ class HermesSession implements AgentConversationSession {
 			signal: abort.signal,
 		});
 		if (!response.ok) {
-			throw new Error(`Hermes turn failed: ${await readErrorText(response)}`);
+			throw new Error(`Hermes run failed: ${await readErrorText(response)}`);
 		}
 		if (response.body && response.headers.get("content-type")?.includes("text/event-stream")) {
 			await this.consumeChatCompletionEvents(response, abort);
@@ -598,6 +600,15 @@ export const hermesAgentHarnessAdapter: AgentHarnessAdapter = {
 	capabilities: HERMES_CAPABILITIES,
 	async checkEnvironment(options): Promise<HarnessDiagnostic> {
 		const endpoint = resolveEndpoint(options);
+		let executablePath: string | undefined;
+		let cliInstalled = false;
+		try {
+			const command = resolveHermesLaunchCommand();
+			executablePath = command.argsPrefix[0] ?? command.executablePath;
+			cliInstalled = existsSync(executablePath);
+		} catch {
+			executablePath = undefined;
+		}
 		try {
 			const apiKey = resolveApiKey(options);
 			const response = await fetch(`${endpoint}${resolveHealthPath(options)}`, {
@@ -605,16 +616,16 @@ export const hermesAgentHarnessAdapter: AgentHarnessAdapter = {
 				headers: apiKey ? { authorization: `Bearer ${apiKey}` } : undefined,
 			});
 			return {
-				installed: response.ok,
+				installed: cliInstalled || response.ok,
 				authenticated: response.ok,
-				executablePath: endpoint,
+				executablePath: executablePath ?? endpoint,
 				error: response.ok ? undefined : await readErrorText(response),
 			};
 		} catch (error) {
 			return {
-				installed: false,
+				installed: cliInstalled,
 				authenticated: false,
-				executablePath: endpoint,
+				executablePath: executablePath ?? endpoint,
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
