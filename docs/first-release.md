@@ -18,7 +18,7 @@ This document describes the intended first public release scope for Pie.
 ## Experimental
 
 1. Ousia Task Engine: scheduled work, exec tasks, agent tasks, heartbeat, and observability.
-2. Ousia internal turn gateway.
+2. Ousia internal run gateway.
 3. WeChat channel stability, especially login expiry, send rate limits, long message splitting, and multiple WeChat Agents.
 4. Overseas IM channel adapters are still in development and are not exposed in the release UI.
 5. Hermes and OpenClaw adapters are still in development and are not exposed in the release UI.

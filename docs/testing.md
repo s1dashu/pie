@@ -32,7 +32,7 @@ Scope:
 Examples:
 
 - `channel-model.test.ts`
-- `turn-orchestration.test.ts`
+- `run-orchestration.test.ts`
 - `openclaw.test.ts` with a mock gateway.
 
 Run:

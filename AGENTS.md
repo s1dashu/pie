@@ -23,7 +23,7 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 - `wechat` 已有扫码登录、轮询和收发消息实现，但仍按早期集成处理。
 - `discord` 已接入桌面创建入口和 runtime，可按当前实现维护；`slack`、`telegram` 仍是开发中 channel，桌面开发者模式开启后才开放，本地 runtime 在非开发者模式下会跳过它们。
 - Pi / `pi-coding-agent` 是当前真正稳定运行的 harness/backend，默认创建新 Agent 时选择 Pi。
-- Ousia 复用 `pi-coding-agent` session，但有自己的 system prompt、tools 配置、Task Engine 和 `/agent/turn` gateway。
+- Ousia 复用 `pi-coding-agent` session，但有自己的 system prompt、tools 配置、Task Engine 和 `/agent/run` gateway。
 - Codex 通过本机官方 Codex CLI 的 `app-server --listen stdio://` 接入；桌面有安装/登录诊断和模型选择，但 permission/plan approval 的 IM 交互仍未完成。
 - Hermes 复用本机官方 Hermes runtime/service；Pie 可负责发现、启动、健康检查和 adapter 接入，但不应替代 Hermes 自己的 profile/runtime 语义。当前 Hermes 多 profile 按多个 Hermes home 建模：一个 Pie profile 默认对应 `<profile-home>/hermes` 和一个 profile-local gateway/API server port，不走 OpenClaw 式共享 gateway。桌面创建流程会做本机诊断/安装；仍按早期接入处理。
 - OpenClaw 是真实接入。Pie 复用本机官方 `openclaw`、官方 `~/.openclaw/openclaw.json` 和官方 gateway/multi-agent 能力；桌面端优先由 `SharedHarnessServiceRegistry` 管理同一个官方 OpenClaw gateway，再把 Pie profile 映射为 namespaced OpenClaw agent。OpenClaw 资源成本高，桌面自动恢复时要受启动预算、延迟调度和资源余量约束。Pie 不内置 Node，不静默安装 OpenClaw；本机缺失或不可用时只通过桌面 UI 给用户显式“安装官方版 OpenClaw”的入口。
@@ -56,17 +56,38 @@ Desktop UI、视觉 tokens、组件样式和交互规范统一维护在 [DESIGN.
 - `config.json` 使用当前结构：`profile.harness + profile.channels[]`。旧 `profile.backend` 只作为读入兼容 fallback，不要写回或新增。
 - 敏感信息只进 `<agent-home>/.env`，不要写入 `config.json`。
 - Pie instance 编排入口放在 `src/runtime/`；agent/framework 层能力不要直接放在这里。
-- `channel` 目录只负责 channel adapter：收消息、发消息、channel 事件解析与投递。不要让 channel 负责启动 Task Engine、turn gateway 或 harness managed service。
+- `channel` 目录只负责 channel adapter：收消息、发消息、channel 事件解析与投递。不要让 channel 负责启动 Task Engine、run gateway 或 harness managed service。
 - Runtime 选择和创建 enabled channel 的入口集中在 `src/runtime/channel-runtimes.ts`，release/developerMode 可见性由 `src/core/channel-availability.ts` 控制。
 - Harness/backend 抽象保持轻量，注册入口集中在 `src/agents/harness-registry.ts`。不要再分别维护多套 capability 表。
 - 外部 framework/backend 源码不要改；协议差异在 Pie 自己的 adapter / normalizer 中处理。
 - Codex、Hermes、OpenClaw 这类外部 harness 的 runtime ownership 归各自官方 runtime；Pie 只做 discovery、managed start/stop、健康检查、profile 映射、会话 adapter 和 IM 编排，不 fork、不 patch、不重建一套 runtime-level multi-profile。
 - Pie multi-profile 是产品/IM 层的 agent instance；底层 runtime 的多 profile/multi-agent 能力要按各自官方语义接入。Hermes 当前按 per-profile Hermes home/gateway 映射；OpenClaw 当前按共享官方 gateway + namespaced `pie-<profile-id>` agent 映射。不要把 Hermes 做成 OpenClaw 式共享 gateway，也不要把 OpenClaw 复制成 per-profile gateway。
 
+## Ousia Boundary And Extraction Plan
+
+Ousia 当前继续放在 Pie repo 内迭代，但要按“未来可独立 package / framework companion”的边界治理。不要现在为了拆 repo 增加发版复杂度；也不要让 Ousia 继续无边界地吸收 Pie 产品内部依赖。
+
+阶段目标：
+
+- 当前阶段：Ousia 物理上位于 repo 内 workspace package `packages/ousia`，逻辑上作为独立 framework boundary。Pie 可以 host Ousia，Ousia 不应知道 Pie 的 desktop、channel、profile registry 等产品内部。
+- 下一阶段：当 Ousia 的 run/task/session/event API 更稳定后，继续收敛 `@pie/ousia` public exports、示例和 package-level 测试，仍保持和 Pie 原子提交、同仓 CI。
+- 远期阶段：只有当 Ousia 有 Pie 之外的真实 host、独立测试/示例、稳定 public API，并且确实需要独立发版节奏时，才考虑拆成独立 repo。
+
+边界规则：
+
+- Ousia 对 Pie 的依赖只能通过小而明确的 host contract，例如 `homeDir`、`workDir`、run gateway options、task engine context、event sink、clock/FS/path 参数。
+- Ousia 不得 import `src/desktop/`、`src/channels/`、`src/runtime/` 的 profile/process orchestration、`src/core/config-store.ts`、profile registry、onboard service、IM owner binding 或具体 Feishu/Wechat/Slack/Discord/Telegram 类型。
+- Pie 可以在 harness lifecycle 层把 profile config、env、channel choice、gateway port 等产品状态解析成 Ousia options；Ousia 内部不要直接读取 Pie profile/config registry。
+- Ousia 的 public surface 应集中在少数入口：agent home layout、system prompt path、Task Engine process manager、runtime run gateway、Ousia docs sync。新增入口前先确认是否属于 Ousia framework 语义，而不是 Pie host 语义。
+- Ousia 内部可以拥有 project/task/docs layout、Task Engine、run gateway、session distillation 等 framework 语义；IM 收发、channel routing、desktop restore scheduling、harness selection、profile mutation 仍属于 Pie。
+- 如果为了实现 Ousia 功能需要 Pie 内部能力，优先在 Pie host 层适配成参数或 callback，不要让 Ousia 反向 import Pie 产品模块。
+- 不要为“未来可能拆包”过早引入复杂 plugin/DI/container；只保持 import 边界清晰、entrypoint 少、options 类型稳定。
+- 做 Ousia 相关改动时，检查是否扩大了 `packages/ousia` 到 Pie 产品层的依赖面；如果扩大了，应在同一改动里收敛或说明原因。
+
 ## Agent Harness Model
 
 - `AgentHarnessAdapter` 是 conversation/session port，负责把 Pi、Codex、Hermes、OpenClaw 等外部 backend 的会话能力适配成 Pie 的统一 session API 和事件协议。
-- `HarnessLifecycleHooks` 是 harness lifecycle seam，负责 Pie 为特定 harness 提供的附属启动/停止能力，例如 system prompt 默认文件、agent home layout、Ousia Task Engine、Ousia turn gateway，以及 Hermes/OpenClaw managed gateway process factory。
+- `HarnessLifecycleHooks` 是 harness lifecycle seam，负责 Pie 为特定 harness 提供的附属启动/停止能力，例如 system prompt 默认文件、agent home layout、Ousia Task Engine、Ousia run gateway，以及 Hermes/OpenClaw managed gateway process factory。
 - `HarnessLifecycleHooks` 不负责 IM 收发，也不承载 Ousia project/task 等 framework 内部语义；具体实现应继续留在各自 framework 或 harness service 模块里。
 - Hermes/OpenClaw gateway 启停属于 lifecycle hooks 下的 managed service，当前内聚在 `src/agents/harness-services/hermes.ts`、`src/agents/harness-services/openclaw.ts` 和通用 `src/agents/harness-services/managed-process.ts`。managed service 启动的是官方 runtime，不应使用 Pie 私有 fork 或强行覆盖官方配置。
 - Codex CLI discovery/version check 集中在 `src/agents/harness-services/codex.ts`。桌面全局设置、创建流程、Codex app-server adapter 都应共用 `resolveCodexLaunchCommand` / `checkCodexCliRuntime`，不要在 UI 或 onboard service 里复制 `codex` 路径枚举和 `--version` 执行逻辑。
@@ -81,25 +102,25 @@ Desktop UI、视觉 tokens、组件样式和交互规范统一维护在 [DESIGN.
 ## Channel Runtime Modules
 
 - Channel adapter 只负责平台消息收发、平台事件解析和平台发送能力；不要让 channel adapter 拥有 backend session pool 之外的 framework lifecycle。
-- 跨 channel 的 turn 编排规则集中在 `src/channels/common/turn-orchestration.ts`，包括 agent task prompt 格式、silent task 判断、owner session binding 和 scheduled turn queue。不要在 Feishu/Wechat/common text runtime 里再复制这些规则。
+- 跨 channel 的 run 编排规则集中在 `src/channels/common/run-orchestration.ts`，包括 agent task prompt 格式、silent task 判断、owner session binding 和 scheduled run queue。不要在 Feishu/Wechat/common text runtime 里再复制这些规则。
 - 跨 channel 的 IM event rendering 状态机集中在 `src/channels/common/im-event-rendering.ts`，包括 thinking buffer、assistant text stream buffer 和 IM thinking quote 格式。平台限制和发送动作仍留在各 channel adapter / reporter。
 - 文本类 channel 的共享运行时在 `src/channels/common/text-channel-runtime.ts`；Slack/Discord/Telegram 应优先复用它，平台差异留在 adapter/message parsing 层。
-- IM message part 到 agent input 的转换集中在 `src/channels/common/channel-model.ts`。图片附件会尽量转成 `AgentRoundInput.images` 并交给支持多模态的 harness；非图片 file 目前主要是下载/记录，不要描述成所有 harness 都已具备文件理解能力。
+- IM message part 到 agent input 的转换集中在 `src/channels/common/channel-model.ts`。图片附件会尽量转成 `AgentPromptInput.images` 并交给支持多模态的 harness；非图片 file 目前主要是下载/记录，不要描述成所有 harness 都已具备文件理解能力。
 - Feishu 仍有专用 `ConversationController` 和 `LarkProgressReporter`，因为 card/bubble、消息编辑和平台交互比 common text runtime 复杂；不要为了统一而牺牲 Feishu 当前体验。
 
 ## Event Protocol
 
-Pie 内部 agent 事件协议以 `round -> turn -> text/thinking/tool_call` 为核心：
+Pie 内部 agent 事件协议的概念层级以 `AgentRun -> AgentTurn -> text/thinking/tool_call` 为核心：
 
-- `round` 表示用户一次完整请求触发的 agent 工作。
-- `turn` 表示 round 内部一次 agent/backend 迭代。
+- `agent_run_started` / `agent_run_finished` 表示用户、IM、scheduled task、CLI 或 HTTP 一次外部输入触发的完整执行。
+- `turn` / `AgentTurn` 表示 run 内部一次 agent/backend 模型迭代。
 - 流式文本使用 `text_start/text_delta/text_finished`。
 - 思考内容使用 `thinking_start/thinking_delta/thinking_finished`。
 - 工具调用使用 `tool_call_started/tool_call_updated/tool_call_finished`。
 
 Pi 原始的 `agent_start/agent_end/turn_start/turn_end/message_update/tool_execution_*` 通过 `src/agents/event-normalizer.ts` 映射为 Pie 事件。Codex/Hermes/OpenClaw 等 Pie 侧 adapter 应优先直接 emit Pie 事件。Pie runtime、logging、usage、channel progress reporter 和 desktop timeline 后续都应只消费归一化后的 Pie 事件。
 
-`AgentConversationSession.prompt` 接收轻量 `AgentRoundInputLike`，当前支持 text 和 image 输入结构。Pi、Codex、Hermes、OpenClaw 会转发图片输入；新增或调整多模态行为时要在 adapter capability、channel 表述和 E2E 测试里同步说清楚。
+`AgentConversationSession.prompt` 接收轻量 `AgentPromptInputLike`，当前支持 text 和 image 输入结构。Pi、Codex、Hermes、OpenClaw 会转发图片输入；新增或调整多模态行为时要在 adapter capability、channel 表述和 E2E 测试里同步说清楚。
 
 Runtime stdout 日志不是完整事实源；profile-scoped normalized events 写入 `runtime/agent-events.jsonl`。`src/agents/session-logging.ts` 负责把事件投射成桌面运行日志，处理流式文本时要同时考虑 `text_delta` 和 `text_finished`：有些 backend（例如 OpenClaw）可能只在 delta 给出前缀，在 `text_finished` 给出完整文本，日志必须补齐缺失尾部，避免桌面日志和 IM 实际输出不一致。
 
@@ -145,13 +166,17 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 
 ## Ousia Rules
 
-- Ousia 的 system prompt、Task Engine、turn gateway、project/task 关系都内聚在 `src/frameworks/ousia/`。
+- Ousia 的 system prompt、Task Engine、run gateway、project/task 关系都内聚在 `packages/ousia`。
+- Ousia 是 Pie repo 内的独立 framework boundary；新增 Ousia 代码时优先依赖 Ousia 内部模块、标准库和 host 传入 options，不要直接依赖 Pie desktop/channel/profile/config-store 等产品层模块。
+- Pie 通过 `src/core/agent-harness.ts` 的 lifecycle contract host Ousia；不要让 Ousia 自己启动 channel adapter、读写 Pie profile registry、决定 channel routing 或管理 desktop restore scheduling。
+- Standalone Ousia 默认 home 是 `~/.ousia`；Pie-hosted Ousia 应由 Pie 显式传入 profile-scoped home，不要让 Ousia state 默认落在 repo 根目录。
+- Ousia 的 HTTP surface 使用 `/agent/run` 和 `/agent/task`；不要恢复 `/agent/turn` 命名。
 - Ousia Task Engine 的新任务统一写入 `tasks/<task-id>/task.json`。
 - 不要再创建 `projects/<project-id>/tasks/<task-id>/task.json`。
 - Project 与 task 的关系通过 `task.json.projectId` 关联。
 - `projects/` 保持为用户/project workspace 文件区，不承载 task runtime 文件。
 - Ousia agent home 会同步内置 docs 到 `docs/`，当前包括 Task Engine 使用和 observability 文档。
-- Ousia runtime 会确保一个 `session-distillation-daily` scheduled task；它是静默维护原型，可用 `PIE_DISABLE_OUSIA_DAILY_DISTILLATION=1` 关闭，不要把它包装成稳定记忆系统。
+- Ousia runtime 会确保一个 `session-distillation-daily` scheduled task；它是静默维护原型，可用 `OUSIA_DISABLE_DAILY_DISTILLATION=1` 关闭，不要把它包装成稳定记忆系统。
 
 ## Important Paths
 
@@ -161,7 +186,7 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 - `src/runtime/environment.ts`：Runtime Environment 抽象，负责解析/创建工作目录并表达生命周期状态；当前不是安全沙盒。
 - `src/agents/harness-registry.ts`：harness/backend 集中注册入口；每个 harness 同时声明 `AgentHarnessAdapter`、可选 `HarnessLifecycleHooks` 和 skill sources。不要再维护第二套 harness runtime registry。
 - `src/agents/types.ts`：Pie agent session port 与统一事件协议定义。
-- `src/agents/event-normalizer.ts`：把 Pi 等外部 backend 的原始事件映射为 Pie 的 `round/turn/text/thinking/tool_call` 事件。
+- `src/agents/event-normalizer.ts`：把 Pi 等外部 backend 的原始事件映射为 Pie 的 normalized `agent_run/turn/text/thinking/tool_call` 事件。
 - `src/agents/event-sink.ts`：轻量 observability event sink，把 profile-scoped normalized agent events 写入 `runtime/agent-events.jsonl`。
 - `src/agents/session-logging.ts`：把 normalized agent events 投射成 stdout/usage 记录；流式 assistant 文本应在 `text_finished` 补齐最终文本中尚未出现在 delta 里的部分。
 - `src/agents/session-runtime.ts`：按 harness 创建带 logging、usage、normalized event sink 和 Pi idle compaction maintenance 的 session pool wrapper。
@@ -176,17 +201,17 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 - `src/channels/feishu/main.ts`：Feishu channel adapter。
 - `src/channels/wechat/main.ts`：WeChat channel adapter；当前仍属于早期集成。
 - `src/channels/common/`：Slack/Discord/Telegram 等 text channel adapter 共享 runtime。
-- `src/channels/common/channel-model.ts`：channel message parts 与 `AgentRoundInput` 转换，包含图片下载/读取到 base64 的共享逻辑。
-- `src/channels/common/turn-orchestration.ts`：跨 channel 的 owner session、scheduled turn queue 和 agent task prompt 规则。
+- `src/channels/common/channel-model.ts`：channel message parts 与 `AgentPromptInput` 转换，包含图片下载/读取到 base64 的共享逻辑。
+- `src/channels/common/run-orchestration.ts`：跨 channel 的 owner session、scheduled run queue 和 agent task prompt 规则。
 - `src/channels/common/im-event-rendering.ts`：跨 channel 的 thinking / assistant text event buffer。
-- `src/core/agent-harness.ts`：`HarnessLifecycleHooks`、task engine manager 和 turn gateway 类型；harness 注册入口不要放在这里，统一放在 `src/agents/harness-registry.ts`。
+- `src/core/agent-harness.ts`：`HarnessLifecycleHooks`、task engine manager 和 run gateway 类型；harness 注册入口不要放在这里，统一放在 `src/agents/harness-registry.ts`。
 - `src/core/channel-availability.ts`：release/developerMode 下 channel 是否可用的集中判断。
 - `src/core/config-store.ts`：agent profile/config schema。
 - `src/core/agent-home.ts`：`PIE_AGENT_HOME`、`.env`、agent home 路径。
 - `src/core/runtime-process.ts`：profile runtime process/state 文件读写和存活校验。
 - `src/core/startup-spans.ts`：启动路径轻量 JSONL span，用于分析 desktop/runtime/harness service 启动耗时。
 - `src/core/harness-service-state.ts`：共享 harness service 状态文件读写。
-- `src/frameworks/ousia/`：Ousia framework 项目边界；包含 Ousia system prompt、Task Engine、turn gateway、project/task/docs layout。
+- `packages/ousia/`：Ousia workspace package；包含 Ousia system prompt、Task Engine、run gateway、project/task/docs layout，并通过 `@pie/ousia` 暴露 public API 给 Pie host。
 - `src/desktop/`：Electron desktop。
 - `src/desktop/main/agent-process-manager.ts`：桌面端 agent runtime 子进程启动/停止、日志采集、ready 识别和 runtime state 持久化。
 - `src/desktop/main/agent-runtime-launcher.ts`：选择 tsx 源码入口或 dist runtime 入口，并分配本地 gateway port。
@@ -223,7 +248,7 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 - 继续减少 runtime 对全局 `process.env` 的依赖；未来多 bot 同进程时，需要 per-profile config/env object。
 - Desktop 使用 `desiredState` 表达“用户期望该 profile 随桌面端恢复运行”。agent 运行态用 `running/starting/paused/failed`，桌面选中态用 `selectedProfile`，不要把选中态混入 runtime 语义。
 - 多 channel 路由策略仍未成为一等能力。当前不要实现默认 channel、owner channel、broadcast、指定 channel 等复杂路由；等第二个稳定 channel 真正和 Feishu 并行使用时再定。
-- Feishu channel 仍有较多专用 conversation/progress 逻辑；Slack/Discord/Telegram 走 common text runtime。通用 turn orchestration 和 IM event rendering 已收敛到 `src/channels/common/`；是否把 Feishu 主 controller 也收敛到 common runtime，等现有 Feishu card/bubble 体验稳定后再评估。
+- Feishu channel 仍有较多专用 conversation/progress 逻辑；Slack/Discord/Telegram 走 common text runtime。通用 run orchestration 和 IM event rendering 已收敛到 `src/channels/common/`；是否把 Feishu 主 controller 也收敛到 common runtime，等现有 Feishu card/bubble 体验稳定后再评估。
 - Observability 目前是 profile-scoped JSONL 日志、usage 文件、normalized event sink、startup spans 和 runtime state，尚未形成完整 tracing/metrics 系统。后续如果扩展，应保持轻量，不引入复杂 telemetry。
 - `runtime/agent-events.jsonl` 当前是 append-only event sink；后续如果用于 desktop timeline，应补 retention、读取 API 和错误容忍策略。
 - 多 harness 抽象已经有轻量 registry，但 Codex/Hermes/OpenClaw 仍在快速变化。不要在这些 backend 稳定前继续扩大统一 Agent API。
