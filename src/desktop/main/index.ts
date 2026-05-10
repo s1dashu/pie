@@ -32,7 +32,6 @@ import { appendAgentSessionEvent, clearAgentSessionEvents, readAgentSessionEvent
 import { resolveSkillSources } from "../../agents/skills.js";
 import {
 	clearRuntimeProcessRecord,
-	isPidRunning,
 	readLiveRuntimeProcessRecord,
 	readRuntimeStateRecord,
 } from "../../core/runtime-process.js";
@@ -114,6 +113,7 @@ import { writeAgentRuntimeLifecycle, writeRuntimeLifecycle } from "./runtime-lif
 import { planAgentProfileMutation } from "./agent-profile-mutation.js";
 import { getRestoreDelayMs } from "./agent-restore-schedule.js";
 import { getSharedHarnessServiceInfo, sharedHarnessServices } from "./shared-harness-services.js";
+import { stopLiveRuntimeProcessRecord } from "./runtime-process-control.js";
 
 const agentOperations = new Map<string, Promise<unknown>>();
 const profileAvatarDataUrlCache = new Map<string, { mtimeMs: number; size: number; dataUrl: string }>();
@@ -617,22 +617,6 @@ function hasLiveRuntimeProcess(home: string): boolean {
 		writeRuntimeLifecycle(home, persisted.homeDir, persisted.workDir, "stopped", "stale-process");
 	}
 	return false;
-}
-
-function signalRuntimeProcess(pid: number, signal: NodeJS.Signals): void {
-	if (process.platform !== "win32") {
-		try {
-			process.kill(-pid, signal);
-			return;
-		} catch {
-			// Fall back to the direct process. The runtime may not be a process-group leader.
-		}
-	}
-	try {
-		process.kill(pid, signal);
-	} catch {
-		// best effort
-	}
 }
 
 function runtimeLifecycleForProfile(id: string, home: string, desiredState: AgentDesiredState): RuntimeEnvironmentSummary["lifecycle"] {
@@ -1560,13 +1544,8 @@ async function stopRunningAgent(id: string): Promise<void> {
 		const record = readLiveRuntimeProcessRecord(agent.home);
 		if (record) {
 			writeAgentRuntimeLifecycle(agent, "stopping", "paused", { process: record });
-			signalRuntimeProcess(record.pid, "SIGTERM");
-			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
-			if (isPidRunning(record.pid)) {
-				signalRuntimeProcess(record.pid, "SIGKILL");
-			}
+			await stopLiveRuntimeProcessRecord({ homeDir: agent.home, forceKillMs: RUNTIME_STOP_FORCE_KILL_MS });
 		}
-		clearRuntimeProcessRecord(agent.home);
 		writeAgentRuntimeLifecycle(agent, "stopped", "paused");
 		updateProfileRegistryEntry(id, { desiredState: "paused" });
 		return;
@@ -1618,12 +1597,7 @@ async function stopAgentsForQuit(): Promise<void> {
 				return;
 			}
 			writeAgentRuntimeLifecycle(agent, "stopping", "quit", { process: record });
-			signalRuntimeProcess(record.pid, "SIGTERM");
-			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
-			if (isPidRunning(record.pid)) {
-				signalRuntimeProcess(record.pid, "SIGKILL");
-			}
-			clearRuntimeProcessRecord(agent.home);
+			await stopLiveRuntimeProcessRecord({ homeDir: agent.home, forceKillMs: RUNTIME_STOP_FORCE_KILL_MS });
 			writeAgentRuntimeLifecycle(agent, "stopped", "quit");
 			appendAgentUsageEvent(agent.home, {
 				type: "runtime",
@@ -1705,6 +1679,8 @@ async function deleteAgent(id: string): Promise<void> {
 	emitDeleteEvent({ agentId: id, step: "stop", message: "停止运行中的实例" });
 	if (agentProcesses.isRunning(id)) {
 		await agentProcesses.stop(id, "deleted");
+	} else {
+		await stopLiveRuntimeProcessRecord({ homeDir: home, forceKillMs: RUNTIME_STOP_FORCE_KILL_MS });
 	}
 	await waitForMinimumStepDuration(stepStartedAt);
 	stepStartedAt = Date.now();
