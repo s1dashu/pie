@@ -10,13 +10,13 @@ import {
 	resolveCodexLaunchCommand,
 	runCodexCli,
 } from "../harness-services/codex.js";
-import { getAgentRoundInputText, normalizeAgentRoundInput } from "../types.js";
+import { getAgentPromptInputText, normalizeAgentPromptInput } from "../types.js";
 import { CodexStdioJsonRpcClient, type CodexJsonRpcMessage as JsonRpcMessage } from "./codex-app-server-rpc.js";
 import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
-	AgentRoundInputLike,
+	AgentPromptInputLike,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
@@ -34,12 +34,25 @@ interface ActiveTurn {
 	reject: (error: Error) => void;
 }
 
+interface CodexAppServerSessionOptions {
+	homeDir: string;
+	conversationKey: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	sandboxMode: CodexSandboxMode;
+	webSearchMode: CodexWebSearchMode;
+	systemPrompt?: string;
+	resumeSessions: boolean;
+	verboseLogs: boolean;
+	debug: boolean;
+}
+
 type CodexUserInput =
 	| { type: "text"; text: string }
 	| { type: "image"; url: string };
 
-function buildCodexUserInput(input: AgentRoundInputLike): { prompt: string; items: CodexUserInput[] } {
-	const content = normalizeAgentRoundInput(input);
+function buildCodexUserInput(input: AgentPromptInputLike): { prompt: string; items: CodexUserInput[] } {
+	const content = normalizeAgentPromptInput(input);
 	const prompt = content.text.trim();
 	const items: CodexUserInput[] = [];
 	if (prompt) {
@@ -82,42 +95,36 @@ class CodexAppServerSession implements AgentConversationSession {
 	readonly capabilities = CODEX_CAPABILITIES;
 	readonly state: { messages: unknown[] } = { messages: [] };
 	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
-	private readonly rpc = new CodexStdioJsonRpcClient({
-		stdoutLabel: "codex:stdout",
-		debug: this.options.debug,
-		onNotification: (message) => this.handleNotification(message),
-		onFailure: (error) => this.failProcess(error),
-	});
+	private readonly options: CodexAppServerSessionOptions;
+	private readonly rpc: CodexStdioJsonRpcClient;
 	private initialized = false;
 	private threadId: string | undefined;
 	private activeTurnId: string | undefined;
 	private activeTurn: ActiveTurn | undefined;
 	private starting?: Promise<void>;
 	private aborted = false;
-	private roundIndex = 0;
+	private runIndex = 0;
 	private turnIndex = 0;
-	private currentRoundId = "";
+	private currentRunId = "";
 	private currentTurnId = "";
+	private textBlockIndex = 0;
+	private currentTextId = "";
+	private currentText = "";
 	private readonly tokenUsageByTurnId = new Map<string, unknown>();
 	private readonly completedTurnIds = new Set<string>();
 	private readonly flushedTokenUsageTurnIds = new Set<string>();
-	private readonly pieTurnByCodexTurnId = new Map<string, { roundId: string; turnId: string }>();
+	private readonly pieTurnByCodexTurnId = new Map<string, { runId: string; turnId: string }>();
+	private readonly activeToolCalls = new Map<string, { name: string }>();
 
-	constructor(
-		private readonly options: {
-			homeDir: string;
-			conversationKey: string;
-			model?: string;
-			thinkingLevel?: ThinkingLevel;
-			sandboxMode: CodexSandboxMode;
-			webSearchMode: CodexWebSearchMode;
-			systemPrompt?: string;
-			resumeSessions: boolean;
-			verboseLogs: boolean;
-			debug: boolean;
-		},
-	) {
-		this.threadId = this.options.resumeSessions ? this.readPersistedThreadId() : undefined;
+	constructor(options: CodexAppServerSessionOptions) {
+		this.options = options;
+		this.rpc = new CodexStdioJsonRpcClient({
+			stdoutLabel: "codex:stdout",
+			debug: options.debug,
+			onNotification: (message) => this.handleNotification(message),
+			onFailure: (error) => this.failProcess(error),
+		});
+		this.threadId = options.resumeSessions ? this.readPersistedThreadId() : undefined;
 	}
 
 	get isStreaming(): boolean {
@@ -162,7 +169,7 @@ class CodexAppServerSession implements AgentConversationSession {
 		}
 	}
 
-	async prompt(input: AgentRoundInputLike): Promise<void> {
+	async prompt(input: AgentPromptInputLike): Promise<void> {
 		const { prompt, items } = buildCodexUserInput(input);
 		if (!items.length) {
 			throw new Error("Prompt is empty.");
@@ -170,26 +177,32 @@ class CodexAppServerSession implements AgentConversationSession {
 		if (this.activeTurn) {
 			throw new Error("Codex turn is already running.");
 		}
-		await this.ensureStarted();
-		const threadId = await this.ensureThread();
-		this.state.messages.push({ role: "user", content: prompt });
-
 		const startedAt = Date.now();
 		this.aborted = false;
-		this.roundIndex += 1;
+		this.runIndex += 1;
 		this.turnIndex = 0;
-		this.currentRoundId = `round_${this.roundIndex}`;
+		this.currentRunId = `run_${this.runIndex}`;
 		this.currentTurnId = "";
-		this.emit({ type: "round_started", roundId: this.currentRoundId });
+		this.resetTextBlock();
+		this.activeToolCalls.clear();
+		this.emit({ type: "agent_run_started", runId: this.currentRunId });
 		await new Promise<void>((resolve, reject) => {
 			this.activeTurn = { prompt, startedAt, assistantText: "", resolve, reject };
-			this.request("turn/start", {
-				threadId,
-				input: items,
-			}).catch((error) => {
-				this.activeTurn = undefined;
-				reject(error);
-			});
+			void (async () => {
+				try {
+					await this.ensureStarted();
+					const threadId = await this.ensureThread();
+					this.state.messages.push({ role: "user", content: prompt });
+					await this.request("turn/start", {
+						threadId,
+						input: items,
+					});
+				} catch (error) {
+					this.activeTurn = undefined;
+					this.emit({ type: "agent_run_finished", runId: this.ensureRun(), status: "error" });
+					reject(error instanceof Error ? error : new Error(String(error)));
+				}
+			})();
 		});
 	}
 
@@ -283,7 +296,7 @@ class CodexAppServerSession implements AgentConversationSession {
 				this.activeTurnId = turnId ?? this.activeTurnId;
 				this.startNextTurn();
 				if (turnId) {
-					this.pieTurnByCodexTurnId.set(turnId, { roundId: this.ensureRound(), turnId: this.ensureTurn() });
+					this.pieTurnByCodexTurnId.set(turnId, { runId: this.ensureRun(), turnId: this.ensureTurn() });
 				}
 				break;
 			}
@@ -299,8 +312,7 @@ class CodexAppServerSession implements AgentConversationSession {
 			case "item/agentMessage/delta": {
 				const delta = extractStringField(message.params, "delta");
 				if (delta) {
-					this.activeTurn!.assistantText += delta;
-					this.emit({ type: "text_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", delta });
+					this.emitTextDelta(delta);
 				}
 				break;
 			}
@@ -308,7 +320,7 @@ class CodexAppServerSession implements AgentConversationSession {
 			case "item/reasoning/textDelta": {
 				const delta = extractStringField(message.params, "delta");
 				if (delta) {
-					this.emit({ type: "thinking_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta });
+					this.emit({ type: "thinking_delta", runId: this.ensureRun(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta });
 				}
 				break;
 			}
@@ -335,29 +347,43 @@ class CodexAppServerSession implements AgentConversationSession {
 		if (type === "agentMessage" && message.method === "item/completed") {
 			const text = typeof typedItem.text === "string" ? typedItem.text : "";
 			if (text && !this.activeTurn?.assistantText) {
-				this.activeTurn!.assistantText = text;
-				this.emit({ type: "text_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", delta: text });
+				this.emitTextDelta(text);
+			} else if (text && this.activeTurn?.assistantText && text.startsWith(this.activeTurn.assistantText)) {
+				this.emitTextDelta(text.slice(this.activeTurn.assistantText.length));
 			}
 			return;
 		}
 		if (type === "reasoning" && message.method === "item/completed") {
 			const text = joinStringArray(typedItem.summary) || joinStringArray(typedItem.content);
 			if (text) {
-				this.emit({ type: "thinking_delta", roundId: this.ensureRound(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta: text });
+				this.emit({ type: "thinking_delta", runId: this.ensureRun(), turnId: this.ensureTurn(), thinkingId: "thinking_0", delta: text });
 			}
 			return;
 		}
 		if (type === "commandExecution") {
 			const command = typeof typedItem.command === "string" ? typedItem.command : "";
+			const toolCallId = makeToolCallId(typedItem);
 			if (message.method === "item/started") {
-				this.emit({ type: "tool_call_started", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "bash", args: { command } });
+				this.finishCurrentTextBlock();
+				this.activeToolCalls.set(toolCallId, { name: "bash" });
+				this.emit({ type: "tool_call_started", runId: this.ensureRun(), turnId: this.ensureTurn(), toolCallId, name: "bash", args: { command } });
 			} else {
-				this.emit({ type: "tool_call_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "bash", result: typedItem.output ?? "", isError: Boolean(typedItem.error) });
+				this.activeToolCalls.delete(toolCallId);
+				this.emit({ type: "tool_call_finished", runId: this.ensureRun(), turnId: this.ensureTurn(), toolCallId, name: "bash", result: typedItem.output ?? "", isError: Boolean(typedItem.error) });
 			}
 			return;
 		}
-		if (type === "webSearch" && message.method === "item/started") {
-			this.emit({ type: "tool_call_started", roundId: this.ensureRound(), turnId: this.ensureTurn(), toolCallId: makeToolCallId(typedItem), name: "web_search", args: { query: typedItem.query } });
+		if (type === "webSearch") {
+			const toolCallId = makeToolCallId(typedItem);
+			const args = extractCodexWebSearchArgs(typedItem);
+			if (message.method === "item/started") {
+				this.finishCurrentTextBlock();
+				this.activeToolCalls.set(toolCallId, { name: "web_search" });
+				this.emit({ type: "tool_call_started", runId: this.ensureRun(), turnId: this.ensureTurn(), toolCallId, name: "web_search", ...(args ? { args } : {}) });
+				return;
+			}
+			this.activeToolCalls.delete(toolCallId);
+			this.emit({ type: "tool_call_finished", runId: this.ensureRun(), turnId: this.ensureTurn(), toolCallId, name: "web_search", result: typedItem.output ?? typedItem.result ?? "", isError: Boolean(typedItem.error) });
 		}
 	}
 
@@ -382,17 +408,18 @@ class CodexAppServerSession implements AgentConversationSession {
 			this.completedTurnIds.add(turnId);
 			this.flushTokenUsage(turnId);
 		}
+		this.finishActiveToolCalls(false);
 		this.state.messages.push({ role: "assistant", content: assistantText });
-		this.emit({ type: "text_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), textId: "text_0", text: assistantText });
-		this.emit({ type: "turn_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), status: "success" });
-		this.emit({ type: "round_finished", roundId: this.ensureRound(), status: "success", finalText: assistantText });
+		this.finishCurrentTextBlock();
+		this.emit({ type: "turn_finished", runId: this.ensureRun(), turnId: this.ensureTurn(), status: "success" });
+		this.emit({ type: "agent_run_finished", runId: this.ensureRun(), status: "success", finalText: assistantText });
 		if (this.options.verboseLogs) {
 			console.log(chalk.gray(`> codex_app_server complete elapsed=${Date.now() - active.startedAt}ms chars=${assistantText.length}`));
 		}
 		this.activeTurn = undefined;
 		this.activeTurnId = undefined;
 		this.currentTurnId = "";
-		this.currentRoundId = "";
+		this.currentRunId = "";
 		active.resolve();
 	}
 
@@ -410,10 +437,12 @@ class CodexAppServerSession implements AgentConversationSession {
 		this.activeTurn = undefined;
 		this.activeTurnId = undefined;
 		const status = this.aborted ? "aborted" : "error";
-		this.emit({ type: "turn_finished", roundId: this.ensureRound(), turnId: this.ensureTurn(), status });
-		this.emit({ type: "round_finished", roundId: this.ensureRound(), status });
+		this.finishCurrentTextBlock();
+		this.finishActiveToolCalls(!this.aborted);
+		this.emit({ type: "turn_finished", runId: this.ensureRun(), turnId: this.ensureTurn(), status });
+		this.emit({ type: "agent_run_finished", runId: this.ensureRun(), status });
 		this.currentTurnId = "";
-		this.currentRoundId = "";
+		this.currentRunId = "";
 		if (this.aborted) {
 			active.resolve();
 		} else {
@@ -450,16 +479,16 @@ class CodexAppServerSession implements AgentConversationSession {
 		}
 	}
 
-	private ensureRound(): string {
-		if (!this.currentRoundId) {
-			this.roundIndex += 1;
-			this.currentRoundId = `round_${this.roundIndex}`;
+	private ensureRun(): string {
+		if (!this.currentRunId) {
+			this.runIndex += 1;
+			this.currentRunId = `run_${this.runIndex}`;
 		}
-		return this.currentRoundId;
+		return this.currentRunId;
 	}
 
 	private ensureTurn(): string {
-		this.ensureRound();
+		this.ensureRun();
 		if (!this.currentTurnId) {
 			this.startNextTurn();
 		}
@@ -467,13 +496,60 @@ class CodexAppServerSession implements AgentConversationSession {
 	}
 
 	private startNextTurn(): void {
-		const roundId = this.ensureRound();
+		const runId = this.ensureRun();
 		if (this.currentTurnId) {
-			this.emit({ type: "turn_finished", roundId, turnId: this.currentTurnId, status: "success" });
+			this.finishCurrentTextBlock();
+			this.finishActiveToolCalls(false);
+			this.emit({ type: "turn_finished", runId, turnId: this.currentTurnId, status: "success" });
 		}
 		this.turnIndex += 1;
 		this.currentTurnId = `turn_${this.turnIndex}`;
-		this.emit({ type: "turn_started", roundId, turnId: this.currentTurnId, index: this.turnIndex });
+		this.resetTextBlock();
+		this.emit({ type: "turn_started", runId, turnId: this.currentTurnId, index: this.turnIndex });
+	}
+
+	private emitTextDelta(delta: string): void {
+		if (!this.activeTurn || !delta) {
+			return;
+		}
+		const runId = this.ensureRun();
+		const turnId = this.ensureTurn();
+		if (!this.currentTextId) {
+			this.currentTextId = `text_${this.textBlockIndex}`;
+			this.textBlockIndex += 1;
+			this.currentText = "";
+			this.emit({ type: "text_start", runId, turnId, textId: this.currentTextId });
+		}
+		this.activeTurn.assistantText += delta;
+		this.currentText += delta;
+		this.emit({ type: "text_delta", runId, turnId, textId: this.currentTextId, delta });
+	}
+
+	private finishCurrentTextBlock(): void {
+		if (!this.currentTextId) {
+			return;
+		}
+		this.emit({ type: "text_finished", runId: this.ensureRun(), turnId: this.ensureTurn(), textId: this.currentTextId, text: this.currentText });
+		this.currentTextId = "";
+		this.currentText = "";
+	}
+
+	private resetTextBlock(): void {
+		this.textBlockIndex = 0;
+		this.currentTextId = "";
+		this.currentText = "";
+	}
+
+	private finishActiveToolCalls(isError: boolean): void {
+		if (!this.activeToolCalls.size) {
+			return;
+		}
+		const runId = this.ensureRun();
+		const turnId = this.ensureTurn();
+		for (const [toolCallId, tool] of this.activeToolCalls) {
+			this.emit({ type: "tool_call_finished", runId, turnId, toolCallId, name: tool.name, isError });
+		}
+		this.activeToolCalls.clear();
 	}
 
 	private flushTokenUsage(turnId: string): void {
@@ -597,14 +673,16 @@ class CodexAppServerAuthClient {
 		resolve: (value: CodexAppServerLoginCompletion) => void;
 		reject: (error: Error) => void;
 	}>();
-	private readonly rpc = new CodexStdioJsonRpcClient({
-		stdoutLabel: "codex-auth:stdout",
-		debug: this.options.debug,
-		onNotification: (message) => this.handleNotification(message),
-		onFailure: (error) => this.fail(error),
-	});
+	private readonly rpc: CodexStdioJsonRpcClient;
 
-	constructor(private readonly options: { debug?: boolean } = {}) {}
+	constructor(private readonly options: { debug?: boolean } = {}) {
+		this.rpc = new CodexStdioJsonRpcClient({
+			stdoutLabel: "codex-auth:stdout",
+			debug: this.options.debug,
+			onNotification: (message) => this.handleNotification(message),
+			onFailure: (error) => this.fail(error),
+		});
+	}
 
 	async start(): Promise<void> {
 		const codexCommand = await resolveCodexLaunchCommand();
@@ -706,6 +784,67 @@ function extractTurnId(value: unknown): string | undefined {
 function makeToolCallId(item: Record<string, unknown>): string {
 	const id = item.id ?? item.callId ?? item.call_id;
 	return typeof id === "string" && id.trim() ? id.trim() : `tool_${String(item.type ?? "call")}`;
+}
+
+export function extractCodexWebSearchArgs(item: Record<string, unknown>): { query: string } | undefined {
+	const query = findFirstStringByKey(item, new Set(["query", "q", "search_query", "searchQuery", "input", "text"]));
+	return query ? { query } : undefined;
+}
+
+function findFirstStringByKey(value: unknown, keys: Set<string>, seen = new Set<unknown>()): string | undefined {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return undefined;
+		}
+		const parsed = parseJsonObject(trimmed);
+		return parsed ? findFirstStringByKey(parsed, keys, seen) : trimmed;
+	}
+	if (!value || typeof value !== "object" || seen.has(value)) {
+		return undefined;
+	}
+	seen.add(value);
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const found = findFirstStringByKey(item, keys, seen);
+			if (found) {
+				return found;
+			}
+		}
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	for (const [key, field] of Object.entries(record)) {
+		if (!keys.has(key)) {
+			continue;
+		}
+		const found = findFirstStringByKey(field, keys, seen);
+		if (found) {
+			return found;
+		}
+	}
+	for (const field of Object.values(record)) {
+		if (!field || typeof field !== "object") {
+			continue;
+		}
+		const found = findFirstStringByKey(field, keys, seen);
+		if (found) {
+			return found;
+		}
+	}
+	return undefined;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | unknown[] | undefined {
+	if (!value.startsWith("{") && !value.startsWith("[")) {
+		return undefined;
+	}
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> | unknown[] : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function extractStringField(value: unknown, key: string): string {

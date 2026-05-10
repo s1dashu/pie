@@ -44,8 +44,8 @@ export async function runCodexCli(args: string[]): Promise<{ code: number | null
 	return runResolvedCommand(command.executablePath, [...command.argsPrefix, ...args], { pathEnv: command.pathEnv });
 }
 
-export async function checkCodexCliRuntime(): Promise<CodexCliRuntimeDiagnostic> {
-	const command = resolveCodexLaunchCommand();
+export async function checkCodexCliRuntime(commandName = "codex"): Promise<CodexCliRuntimeDiagnostic> {
+	const command = resolveCodexLaunchCommand(commandName);
 	if (!command) {
 		return {
 			installed: false,
@@ -57,7 +57,7 @@ export async function checkCodexCliRuntime(): Promise<CodexCliRuntimeDiagnostic>
 	const version = await runResolvedCommand(command.executablePath, [...command.argsPrefix, "--version"], { pathEnv: command.pathEnv });
 	const versionText = stripAnsi(version.stdout || version.stderr).trim();
 	return {
-		installed: version.code === 0,
+		installed: true,
 		ready: version.code === 0,
 		executablePath,
 		version: versionText || undefined,
