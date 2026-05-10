@@ -114,7 +114,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			assert.equal(create?.params.agentId, "pie-alpha");
 			assert.equal(create?.params.model, "kimi-coding/k2p5");
 			assert.equal(requests.some((request) => request.method === "sessions.send"), true);
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "done");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "done");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -187,7 +187,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			await withTimeout(session.prompt("hello"), 500, "prompt did not finish from final session.message");
 
 			assert.equal(waitObserved, true);
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "done from event");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "done from event");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -421,7 +421,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			await session.steer?.("extra context");
 			await prompt;
 
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "steered result");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "steered result");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -488,7 +488,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			session.subscribe((event) => events.push(event));
 			await session.prompt("hello");
 
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "wait result");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "wait result");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -565,7 +565,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			session.subscribe((event) => events.push(event));
 			await session.prompt("hello");
 
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "wait result after empty final");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "wait result after empty final");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -644,7 +644,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			await session.prompt("hello");
 
 			assert.equal(createAttempts, 2);
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "reconnected");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "reconnected");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();
@@ -713,7 +713,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			session.subscribe((event) => events.push(event));
 			await session.prompt("hello");
 
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "");
 			assert.equal(events.some((event) => event.type === "text_delta"), false);
 		} finally {
 			for (const socket of sockets) {
@@ -783,7 +783,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			session.subscribe((event) => events.push(event));
 			await session.prompt("hello");
 
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "");
 			assert.equal(events.find((event) => event.type === "turn_finished")?.status, "success");
 			assert.equal(events.some((event) => event.type === "text_delta"), false);
 		} finally {
@@ -862,7 +862,7 @@ describe("openClawAgentHarnessAdapter", () => {
 			assert.equal(requests.find((request) => request.method === "sessions.create")?.params.key, "pie:chat-a");
 			assert.equal(requests.find((request) => request.method === "sessions.messages.subscribe")?.params.key, "pie:chat-a");
 			assert.equal(requests.find((request) => request.method === "sessions.send")?.params.key, "pie:chat-a");
-			assert.equal(events.find((event) => event.type === "round_finished")?.finalText, "resumed");
+			assert.equal(events.find((event) => event.type === "agent_run_finished")?.finalText, "resumed");
 		} finally {
 			for (const socket of sockets) {
 				socket.close();

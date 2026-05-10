@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -129,6 +129,49 @@ describe("SharedHarnessServiceRegistry", () => {
 			await Promise.all([first, second]);
 			assert.equal(startCount, 1);
 			assert.equal(readHarnessServiceState(root, "openclaw")?.lifecycle.state, "running");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves imported official OpenClaw agent ids", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pie-shared-openclaw-import-"));
+		const openClawStateDir = join(root, "official-openclaw");
+		const registry = new SharedHarnessServiceRegistry({
+			rootDir: root,
+			openClawGatewayUrl: "ws://127.0.0.1:18789",
+			openClawStateDir,
+			createOpenClawManager: () => ({
+				start: async () => {},
+				stop: () => {},
+			}),
+		});
+		try {
+			const home = join(root, "profiles", "alpha");
+			saveConfigStore({
+				version: 3,
+				profile: createAgentProfile({
+					harness: {
+						kind: "openclaw",
+						model: { provider: "kimi-coding", model: "k2p5" },
+						config: {
+							agentId: "official-agent",
+							importedAgent: true,
+							importedProfileId: "official-agent",
+							modelRef: "kimi-coding/k2p5",
+						},
+					},
+					runtime: { workDir: join(root, "workspaces", "alpha") },
+				}),
+			}, home);
+
+			await registry.ensureForProfile({ id: "alpha", home, harnessKind: "openclaw" });
+
+			const profile = loadConfigStore(home).profile!;
+			assert.equal(profile.harness.config?.agentId, "official-agent");
+			assert.equal(profile.harness.config?.importedAgent, true);
+			assert.equal(profile.harness.config?.managed, false);
+			assert.equal(existsSync(join(openClawStateDir, "openclaw.json")), false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

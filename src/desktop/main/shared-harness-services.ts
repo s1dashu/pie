@@ -108,21 +108,29 @@ export class SharedHarnessServiceRegistry {
 			const existingHarnessConfig = { ...(nextProfile.harness.config ?? {}) };
 			delete existingHarnessConfig.stateDir;
 			delete existingHarnessConfig.configPath;
-			const modelRef = toOpenClawModelRef(nextProfile.harness.model?.provider, nextProfile.harness.model?.model);
-			const provisioned = ensureOpenClawAgentProfile({
-				stateDir: this.openClawStateDir,
-				profileId: target.id,
-				homeDir: target.home,
-				workDir: environment.workDir,
-				modelRef: modelRef ?? (typeof nextProfile.harness.config.modelRef === "string" ? nextProfile.harness.config.modelRef : undefined),
-			});
-			nextProfile.harness.config = {
-				...existingHarnessConfig,
-				gatewayUrl: this.openClawGatewayUrl,
-				agentId: provisioned.agentId,
-				...(provisioned.modelRef ? { modelRef: provisioned.modelRef } : {}),
-				managed: false,
-			};
+			if (existingHarnessConfig.importedAgent === true && typeof existingHarnessConfig.agentId === "string") {
+				nextProfile.harness.config = {
+					...existingHarnessConfig,
+					gatewayUrl: this.openClawGatewayUrl,
+					managed: false,
+				};
+			} else {
+				const modelRef = toOpenClawModelRef(nextProfile.harness.model?.provider, nextProfile.harness.model?.model);
+				const provisioned = ensureOpenClawAgentProfile({
+					stateDir: this.openClawStateDir,
+					profileId: target.id,
+					homeDir: target.home,
+					workDir: environment.workDir,
+					modelRef: modelRef ?? (typeof nextProfile.harness.config.modelRef === "string" ? nextProfile.harness.config.modelRef : undefined),
+				});
+				nextProfile.harness.config = {
+					...existingHarnessConfig,
+					gatewayUrl: this.openClawGatewayUrl,
+					agentId: provisioned.agentId,
+					...(provisioned.modelRef ? { modelRef: provisioned.modelRef } : {}),
+					managed: false,
+				};
+			}
 		}
 		if (stableJson(profile.harness.config ?? {}) !== stableJson(nextProfile.harness.config ?? {})) {
 			saveConfigStore(setStoredProfile(store, nextProfile), target.home);

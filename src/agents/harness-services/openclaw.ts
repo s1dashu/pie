@@ -12,7 +12,9 @@ import {
 	asString,
 	isManagedDisabled,
 	pipePrefixedLogs,
+	getOpenClawCliCandidatePaths,
 	resolveNodeCliLaunchCommand,
+	resolveOpenClawExecutable,
 	stopManagedChildProcess,
 	waitForLocalPort,
 } from "./managed-process.js";
@@ -87,7 +89,8 @@ export function createOpenClawServiceProcessManager(
 	});
 	const gatewayUrl = gatewaySettings.gatewayUrl;
 	const port = parseGatewayPort(gatewayUrl);
-	const command = asString(config.command) ?? process.env.OPENCLAW_COMMAND?.trim() ?? "openclaw";
+	const configuredCommand = asString(config.command) ?? process.env.OPENCLAW_COMMAND?.trim();
+	const command = configuredCommand ?? resolveOpenClawExecutable()?.executablePath ?? "openclaw";
 	const managedDisabled = isManagedDisabled(config.managed) || isManagedDisabled(process.env.OPENCLAW_MANAGED);
 
 	const stop = async (): Promise<void> => {
@@ -138,7 +141,7 @@ export function createOpenClawServiceProcessManager(
 				return;
 			}
 			mkdirSync(join(options.homeDir, "runtime"), { recursive: true });
-			const launchCommand = resolveNodeCliLaunchCommand(command);
+			const launchCommand = resolveNodeCliLaunchCommand(command, { candidatePaths: getOpenClawCliCandidatePaths() });
 			span("openclaw_command_resolved", { executablePath: launchCommand.executablePath });
 			const env = {
 				...process.env,

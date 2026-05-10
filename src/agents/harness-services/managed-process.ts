@@ -18,6 +18,7 @@ export interface PythonCliLaunchCommand extends ResolvedExecutable {
 	argsPrefix: string[];
 }
 
+const DEFAULT_OPENCLAW_PREFIX = join(homedir(), ".openclaw");
 const loginShellPathCache = new Map<string, string | undefined>();
 
 export function asString(value: unknown): string | undefined {
@@ -81,6 +82,33 @@ export function resolveExecutable(
 		}
 	}
 	return { executablePath: command, pathEnv };
+}
+
+export function getOpenClawCliCandidatePaths(env: NodeJS.ProcessEnv = process.env): string[] {
+	const configuredPrefix = env.OPENCLAW_PREFIX?.trim();
+	return uniqueStrings([
+		...(configuredPrefix ? [join(configuredPrefix, "bin", "openclaw")] : []),
+		join(DEFAULT_OPENCLAW_PREFIX, "bin", "openclaw"),
+	]);
+}
+
+export function resolveOpenClawExecutable(env: NodeJS.ProcessEnv = process.env): ResolvedExecutable | undefined {
+	const command = env.OPENCLAW_COMMAND?.trim() || "openclaw";
+	const configuredPrefix = env.OPENCLAW_PREFIX?.trim();
+	if (configuredPrefix && !command.includes("/") && !command.includes("\\")) {
+		const prefixedExecutable = join(configuredPrefix, "bin", "openclaw");
+		if (existsSync(prefixedExecutable)) {
+			return resolveExecutable(prefixedExecutable, { env });
+		}
+	}
+	const resolved = resolveExecutable(command, {
+		env,
+		candidatePaths: getOpenClawCliCandidatePaths(env),
+	});
+	if (command.includes("/") || command.includes("\\") || resolved.executablePath !== command || existsSync(resolved.executablePath)) {
+		return resolved;
+	}
+	return undefined;
 }
 
 export function resolveNodeCliLaunchCommand(command: string, options: { candidatePaths?: string[] } = {}): NodeCliLaunchCommand {
@@ -153,7 +181,7 @@ function resolveNodeExecutable(env: NodeJS.ProcessEnv, pathEnv: string | undefin
 	if (found.status === 0 && nodePath && isNodeExecutableName(nodePath) && existsSync(nodePath)) {
 		return nodePath;
 	}
-	for (const nodePath of getNodeExecutableFallbacks()) {
+	for (const nodePath of getNodeExecutableFallbacks(env)) {
 		if (existsSync(nodePath)) {
 			return nodePath;
 		}
@@ -196,15 +224,28 @@ function getNodeExecutableCandidatesForCli(cliPath: string | undefined): string[
 	}
 	const candidates = [
 		join(dirname(cliPath), "node"),
+		...getOpenClawNodeExecutableCandidatesFromWrapperPath(cliPath),
 		...getNodeExecutableCandidatesFromNpmModulePath(cliPath),
 	];
 	try {
 		const realCliPath = realpathSync(cliPath);
-		candidates.push(join(dirname(realCliPath), "node"), ...getNodeExecutableCandidatesFromNpmModulePath(realCliPath));
+		candidates.push(
+			join(dirname(realCliPath), "node"),
+			...getOpenClawNodeExecutableCandidatesFromWrapperPath(realCliPath),
+			...getNodeExecutableCandidatesFromNpmModulePath(realCliPath),
+		);
 	} catch {
 		// The direct CLI path is enough when the symlink target is unavailable.
 	}
 	return uniqueStrings(candidates).filter(isNodeExecutableName);
+}
+
+function getOpenClawNodeExecutableCandidatesFromWrapperPath(cliPath: string): string[] {
+	if (!/(?:^|[/\\])openclaw(?:\.cmd)?$/.test(cliPath) || dirname(cliPath).split(sep).at(-1) !== "bin") {
+		return [];
+	}
+	const prefix = dirname(dirname(cliPath));
+	return getVersionedNodeExecutableFallbacks(join(prefix, "tools"), "bin/node");
 }
 
 function getPythonExecutableCandidatesForCli(cliPath: string): string[] {
@@ -241,9 +282,12 @@ function getPythonExecutableFromShebang(cliPath: string): string | undefined {
 	}
 }
 
-function getNodeExecutableFallbacks(): string[] {
+function getNodeExecutableFallbacks(env: NodeJS.ProcessEnv = process.env): string[] {
+	const configuredPrefix = env.OPENCLAW_PREFIX?.trim();
 	const candidates = [
 		join(homedir(), ".nvm", "current", "bin", "node"),
+		...(configuredPrefix ? getVersionedNodeExecutableFallbacks(join(configuredPrefix, "tools"), "bin/node") : []),
+		...getVersionedNodeExecutableFallbacks(join(DEFAULT_OPENCLAW_PREFIX, "tools"), "bin/node"),
 		join(homedir(), ".volta", "bin", "node"),
 		...getVersionedNodeExecutableFallbacks(join(homedir(), ".fnm", "node-versions"), "installation/bin/node"),
 		...getVersionedNodeExecutableFallbacks(join(homedir(), ".local", "share", "mise", "installs", "node"), "bin/node"),
@@ -302,7 +346,7 @@ function getPythonGlobalCliFallbacks(command: string): string[] {
 function getVersionedNodeExecutableFallbacks(rootDir: string, nodeRelativePath: string): string[] {
 	try {
 		return readdirSync(rootDir)
-			.filter((entry) => entry.startsWith("v") || /^\d/.test(entry))
+			.filter(isVersionedRuntimeDir)
 			.sort(compareNodeVersionDescending)
 			.map((entry) => join(rootDir, entry, nodeRelativePath));
 	} catch {
@@ -313,7 +357,7 @@ function getVersionedNodeExecutableFallbacks(rootDir: string, nodeRelativePath: 
 function getVersionedNodeGlobalCliFallbacks(rootDir: string, command: string, binRelativePath = "bin"): string[] {
 	try {
 		return readdirSync(rootDir)
-			.filter((entry) => entry.startsWith("v") || /^\d/.test(entry))
+			.filter(isVersionedRuntimeDir)
 			.sort(compareNodeVersionDescending)
 			.map((entry) => join(rootDir, entry, binRelativePath, command));
 	} catch {
@@ -326,7 +370,7 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function compareNodeVersionDescending(left: string, right: string): number {
-	const parse = (value: string): number[] => value.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+	const parse = (value: string): number[] => value.replace(/^node-v/, "").replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
 	const leftParts = parse(left);
 	const rightParts = parse(right);
 	for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
@@ -336,6 +380,10 @@ function compareNodeVersionDescending(left: string, right: string): number {
 		}
 	}
 	return 0;
+}
+
+function isVersionedRuntimeDir(entry: string): boolean {
+	return entry.startsWith("v") || entry.startsWith("node-v") || /^\d/.test(entry);
 }
 
 export function pipePrefixedLogs(

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { resolveNodeCliLaunchCommand, resolvePythonCliLaunchCommand, stopManagedChildProcess } from "./managed-process.js";
+import {
+	getOpenClawCliCandidatePaths,
+	resolveNodeCliLaunchCommand,
+	resolveOpenClawExecutable,
+	resolvePythonCliLaunchCommand,
+	stopManagedChildProcess,
+} from "./managed-process.js";
 
 function isPidRunning(pid: number): boolean {
 	try {
@@ -32,6 +38,7 @@ describe("node cli launch resolution", () => {
 	function withElectron<T>(fn: () => T): T {
 		const previousElectron = process.versions.electron;
 		const previousNpmNodeExecPath = process.env.npm_node_execpath;
+		const previousExecPath = process.execPath;
 		try {
 			(process.versions as NodeJS.ProcessVersions & { electron?: string }).electron = "test";
 			return fn();
@@ -47,6 +54,7 @@ describe("node cli launch resolution", () => {
 			} else {
 				process.env.npm_node_execpath = previousNpmNodeExecPath;
 			}
+			process.execPath = previousExecPath;
 		}
 	}
 
@@ -107,6 +115,61 @@ describe("node cli launch resolution", () => {
 			const command = withElectron(() => resolveNodeCliLaunchCommand(cliPath));
 
 			assert.equal(command.executablePath, prefixNodePath);
+			assert.deepEqual(command.argsPrefix, [cliPath]);
+			assert.equal(command.electronRunAsNode, false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("finds install-cli OpenClaw wrappers under OPENCLAW_PREFIX", () => {
+		const root = mkdtempSync(join(tmpdir(), "pie-openclaw-prefix-"));
+		try {
+			const binDir = join(root, "bin");
+			mkdirSync(binDir, { recursive: true });
+			const cliPath = join(binDir, "openclaw");
+			writeFileSync(cliPath, "#!/usr/bin/env node\nconsole.log('ok');\n", "utf8");
+
+			const command = resolveOpenClawExecutable({ ...process.env, OPENCLAW_PREFIX: root, PATH: "" });
+
+			assert.equal(command?.executablePath, cliPath);
+			assert.deepEqual(getOpenClawCliCandidatePaths({ OPENCLAW_PREFIX: root }), [cliPath, join(homedir(), ".openclaw", "bin", "openclaw")]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("uses the Node runtime bundled by OpenClaw install-cli", () => {
+		const root = mkdtempSync(join(tmpdir(), "pie-openclaw-node-"));
+		try {
+			const binDir = join(root, "bin");
+			const nodeBinDir = join(root, "tools", "node-v22.22.0", "bin");
+			mkdirSync(binDir, { recursive: true });
+			mkdirSync(nodeBinDir, { recursive: true });
+			const cliPath = join(binDir, "openclaw");
+			const nodePath = join(nodeBinDir, "node");
+			writeFileSync(cliPath, "#!/usr/bin/env node\nconsole.log('ok');\n", "utf8");
+			writeFileSync(nodePath, "", "utf8");
+			delete process.env.npm_node_execpath;
+			const previousOpenClawPrefix = process.env.OPENCLAW_PREFIX;
+
+			const command = withElectron(() => {
+				process.execPath = "/Applications/Pie.app/Contents/MacOS/Pie";
+				process.env.OPENCLAW_PREFIX = root;
+				try {
+					const resolvedOpenClaw = resolveOpenClawExecutable();
+					assert.ok(resolvedOpenClaw);
+					return resolveNodeCliLaunchCommand(resolvedOpenClaw.executablePath, { candidatePaths: getOpenClawCliCandidatePaths() });
+				} finally {
+					if (previousOpenClawPrefix === undefined) {
+						delete process.env.OPENCLAW_PREFIX;
+					} else {
+						process.env.OPENCLAW_PREFIX = previousOpenClawPrefix;
+					}
+				}
+			});
+
+			assert.equal(command.executablePath, nodePath);
 			assert.deepEqual(command.argsPrefix, [cliPath]);
 			assert.equal(command.electronRunAsNode, false);
 		} finally {
