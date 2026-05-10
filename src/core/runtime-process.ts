@@ -146,3 +146,20 @@ export function isLiveRuntimeProcessRecord(homeDir: string, record: RuntimeProce
 	const command = readProcessCommand(record.pid);
 	return Boolean(command && isRuntimeProcessIdentityCommand(command, homeDir));
 }
+
+export function readLiveRuntimeProcessRecord(homeDir: string): RuntimeProcessRecord | undefined {
+	const record = readRuntimeProcessRecord(homeDir);
+	if (record) {
+		if (isLiveRuntimeProcessRecord(homeDir, record)) {
+			return record;
+		}
+		clearRuntimeProcessRecord(homeDir);
+	}
+
+	const persistedRecord = readRuntimeStateRecord(homeDir)?.process;
+	if (!persistedRecord || !isLiveRuntimeProcessRecord(homeDir, persistedRecord)) {
+		return undefined;
+	}
+	writeRuntimeProcessRecord(homeDir, persistedRecord);
+	return persistedRecord;
+}

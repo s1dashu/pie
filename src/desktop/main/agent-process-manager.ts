@@ -30,6 +30,7 @@ export interface AgentProcessManagerOptions {
 	getAgentName?(agentId: string): Promise<string | undefined> | string | undefined;
 	getAgentHarnessKind?(agentId: string): Promise<string | undefined> | string | undefined;
 	getAgentStartLabel?(agentId: string): Promise<string | undefined> | string | undefined;
+	getDeveloperMode?(): Promise<boolean> | boolean;
 	getRuntimeEnvironment(agentId: string): Promise<AgentRuntimeEnvironment>;
 	recordRuntimeEvent(agentId: string, event: "start" | "stop", reason?: string): Promise<void> | void;
 	recordRuntimeStateChange?(agentId: string, reason?: string): Promise<void> | void;
@@ -145,6 +146,7 @@ export class AgentProcessManager {
 		this.agentEnvironments.set(agentId, environment);
 		ensureRuntimeEnvironment(environment);
 		const [gatewayPort] = await getDistinctAvailableLocalPorts(1);
+		const developerMode = await this.options.getDeveloperMode?.();
 		this.appendAgentLog(agentId, "system", "starting bot");
 		const readyPromise = this.createReadyPromise(agentId);
 		span("desktop_agent_spawn_begin", { execPath: command.execPath });
@@ -153,6 +155,7 @@ export class AgentProcessManager {
 			...(runsWithPackagedElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 			PIE_AGENT_HOME: home,
 			PIE_GATEWAY_PORT: String(gatewayPort),
+			PIE_DEVELOPER_MODE: developerMode ? "1" : "0",
 			PIE_DESKTOP_LOGS: "1",
 			...(harnessKind === "openclaw" ? { PIE_MANAGED_HARNESS_SERVICE: "external" } : {}),
 		};
@@ -177,18 +180,23 @@ export class AgentProcessManager {
 		}
 		child.stdout?.on("data", (chunk) => {
 			const text = String(chunk);
-			this.appendAgentLogChunk(agentId, "stdout", text);
+			this.appendAgentLogChunk(agentId, "stdout", text, child);
 		});
 		child.stderr?.on("data", (chunk) => {
 			const text = String(chunk);
-			this.appendAgentLogChunk(agentId, "stderr", text);
+			this.appendAgentLogChunk(agentId, "stderr", text, child);
 			console.error(`[agent:${agentId}] ${text.trimEnd()}`);
 		});
 		this.runningAgents.set(agentId, child);
 		this.agentStartedAt.set(agentId, Date.now());
 		child.once("exit", () => {
+			if (this.runningAgents.get(agentId) !== child) {
+				this.flushAgentLogBuffers(agentId, child);
+				this.appendAgentLog(agentId, "system", "previous bot process exited", child);
+				return;
+			}
 			lifecycle.mark("stopped", "exit");
-			this.flushAgentLogBuffers(agentId);
+			this.flushAgentLogBuffers(agentId, child);
 			this.forgetAgentRuntimeState(agentId);
 			clearRuntimeProcessRecord(home);
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
@@ -199,8 +207,13 @@ export class AgentProcessManager {
 		});
 		child.once("error", (error: unknown, location: unknown) => {
 			const errorMessage = error instanceof Error ? error.message : [error, location].filter(Boolean).join(": ") || String(error);
+			if (this.runningAgents.get(agentId) !== child) {
+				this.flushAgentLogBuffers(agentId, child);
+				this.appendAgentLog(agentId, "stderr", `previous bot process error: ${errorMessage}`, child);
+				return;
+			}
 			lifecycle.mark("failed", errorMessage);
-			this.flushAgentLogBuffers(agentId);
+			this.flushAgentLogBuffers(agentId, child);
 			this.forgetAgentRuntimeState(agentId);
 			clearRuntimeProcessRecord(home);
 			this.persistRuntimeStateForEnvironment(home, environment, lifecycle.snapshot);
@@ -295,13 +308,19 @@ export class AgentProcessManager {
 		return label || this.getAgentLabel(agentId);
 	}
 
-	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string): void {
+	private appendAgentLog(agentId: string, stream: AgentLogEntry["stream"], text: string, sourceChild?: ChildProcess): void {
 		const cleanText = stripAnsiControlSequences(text);
 		if (!cleanText) {
 			return;
 		}
-		this.updateLifecycleFromLog(agentId, cleanText);
-		if (stream === "stdout" && isRuntimeReadyLog(cleanText)) {
+		if (!sourceChild || this.runningAgents.get(agentId) === sourceChild) {
+			this.updateLifecycleFromLog(agentId, cleanText);
+		}
+		if (
+			stream === "stdout" &&
+			isRuntimeReadyLog(cleanText) &&
+			(!sourceChild || this.runningAgents.get(agentId) === sourceChild)
+		) {
 			this.markAgentReady(agentId);
 		}
 		if (stream === "stdout") {
@@ -479,7 +498,7 @@ export class AgentProcessManager {
 		return buffer;
 	}
 
-	private appendAgentLogChunk(agentId: string, stream: "stdout" | "stderr", chunk: string): void {
+	private appendAgentLogChunk(agentId: string, stream: "stdout" | "stderr", chunk: string, sourceChild?: ChildProcess): void {
 		const buffer = this.getAgentLogBuffer(agentId);
 		buffer[stream] += chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
@@ -491,22 +510,22 @@ export class AgentProcessManager {
 			const line = buffer[stream].slice(0, newlineIndex);
 			buffer[stream] = buffer[stream].slice(newlineIndex + 1);
 			if (line.trim()) {
-				this.appendAgentLog(agentId, stream, line);
+				this.appendAgentLog(agentId, stream, line, sourceChild);
 			}
 		}
 	}
 
-	private flushAgentLogBuffers(agentId: string): void {
+	private flushAgentLogBuffers(agentId: string, sourceChild?: ChildProcess): void {
 		this.flushAgentStreamLog(agentId);
 		const buffer = this.agentLogBuffers.get(agentId);
 		if (!buffer) {
 			return;
 		}
 		if (buffer.stdout.trim()) {
-			this.appendAgentLog(agentId, "stdout", buffer.stdout);
+			this.appendAgentLog(agentId, "stdout", buffer.stdout, sourceChild);
 		}
 		if (buffer.stderr.trim()) {
-			this.appendAgentLog(agentId, "stderr", buffer.stderr);
+			this.appendAgentLog(agentId, "stderr", buffer.stderr, sourceChild);
 		}
 		this.agentLogBuffers.delete(agentId);
 	}

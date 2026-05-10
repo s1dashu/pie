@@ -1,6 +1,5 @@
 import { isChannelAvailableForRelease } from "../core/channel-availability.js";
 import type { AgentProfile, ChannelKind } from "../core/config-store.js";
-import { readDesktopSettings } from "../desktop/main/desktop-settings.js";
 import { loadConfig as loadDiscordConfig } from "../channels/discord/config.js";
 import { createDiscordBotRuntime } from "../channels/discord/main.js";
 import { loadConfig as loadFeishuConfig } from "../channels/feishu/config.js";
@@ -11,9 +10,13 @@ import { loadConfig as loadTelegramConfig } from "../channels/telegram/config.js
 import { createTelegramBotRuntime } from "../channels/telegram/main.js";
 import { loadConfig as loadWechatConfig } from "../channels/wechat/config.js";
 import { createWechatBotRuntime } from "../channels/wechat/main.js";
-import type { AgentTurnPort, ManagedRuntime } from "./types.js";
+import type { AgentRunPort, ManagedRuntime } from "./types.js";
 
-export type ChannelRuntime = ManagedRuntime & AgentTurnPort & { setShutdownExitCode?: (code: number) => void };
+export type ChannelRuntime = ManagedRuntime & AgentRunPort & { setShutdownExitCode?: (code: number) => void };
+
+export interface ChannelRuntimeOptions {
+	developerMode?: boolean;
+}
 
 function getEnabledChannelKinds(profile: AgentProfile | undefined): ChannelKind[] {
 	const enabledChannels = profile?.channels.filter((channel) => channel.enabled !== false) ?? [];
@@ -39,8 +42,8 @@ function createChannelRuntime(kind: ChannelKind): ChannelRuntime | undefined {
 	return undefined;
 }
 
-export function createChannelRuntimes(profile: AgentProfile | undefined): ChannelRuntime[] {
-	const developerMode = readDesktopSettings().developerMode;
+export function createChannelRuntimes(profile: AgentProfile | undefined, options: ChannelRuntimeOptions = {}): ChannelRuntime[] {
+	const developerMode = options.developerMode === true;
 	const runtimes: ChannelRuntime[] = [];
 	for (const kind of getEnabledChannelKinds(profile)) {
 		if (!isChannelAvailableForRelease(kind, { developerMode })) {
