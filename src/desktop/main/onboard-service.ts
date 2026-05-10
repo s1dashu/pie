@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -24,8 +24,10 @@ import {
 } from "../../agents/adapters/codex-cli.js";
 import { checkCodexCliRuntime } from "../../agents/harness-services/codex.js";
 import { resolveHermesLaunchCommand } from "../../agents/harness-services/hermes.js";
+import { resolveOpenClawExecutable } from "../../agents/harness-services/managed-process.js";
 import {
 	getOpenClawAgentIdForPieProfile,
+	listImportableOpenClawAgentProfiles,
 	readOpenClawGatewaySettings,
 	toOpenClawModelRef,
 } from "../../agents/openclaw-models.js";
@@ -62,6 +64,7 @@ import type {
 	DesktopFeishuAppCredentials,
 	DesktopCodexDiagnostic,
 	DesktopCodexModelOption,
+	ImportableHarnessProfile,
 	DesktopModelOption,
 	DesktopRuntimeDiagnostic,
 	DesktopWechatCredentials,
@@ -203,6 +206,10 @@ function runResolvedCommand(command: string, args: string[], options: { pathEnv?
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellCommand(command: string, args: string[] = []): string {
+	return [command, ...args].map(shellQuote).join(" ");
 }
 
 function hermesCheckoutDir(): string {
@@ -461,12 +468,8 @@ function asManagedRuntimeStatus(
 }
 
 async function checkOpenClawEnvironmentForDesktop(): Promise<DesktopRuntimeDiagnostic> {
-	const executablePath = await resolveCommandPath("openclaw", [
-		openClawBinPath(),
-		"/opt/homebrew/bin/openclaw",
-		"/usr/local/bin/openclaw",
-	]);
-	if (!executablePath) {
+	const executable = resolveOpenClawExecutable();
+	if (!executable) {
 		return {
 			installed: false,
 			ready: false,
@@ -474,12 +477,12 @@ async function checkOpenClawEnvironmentForDesktop(): Promise<DesktopRuntimeDiagn
 			installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
 		};
 	}
-	const version = await runLoginShellCommand(`${shellQuote(executablePath)} --version`);
+	const version = await runResolvedCommand(executable.executablePath, ["--version"], { pathEnv: executable.pathEnv });
 	const versionText = stripAnsi(version.stdout || version.stderr).trim();
 	return {
 		installed: true,
 		ready: version.code === 0,
-		executablePath,
+		executablePath: executable.executablePath,
 		version: versionText || undefined,
 		error: version.code === 0 ? undefined : stripAnsi(version.stderr || version.stdout).trim() || "OpenClaw CLI exists but did not run successfully.",
 		installCommand: ["bash", "-lc", OPENCLAW_INSTALL_COMMAND],
@@ -524,7 +527,10 @@ export async function upgradeManagedRuntimeForDesktop(kind: DesktopManagedRuntim
 	if (!diagnostic.installed) {
 		return asManagedRuntimeStatus(kind, await installOpenClawRuntimeForDesktop());
 	}
-	const upgrade = await runLoginShellCommand("openclaw update");
+	const executable = resolveOpenClawExecutable();
+	const upgrade = executable
+		? await runResolvedCommand(executable.executablePath, ["update"], { pathEnv: executable.pathEnv })
+		: await runLoginShellCommand("openclaw update");
 	if (upgrade.code !== 0) {
 		throw new Error(stripAnsi(upgrade.stderr || upgrade.stdout).trim() || "OpenClaw 升级失败。");
 	}
@@ -814,6 +820,221 @@ export function beginAgentCreation(): AgentCreationSession {
 	};
 }
 
+function splitOpenClawModelRef(modelRef: string | undefined): { provider?: string; model?: string } {
+	const clean = modelRef?.trim();
+	if (!clean) {
+		return {};
+	}
+	const slashIndex = clean.indexOf("/");
+	if (slashIndex <= 0 || slashIndex >= clean.length - 1) {
+		return { model: clean };
+	}
+	return {
+		provider: clean.slice(0, slashIndex),
+		model: clean.slice(slashIndex + 1),
+	};
+}
+
+function readHermesConfigText(profileDir: string): string {
+	try {
+		return readFileSync(join(profileDir, "config.yaml"), "utf8");
+	} catch {
+		return "";
+	}
+}
+
+function readHermesConfigScalar(configText: string, section: string, key: string): string | undefined {
+	const lines = configText.split(/\r?\n/);
+	let inSection = false;
+	for (const line of lines) {
+		if (/^\S[^:]*:\s*$/.test(line)) {
+			inSection = line.trim() === `${section}:`;
+			continue;
+		}
+		if (!inSection) {
+			continue;
+		}
+		const match = line.match(new RegExp(`^\\s+${key}:\\s*(.+?)\\s*$`));
+		const value = match?.[1]?.trim().replace(/^['"]|['"]$/g, "");
+		if (value) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function readHermesProfileModel(profileDir: string): { provider?: string; model?: string; port?: string } {
+	const configText = readHermesConfigText(profileDir);
+	return {
+		provider: readHermesConfigScalar(configText, "model", "provider"),
+		model: readHermesConfigScalar(configText, "model", "default") ?? readHermesConfigScalar(configText, "model", "model"),
+		port: readHermesConfigScalar(configText, "api_server", "port"),
+	};
+}
+
+function getOfficialHermesProfilesRoot(): string {
+	return join(homedir(), ".hermes", "profiles");
+}
+
+function getOfficialPieHermesProfileHome(profileId: string): string {
+	const safe = profileId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "");
+	return join(getOfficialHermesProfilesRoot(), `pie-${safe || "profile"}`);
+}
+
+export interface ClaimedHermesHome {
+	profileId: string;
+	displayName: string;
+	homeDir: string;
+	hermesHome: string;
+}
+
+function normalizeHermesHomePath(path: string): string {
+	return resolve(path.trim());
+}
+
+function getProfileHermesHome(profileId: string, entryHome: string): string | undefined {
+	try {
+		const homeDir = resolve(getDefaultPieRootDir(), entryHome);
+		const profile = getStoredProfile(loadConfigStore(homeDir));
+		if (profile?.harness.kind !== "hermes") {
+			return undefined;
+		}
+		const configuredHermesHome = typeof profile.harness.config?.hermesHome === "string"
+			? profile.harness.config.hermesHome.trim()
+			: "";
+		return normalizeHermesHomePath(configuredHermesHome || join(homeDir, "hermes"));
+	} catch {
+		return undefined;
+	}
+}
+
+export function findPieProfileClaimingHermesHome(
+	hermesHome: string | undefined,
+	options?: { excludeProfileId?: string },
+): ClaimedHermesHome | undefined {
+	if (!hermesHome?.trim()) {
+		return undefined;
+	}
+	const targetHome = normalizeHermesHomePath(hermesHome);
+	const registry = loadProfileRegistry();
+	for (const [profileId, entry] of Object.entries(registry.profiles)) {
+		if (profileId === options?.excludeProfileId) {
+			continue;
+		}
+		const claimedHome = getProfileHermesHome(profileId, entry.home);
+		if (!claimedHome || claimedHome !== targetHome) {
+			continue;
+		}
+		return {
+			profileId,
+			displayName: entry.displayName || profileId,
+			homeDir: resolve(getDefaultPieRootDir(), entry.home),
+			hermesHome: claimedHome,
+		};
+	}
+	return undefined;
+}
+
+function appendHermesProfile(
+	profiles: ImportableHarnessProfile[],
+	seen: Set<string>,
+	profile: ImportableHarnessProfile,
+): void {
+	if (seen.has(profile.id)) {
+		return;
+	}
+	seen.add(profile.id);
+	profiles.push(profile);
+}
+
+function listImportableHermesProfiles(): ImportableHarnessProfile[] {
+	const root = join(homedir(), ".hermes");
+	const profiles: ImportableHarnessProfile[] = [];
+	const seen = new Set<string>();
+	if (existsSync(root)) {
+		const config = readHermesProfileModel(root);
+		appendHermesProfile(profiles, seen, {
+			id: "default",
+			label: "default",
+			harness: "hermes",
+			path: root,
+			isDefault: true,
+			provider: config.provider,
+			model: config.model,
+		});
+	}
+	const profilesRoot = getOfficialHermesProfilesRoot();
+	if (existsSync(profilesRoot)) {
+		for (const entry of readdirSync(profilesRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory() || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(entry.name)) {
+				continue;
+			}
+			const path = join(profilesRoot, entry.name);
+			const config = readHermesProfileModel(path);
+			appendHermesProfile(profiles, seen, {
+				id: entry.name,
+				label: entry.name,
+				harness: "hermes",
+				path,
+				provider: config.provider,
+				model: config.model,
+			});
+		}
+	}
+	const pieRegistry = loadProfileRegistry();
+	for (const [profileId, entry] of Object.entries(pieRegistry.profiles)) {
+		try {
+			const homeDir = resolve(getDefaultPieRootDir(), entry.home);
+			const profile = getStoredProfile(loadConfigStore(homeDir));
+			if (profile?.harness.kind !== "hermes") {
+				continue;
+			}
+			const configuredHermesHome = typeof profile.harness.config?.hermesHome === "string"
+				? profile.harness.config.hermesHome.trim()
+				: "";
+			if (configuredHermesHome && configuredHermesHome.startsWith(profilesRoot)) {
+				continue;
+			}
+			const legacyHermesHome = configuredHermesHome || join(homeDir, "hermes");
+			if (!existsSync(legacyHermesHome)) {
+				continue;
+			}
+			const config = readHermesProfileModel(legacyHermesHome);
+			appendHermesProfile(profiles, seen, {
+				id: `pie-${profileId}`,
+				label: `${entry.displayName || profileId} (${profileId})`,
+				harness: "hermes",
+				path: legacyHermesHome,
+				provider: config.provider ?? profile.harness.model?.provider,
+				model: config.model ?? profile.harness.model?.model,
+			});
+		} catch {
+			// Ignore incomplete legacy Pie profile homes while listing importable Hermes profiles.
+		}
+	}
+	return profiles;
+}
+
+export function listImportableHarnessProfiles(kind: "openclaw" | "hermes"): ImportableHarnessProfile[] {
+	if (kind === "openclaw") {
+		return listImportableOpenClawAgentProfiles().map((profile) => {
+			const model = splitOpenClawModelRef(profile.modelRef);
+			return {
+				id: profile.id,
+				label: profile.id,
+				harness: "openclaw",
+				workDir: profile.workspace,
+				path: profile.workspace,
+				agentDir: profile.agentDir,
+				modelRef: profile.modelRef,
+				provider: model.provider,
+				model: model.model,
+			};
+		});
+	}
+	return listImportableHermesProfiles();
+}
+
 export async function checkCodexEnvironmentForDesktop(): Promise<DesktopCodexDiagnostic> {
 	try {
 		return await checkCodexAppServerEnvironment();
@@ -908,7 +1129,7 @@ export async function checkHermesEnvironmentForDesktop(): Promise<DesktopRuntime
 		};
 	}
 	return {
-		installed: version.code === 0,
+		installed: true,
 		ready: version.code === 0,
 		executablePath,
 		version: versionText,
@@ -928,9 +1149,10 @@ export async function installHermesForDesktop(
 		activeHermesInstalls.set(sessionId, context);
 		emit({ sessionId, type: "status", source: "hermes-install", message: existing.version ? `检测到 Hermes ${existing.version}，准备升级...` : "检测到 Hermes，但版本不可用，准备升级..." });
 		try {
+			const updateCommand = resolveHermesLaunchCommand();
 			await runHermesInstallCommandWithDirtyCheckoutRecovery({
 				sessionId,
-				command: "hermes update",
+				command: shellCommand(updateCommand.executablePath, [...updateCommand.argsPrefix, "update"]),
 				emit,
 				startMessage: `正在升级 Hermes 到 ${MIN_HERMES_GOOD_DISPLAY_VERSION}+...`,
 				doneMessage: "Hermes 已升级。",
@@ -1422,6 +1644,19 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	}
 	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
 	const openClawModelRef = draft.harness === "openclaw" ? toOpenClawModelRef(provider, model) : undefined;
+	const newHermesHome = draft.harness === "hermes" ? getOfficialPieHermesProfileHome(profileId) : undefined;
+	const importedProfile = draft.importedHarnessProfileId && (draft.harness === "openclaw" || draft.harness === "hermes")
+		? listImportableHarnessProfiles(draft.harness).find((item) => item.id === draft.importedHarnessProfileId)
+		: undefined;
+	if (draft.importedHarnessProfileId && !importedProfile) {
+		throw new Error(`未找到可导入的 ${draft.harness} profile: ${draft.importedHarnessProfileId}`);
+	}
+	if (draft.harness === "hermes" && importedProfile?.path) {
+		const owner = findPieProfileClaimingHermesHome(importedProfile.path, { excludeProfileId: profileId });
+		if (owner) {
+			throw new Error(`这个 Hermes profile 已被 Pie Agent「${owner.displayName}」使用，不能重复导入。请直接启动原 Agent，或先复制成新的 Hermes profile 后再导入。`);
+		}
+	}
 
 	const profile = createAgentProfile({
 		harness: {
@@ -1442,14 +1677,17 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 								command: "hermes",
 								args: ["gateway", "run", "--replace"],
 								managed: true,
+								hermesHome: importedProfile?.path ?? newHermesHome,
+								...(importedProfile ? { importedProfileId: importedProfile.id } : {}),
 							},
 						}
 					: draft.harness === "openclaw"
 						? {
 								config: {
 									gatewayUrl: SHARED_OPENCLAW_GATEWAY_URL,
-									agentId: getOpenClawAgentIdForPieProfile(profileId),
-									modelRef: openClawModelRef,
+									agentId: importedProfile?.id ?? getOpenClawAgentIdForPieProfile(profileId),
+									modelRef: importedProfile?.modelRef ?? openClawModelRef,
+									...(importedProfile ? { importedAgent: true, importedProfileId: importedProfile.id } : {}),
 									managed: false,
 								},
 							}
@@ -1538,36 +1776,43 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 		savedEnv.GATEWAY_ALLOW_ALL_USERS = "true";
 		savedEnv.HERMES_INFERENCE_PROVIDER = hermesProvider;
 		savedEnv.HERMES_INFERENCE_MODEL = model;
-		const hermesHome = join(homeDir, "hermes");
-		mkdirSync(hermesHome, { recursive: true });
-		writeFileSync(
-			join(hermesHome, "config.yaml"),
-			[
-				"model:",
-				`  provider: ${hermesProvider}`,
-				`  default: ${model}`,
-				"platforms:",
-				"  api_server:",
-				"    enabled: true",
-				"    host: 127.0.0.1",
-				`    port: ${hermesApiServerPort}`,
-				"",
-			].join("\n"),
-			"utf8",
-		);
+		if (!importedProfile) {
+			const hermesHome = newHermesHome ?? join(homeDir, "hermes");
+			mkdirSync(hermesHome, { recursive: true });
+			writeFileSync(
+				join(hermesHome, "config.yaml"),
+				[
+					"model:",
+					`  provider: ${hermesProvider}`,
+					`  default: ${model}`,
+					"platforms:",
+					"  api_server:",
+					"    enabled: true",
+					"    host: 127.0.0.1",
+					`    port: ${hermesApiServerPort}`,
+					"",
+				].join("\n"),
+				"utf8",
+			);
+		}
 	}
 	const envKey = getProviderCredentialEnv(provider);
 	if (envKey && apiKey) {
 		savedEnv[envKey] = apiKey;
 	}
 	upsertAgentEnv(savedEnv, homeDir);
-	registerProfileHome(profileId, {
-		displayName:
-			draft.feishu?.appName?.trim() ||
+	const importedProfileNeedsLocalIdentity = channels.includes("wechat") || channels.includes("discord");
+	const displayName = importedProfile
+		? importedProfileNeedsLocalIdentity
+			? draft.name?.trim() || importedProfile.id
+			: draft.feishu?.appName?.trim() || importedProfile.id
+		: draft.feishu?.appName?.trim() ||
 			draft.discord?.botName?.trim() ||
 			draft.telegram?.botUsername?.trim() ||
 			draft.name?.trim() ||
-			profileId,
+			profileId;
+	registerProfileHome(profileId, {
+		displayName,
 		desiredState: "paused",
 		selected: true,
 	});

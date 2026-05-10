@@ -18,6 +18,7 @@ import {
 	getPrimarySlackChannel,
 	getPrimaryTelegramChannel,
 	getPrimaryWechatChannel,
+	getImBehavior,
 	getProfileModel,
 	loadConfigStore,
 	saveConfigStore,
@@ -27,12 +28,12 @@ import {
 } from "../../core/config-store.js";
 import { appendAgentLogEntry, pruneAgentLogEntries, readAgentLogEntries } from "../../core/agent-logs.js";
 import { appendAgentUsageEvent, pruneAgentUsageEvents, readAgentUsageEvents, summarizeAgentUsage } from "../../core/usage-stats.js";
+import { appendAgentSessionEvent, clearAgentSessionEvents, readAgentSessionEvents } from "../../agents/event-sink.js";
 import { resolveSkillSources } from "../../agents/skills.js";
 import {
 	clearRuntimeProcessRecord,
-	isLiveRuntimeProcessRecord,
 	isPidRunning,
-	readRuntimeProcessRecord,
+	readLiveRuntimeProcessRecord,
 	readRuntimeStateRecord,
 } from "../../core/runtime-process.js";
 import { LarkClient } from "../../channels/feishu/platform/core/lark-client.js";
@@ -40,10 +41,14 @@ import type {
 	AgentChangeEvent,
 	AgentCreationDraft,
 	AgentAvatarUpload,
+	AgentChatClearResult,
+	AgentChatSendResult,
+	AgentChatSessionCommandResult,
 	AgentDeleteEvent,
 	AgentDetails,
 	AgentDesiredState,
 	AgentDraft,
+	AgentEventLogEntry,
 	AgentLogEntry,
 	AgentOnboardEvent,
 	AgentResourceStats,
@@ -82,15 +87,16 @@ import {
 	installHermesForDesktop,
 	uninstallManagedRuntimeForDesktop,
 	upgradeManagedRuntimeForDesktop,
+	findPieProfileClaimingHermesHome,
 	loadHermesModelCatalog,
 	loadCodexModelCatalog,
 	loadOpenClawModelCatalog,
 	loadModelCatalog,
 	loadModelOptions,
+	listImportableHarnessProfiles,
 	openCodexLoginForDesktop,
 	toHermesInferenceProvider,
 } from "./onboard-service.js";
-import { OUSIA_SYSTEM_PROMPT_FILE } from "../../frameworks/ousia/harness.js";
 import { AgentProcessManager } from "./agent-process-manager.js";
 import { AgentStartLimiter } from "./agent-start-limiter.js";
 import {
@@ -153,10 +159,6 @@ function getAppRoot(): string {
 
 function getBotAvatarsDir(): string {
 	return join(getAppRoot(), "resources", "bot-avatars");
-}
-
-function getDefaultOusiaSystemPromptPath(): string {
-	return OUSIA_SYSTEM_PROMPT_FILE;
 }
 
 function imageMimeFromPath(path: string): string {
@@ -362,15 +364,6 @@ async function downloadBotAvatar(id: string): Promise<void> {
 	copyFileSync(source, filePath);
 }
 
-function copyDefaultAvatarToProfile(avatarId: string | undefined, homeDir: string): string | undefined {
-	if (!avatarId?.trim()) {
-		return undefined;
-	}
-	const source = resolveBotAvatarPath(avatarId.trim());
-	copyImageToProfileAvatar(source, homeDir);
-	return basename(profileAvatarPath(homeDir) ?? "");
-}
-
 function readProfileAvatarUrl(homeDir: string): string | undefined {
 	const source = profileAvatarPath(homeDir);
 	if (!source) {
@@ -560,6 +553,9 @@ const agentProcesses = new AgentProcessManager({
 		const agent = await getAgent(agentId);
 		return `名称=${agent.name} id=${agent.id} Agent Harness=${agent.harnessKind ?? "unknown"} 渠道=${agent.channelKinds?.join(",") || "none"}`;
 	},
+	getDeveloperMode() {
+		return readDesktopSettings().developerMode;
+	},
 	async getRuntimeEnvironment(agentId) {
 		const agent = await getAgent(agentId);
 		const profile = readProfileConfig(agent.home)?.profile;
@@ -609,23 +605,18 @@ function getAgentSummaryHome(id: string): string | undefined {
 }
 
 function hasLiveRuntimeProcess(home: string): boolean {
-	const record = readRuntimeProcessRecord(home);
-	if (!record) {
-		return false;
+	if (readLiveRuntimeProcessRecord(home)) {
+		return true;
 	}
-	if (!isLiveRuntimeProcessRecord(home, record)) {
-		clearRuntimeProcessRecord(home);
-		const persisted = readRuntimeStateRecord(home);
-		if (
-			persisted?.lifecycle.state === "running" ||
-			persisted?.lifecycle.state === "starting" ||
-			persisted?.lifecycle.state === "degraded"
-		) {
-			writeRuntimeLifecycle(home, persisted.homeDir, persisted.workDir, "stopped", "stale-process");
-		}
-		return false;
+	const persisted = readRuntimeStateRecord(home);
+	if (
+		persisted?.lifecycle.state === "running" ||
+		persisted?.lifecycle.state === "starting" ||
+		persisted?.lifecycle.state === "degraded"
+	) {
+		writeRuntimeLifecycle(home, persisted.homeDir, persisted.workDir, "stopped", "stale-process");
 	}
-	return true;
+	return false;
 }
 
 function signalRuntimeProcess(pid: number, signal: NodeJS.Signals): void {
@@ -885,6 +876,7 @@ async function getAgent(id: string): Promise<AgentDetails> {
 		...summary,
 		brand: channel?.brand,
 		feishuMessageOutputMode: channel?.messageOutputMode,
+		imGroupResponseMode: getImBehavior(profile).groupResponseMode,
 		feishuCredentialState: channel?.credentialState ?? "active",
 		feishuCredentialInvalidatedReason: channel?.credentialInvalidatedReason,
 		appSecret: env.FEISHU_APP_SECRET,
@@ -995,6 +987,163 @@ async function getAgentLogs(id: string) {
 		byKey.set(agentLogEntryKey(entry), entry);
 	}
 	return [...byKey.values()].sort(compareAgentLogEntries).slice(-1000);
+}
+
+async function getAgentEvents(id: string): Promise<AgentEventLogEntry[]> {
+	const agent = await getAgent(id);
+	return readAgentSessionEvents(agent.home).map((entry) => ({
+		timestamp: entry.timestamp,
+		conversationKey: entry.conversationKey,
+		event: entry.event,
+		sequence: entry.sequence,
+	}));
+}
+
+async function sendAgentChatMessage(id: string, prompt: string, sessionKey = "desktop", clientMessageId?: string): Promise<AgentChatSendResult> {
+	const agent = await getAgent(id);
+	const text = prompt.trim();
+	if (!text) {
+		throw new Error("Message is required.");
+	}
+	const userEvent = {
+		type: "user_message" as const,
+		messageId: clientMessageId,
+		text,
+		status: "sent" as const,
+		source: "desktop",
+	};
+	const sentEntry = { timestamp: new Date().toISOString(), conversationKey: sessionKey, event: userEvent };
+	appendAgentSessionEvent({ homeDir: agent.home, conversationKey: sessionKey }, sentEntry.event);
+	emitAgentEvent(id, sentEntry);
+	const unavailableMessage = chatUnavailableMessage(agent);
+	if (unavailableMessage) {
+		const entry = { timestamp: new Date().toISOString(), conversationKey: sessionKey, event: { ...userEvent, status: "failed" as const, errorText: unavailableMessage } };
+		appendAgentSessionEvent({ homeDir: agent.home, conversationKey: sessionKey }, entry.event);
+		emitAgentEvent(id, entry);
+		throw new Error(unavailableMessage);
+	}
+	const record = readLiveRuntimeProcessRecord(agent.home);
+	if (!record?.gatewayPort) {
+		const errorText = "Agent is not started yet.";
+		const entry = { timestamp: new Date().toISOString(), conversationKey: sessionKey, event: { ...userEvent, status: "failed" as const, errorText } };
+		appendAgentSessionEvent({ homeDir: agent.home, conversationKey: sessionKey }, entry.event);
+		emitAgentEvent(id, entry);
+		throw new Error(errorText);
+	}
+	let response: Response;
+	try {
+		response = await fetch(`http://127.0.0.1:${record.gatewayPort}/agent/run`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				sessionKey,
+				prompt: text,
+				source: "desktop",
+				origin: "human",
+				metadata: { surface: "desktop-chat", ...(clientMessageId ? { clientMessageId } : {}) },
+			}),
+		});
+	} catch (error) {
+		const errorText = error instanceof Error ? error.message : String(error);
+		const entry = { timestamp: new Date().toISOString(), conversationKey: sessionKey, event: { ...userEvent, status: "failed" as const, errorText } };
+		appendAgentSessionEvent({ homeDir: agent.home, conversationKey: sessionKey }, entry.event);
+		emitAgentEvent(id, entry);
+		throw new Error(errorText);
+	}
+	const payload = await response.json().catch(() => undefined) as Partial<AgentChatSendResult> & { error?: string } | undefined;
+	if (!response.ok) {
+		const errorText = payload?.error ?? `Agent runtime returned HTTP ${response.status}`;
+		const entry = { timestamp: new Date().toISOString(), conversationKey: sessionKey, event: { ...userEvent, status: "failed" as const, errorText } };
+		appendAgentSessionEvent({ homeDir: agent.home, conversationKey: sessionKey }, entry.event);
+		emitAgentEvent(id, entry);
+		throw new Error(payload?.error ?? `Agent runtime returned HTTP ${response.status}`);
+	}
+	return {
+		sessionKey: typeof payload?.sessionKey === "string" ? payload.sessionKey : sessionKey,
+		assistantText: typeof payload?.assistantText === "string" ? payload.assistantText : "",
+		clientMessageId,
+	};
+}
+
+function chatUnavailableMessage(agent: AgentDetails): string | undefined {
+	const lifecycleState = agent.runtimeEnvironment?.lifecycle.state;
+	if (agent.status === "starting" || lifecycleState === "starting") {
+		return "Agent is still starting. Try again when it is ready.";
+	}
+	if (agent.status === "paused" || lifecycleState === "created" || lifecycleState === "stopped") {
+		return "Agent is not started yet.";
+	}
+	if (lifecycleState === "failed") {
+		return agent.runtimeEnvironment?.lifecycle.reason
+			? `Agent failed to start: ${agent.runtimeEnvironment.lifecycle.reason}`
+			: "Agent failed to start.";
+	}
+	return undefined;
+}
+
+async function clearAgentChatSession(id: string, sessionKey = "desktop"): Promise<AgentChatClearResult> {
+	const agent = await getAgent(id);
+	const key = sessionKey.trim() || "desktop";
+	const record = readLiveRuntimeProcessRecord(agent.home);
+	if (!record?.gatewayPort) {
+		throw new Error("Agent runtime is not running.");
+	}
+	const response = await fetch(`http://127.0.0.1:${record.gatewayPort}/agent/session/clear`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ sessionKey: key }),
+	});
+	const payload = await response.json().catch(() => undefined) as { error?: string; sessionKey?: string } | undefined;
+	if (!response.ok) {
+		throw new Error(payload?.error ?? `Agent runtime returned HTTP ${response.status}`);
+	}
+	const clearedEvents = clearAgentSessionEvents(agent.home, key);
+	return {
+		sessionKey: typeof payload?.sessionKey === "string" ? payload.sessionKey : key,
+		clearedEvents,
+	};
+}
+
+async function runAgentChatSessionCommand(
+	id: string,
+	command: "new" | "status" | "compact" | "clear",
+	sessionKey = "desktop",
+): Promise<AgentChatSessionCommandResult> {
+	if (command === "clear") {
+		const result = await clearAgentChatSession(id, sessionKey);
+		return { ...result, message: "Session cleared." };
+	}
+	const agent = await getAgent(id);
+	const key = sessionKey.trim() || "desktop";
+	const unavailableMessage = chatUnavailableMessage(agent);
+	if (unavailableMessage) {
+		throw new Error(unavailableMessage);
+	}
+	const record = readLiveRuntimeProcessRecord(agent.home);
+	if (!record?.gatewayPort) {
+		throw new Error("Agent runtime is not running.");
+	}
+	const route = command === "new"
+		? "/agent/session/new"
+		: command === "status"
+			? "/agent/session/status"
+			: "/agent/session/compact";
+	const body = command === "new" ? {} : { sessionKey: key };
+	const response = await fetch(`http://127.0.0.1:${record.gatewayPort}${route}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	const payload = await response.json().catch(() => undefined) as AgentChatSessionCommandResult & { error?: string } | undefined;
+	if (!response.ok) {
+		throw new Error(payload?.error ?? `Agent runtime returned HTTP ${response.status}`);
+	}
+	return {
+		sessionKey: typeof payload?.sessionKey === "string" ? payload.sessionKey : key,
+		status: payload?.status,
+		summary: payload?.summary,
+		message: payload?.message,
+	};
 }
 
 function agentLogEntryKey(entry: AgentLogEntry): string {
@@ -1209,7 +1358,11 @@ async function syncDiscordBotProfile(id: string, botToken?: string): Promise<Age
 function writeHermesModelConfig(homeDir: string, profileId: string, provider: string, model: string): Record<string, string> {
 	const hermesProvider = toHermesInferenceProvider(provider);
 	const hermesApiServerPort = deriveHermesApiServerPort(profileId);
-	const hermesHome = join(homeDir, "hermes");
+	const currentProfile = readProfileConfig(homeDir)?.profile;
+	const configuredHermesHome = typeof currentProfile?.harness.config?.hermesHome === "string"
+		? currentProfile.harness.config.hermesHome.trim()
+		: "";
+	const hermesHome = configuredHermesHome || join(homeDir, "hermes");
 	mkdirSync(hermesHome, { recursive: true });
 	writeFileSync(
 		join(hermesHome, "config.yaml"),
@@ -1234,6 +1387,17 @@ function writeHermesModelConfig(homeDir: string, profileId: string, provider: st
 		HERMES_INFERENCE_PROVIDER: hermesProvider,
 		HERMES_INFERENCE_MODEL: model,
 	};
+}
+
+function getAgentHermesHome(agent: AgentDetails): string | undefined {
+	if (agent.harnessKind !== "hermes") {
+		return undefined;
+	}
+	const currentProfile = readProfileConfig(agent.home)?.profile;
+	const configuredHermesHome = typeof currentProfile?.harness.config?.hermesHome === "string"
+		? currentProfile.harness.config.hermesHome.trim()
+		: "";
+	return configuredHermesHome || join(agent.home, "hermes");
 }
 
 async function updateAgent(id: string, draft: AgentDraft): Promise<AgentDetails> {
@@ -1354,6 +1518,12 @@ async function startKnownAgent(existing: AgentDetails): Promise<AgentDetails> {
 			writeAgentRuntimeLifecycle(existing, "failed", message);
 			throw new Error(message);
 		}
+		const owner = findPieProfileClaimingHermesHome(getAgentHermesHome(existing), { excludeProfileId: existing.id });
+		if (owner) {
+			const message = `Hermes profile 已被 Pie Agent「${owner.displayName}」使用，不能同时启动两个共享同一 Hermes home 的 Agent。`;
+			writeAgentRuntimeLifecycle(existing, "failed", message);
+			throw new Error(message);
+		}
 	}
 	if (existing.harnessKind === "openclaw") {
 		const diagnostic = await checkManagedRuntimeForDesktop("openclaw");
@@ -1366,7 +1536,7 @@ async function startKnownAgent(existing: AgentDetails): Promise<AgentDetails> {
 		}
 	}
 	if (hasLiveRuntimeProcess(existing.home)) {
-		const record = readRuntimeProcessRecord(existing.home);
+		const record = readLiveRuntimeProcessRecord(existing.home);
 		writeAgentRuntimeLifecycle(existing, "running", "existing-process", record ? { process: record } : {});
 		updateProfileRegistryEntry(existing.id, { desiredState: "running", selected: true });
 		return getAgent(existing.id);
@@ -1387,8 +1557,8 @@ async function pauseAgent(id: string): Promise<AgentDetails> {
 async function stopRunningAgent(id: string): Promise<void> {
 	const agent = await getAgent(id);
 	if (!agentProcesses.isRunning(id)) {
-		const record = readRuntimeProcessRecord(agent.home);
-		if (record && isLiveRuntimeProcessRecord(agent.home, record)) {
+		const record = readLiveRuntimeProcessRecord(agent.home);
+		if (record) {
 			writeAgentRuntimeLifecycle(agent, "stopping", "paused", { process: record });
 			signalRuntimeProcess(record.pid, "SIGTERM");
 			await new Promise((resolveStop) => setTimeout(resolveStop, RUNTIME_STOP_FORCE_KILL_MS));
@@ -1412,8 +1582,7 @@ async function stopAgentsForQuit(): Promise<void> {
 			if (agentProcesses.isRunning(agent.id)) {
 				return true;
 			}
-			const record = readRuntimeProcessRecord(agent.home);
-			return Boolean(record && isLiveRuntimeProcessRecord(agent.home, record));
+			return Boolean(readLiveRuntimeProcessRecord(agent.home));
 		})
 		.map((agent) => agent.id);
 	if (terminatingAgentIds.length) {
@@ -1443,8 +1612,8 @@ async function stopAgentsForQuit(): Promise<void> {
 				});
 				return;
 			}
-			const record = readRuntimeProcessRecord(agent.home);
-			if (!record || !isLiveRuntimeProcessRecord(agent.home, record)) {
+			const record = readLiveRuntimeProcessRecord(agent.home);
+			if (!record) {
 				clearRuntimeProcessRecord(agent.home);
 				return;
 			}
@@ -1498,6 +1667,15 @@ function emitAgentChangeEvent(event: AgentChangeEvent): void {
 			continue;
 		}
 		win.webContents.send("agents:change", event);
+	}
+}
+
+function emitAgentEvent(agentId: string, event: AgentEventLogEntry): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (win.isDestroyed() || win.webContents.isDestroyed()) {
+			continue;
+		}
+		win.webContents.send("agents:event", { ...event, agentId });
 	}
 }
 
@@ -1815,6 +1993,14 @@ app.whenReady().then(() => {
 			throw error;
 		}
 	});
+	ipcMain.handle("agents:importable-harness-profiles", async (_event, kind: "openclaw" | "hermes") => {
+		try {
+			return listImportableHarnessProfiles(kind);
+		} catch (error) {
+			console.error("[ipc] agents:importable-harness-profiles failed:", error);
+			throw error;
+		}
+	});
 	ipcMain.handle("agents:openclaw-model-catalog", async () => {
 		try {
 			return loadOpenClawModelCatalog();
@@ -1960,8 +2146,8 @@ app.whenReady().then(() => {
 			const agent = await getAgent(draft.sessionId);
 			if (draft.feishu?.avatarUrl) {
 				await downloadRemoteAvatarToProfile(draft.feishu.avatarUrl, agent.home);
-			} else if ((draft.channels.includes("wechat") || draft.channels.includes("discord")) && draft.avatarId) {
-				copyDefaultAvatarToProfile(draft.avatarId, agent.home);
+			} else if (draft.avatarUpload) {
+				writeUploadToProfileAvatar(draft.avatarUpload, agent.home);
 			} else if (draft.discord?.avatarUrl) {
 				await downloadRemoteAvatarToProfile(draft.discord.avatarUrl, agent.home);
 			}
@@ -2125,6 +2311,18 @@ app.whenReady().then(() => {
 	});
 	ipcMain.handle("agents:logs", async (_event, id: string) => {
 		return getAgentLogs(id);
+	});
+	ipcMain.handle("agents:events", async (_event, id: string) => {
+		return getAgentEvents(id);
+	});
+	ipcMain.handle("agents:chat-send", async (_event, id: string, prompt: string, sessionKey?: string, clientMessageId?: string) => {
+		return sendAgentChatMessage(id, prompt, sessionKey, clientMessageId);
+	});
+	ipcMain.handle("agents:chat-command", async (_event, id: string, command: "new" | "status" | "compact" | "clear", sessionKey?: string) => {
+		return runAgentChatSessionCommand(id, command, sessionKey);
+	});
+	ipcMain.handle("agents:chat-clear", async (_event, id: string, sessionKey?: string) => {
+		return clearAgentChatSession(id, sessionKey);
 	});
 	ipcMain.handle("menu-bar:open-agent", async (_event, id: string) => {
 		menuBarWindow?.hide();

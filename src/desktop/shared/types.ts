@@ -1,4 +1,7 @@
+import type { AgentLogEntry } from "../../core/agent-logs.js";
+
 export type AgentStatus = "running" | "starting" | "paused" | "terminated";
+export type { AgentLogEntry };
 export type AgentDesiredState = "running" | "paused";
 export type RuntimeEnvironmentLifecycleState =
 	| "created"
@@ -48,6 +51,7 @@ export interface AgentSummary {
 export interface AgentDetails extends AgentSummary {
 	brand?: "feishu" | "lark";
 	feishuMessageOutputMode?: DesktopFeishuMessageOutputMode;
+	imGroupResponseMode?: DesktopImGroupResponseMode;
 	feishuCredentialState?: "active" | "invalidated";
 	feishuCredentialInvalidatedReason?: string;
 	appSecret?: string;
@@ -88,6 +92,7 @@ export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "te
 export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
 export type DesktopFeishuMessageOutputMode = "bubble" | "card";
+export type DesktopImGroupResponseMode = "collect_only" | "owner_mention" | "mention" | "owner" | "any";
 export type DesktopLanguage = "zh" | "en";
 export type DesktopLogRetention = "7d" | "30d" | "90d" | "forever";
 export type DesktopColorScheme = "system" | "light" | "dark";
@@ -141,6 +146,7 @@ export interface AgentDraft {
 	appSecret?: string;
 	brand?: "feishu" | "lark";
 	feishuMessageOutputMode?: DesktopFeishuMessageOutputMode;
+	imGroupResponseMode?: DesktopImGroupResponseMode;
 	wechatAccountId?: string;
 	wechatBaseUrl?: string;
 	wechatBotToken?: string;
@@ -199,6 +205,19 @@ export interface DesktopModelCatalog {
 	providers: string[];
 }
 
+export interface ImportableHarnessProfile {
+	id: string;
+	label: string;
+	harness: "openclaw" | "hermes";
+	path?: string;
+	workDir?: string;
+	agentDir?: string;
+	provider?: string;
+	model?: string;
+	modelRef?: string;
+	isDefault?: boolean;
+}
+
 export interface ProviderCredentialReuse {
 	provider: string;
 	envKey: string;
@@ -254,8 +273,9 @@ export interface DesktopDiscordBotProfile {
 export interface AgentCreationDraft {
 	sessionId: string;
 	harness: DesktopAgentHarness;
+	importedHarnessProfileId?: string;
 	name?: string;
-	avatarId?: string;
+	avatarUpload?: AgentAvatarUpload;
 	channels: DesktopChannelKind[];
 	feishu?: DesktopFeishuAppCredentials;
 	wechat?: DesktopWechatCredentials;
@@ -320,13 +340,39 @@ export type DesktopQuitEvent =
 			agent: DesktopQuitAgent;
 	  };
 
-export interface AgentLogEntry {
-	id: number;
-	agentId: string;
-	stream: "stdout" | "stderr" | "system";
-	text: string;
+export interface AgentChatSendResult {
+	sessionKey: string;
+	assistantText: string;
+	clientMessageId?: string;
+}
+
+export interface AgentChatClearResult {
+	sessionKey: string;
+	clearedEvents: number;
+}
+
+export interface AgentChatSessionStatus {
+	totalMessages: number;
+	contextUsage?: {
+		tokens: number | null;
+		contextWindow: number;
+		percent: number | null;
+	};
+}
+
+export interface AgentChatSessionCommandResult {
+	sessionKey: string;
+	message?: string;
+	status?: AgentChatSessionStatus;
+	summary?: string;
+	clearedEvents?: number;
+}
+
+export interface AgentEventLogEntry {
 	timestamp: string;
-	updated?: boolean;
+	conversationKey?: string;
+	event: unknown;
+	sequence?: number;
 }
 
 export interface UsageBucket {
@@ -407,6 +453,7 @@ export interface PieDesktopApi {
 	uploadAgentAvatar(id: string, upload: AgentAvatarUpload): Promise<AgentDetails>;
 	downloadAgentAvatar(id: string): Promise<void>;
 	beginAgentCreation(): Promise<AgentCreationSession>;
+	listImportableHarnessProfiles(kind: "openclaw" | "hermes"): Promise<ImportableHarnessProfile[]>;
 	checkCodexEnvironment(): Promise<DesktopCodexDiagnostic>;
 	installCodex(sessionId: string): Promise<DesktopCodexDiagnostic>;
 	openCodexLogin(sessionId: string): Promise<DesktopCodexDiagnostic>;
@@ -443,8 +490,13 @@ export interface PieDesktopApi {
 	getAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	openAgentSystemPrompt(id: string): Promise<AgentSystemPromptSource>;
 	getAgentLogs(id: string): Promise<AgentLogEntry[]>;
+	getAgentEvents(id: string): Promise<AgentEventLogEntry[]>;
+	sendAgentChatMessage(id: string, prompt: string, sessionKey?: string, clientMessageId?: string): Promise<AgentChatSendResult>;
+	runAgentChatSessionCommand(id: string, command: "new" | "status" | "compact" | "clear", sessionKey?: string): Promise<AgentChatSessionCommandResult>;
+	clearAgentChatSession(id: string, sessionKey?: string): Promise<AgentChatClearResult>;
 	onAgentChange(callback: (event: AgentChangeEvent) => void): () => void;
 	onAgentLog(callback: (entry: AgentLogEntry) => void): () => void;
+	onAgentEvent(callback: (entry: AgentEventLogEntry & { agentId: string }) => void): () => void;
 	onAgentOnboardEvent(callback: (event: AgentOnboardEvent) => void): () => void;
 	onAgentDeleteEvent(callback: (event: AgentDeleteEvent) => void): () => void;
 	onDesktopQuitEvent(callback: (event: DesktopQuitEvent) => void): () => void;

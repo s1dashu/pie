@@ -1,6 +1,9 @@
 import type { DesktopModelOption } from "./types.js";
 import { OPENCLAW_BUILT_IN_MODEL_OPTIONS } from "../../core/openclaw-model-catalog.js";
 
+export const DEFAULT_MODEL_PROVIDER = "openai";
+export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.5";
+
 const PRIMARY_PROVIDER_IDS = [
 	"openai",
 	"anthropic",
@@ -47,4 +50,17 @@ export function providersFromModels(models: DesktopModelOption[]): string[] {
 		.filter((provider) => !primary.includes(provider))
 		.sort((left, right) => left.localeCompare(right));
 	return [...primary, ...secondary];
+}
+
+export function defaultProviderFromModels(models: DesktopModelOption[]): string {
+	const providers = providersFromModels(models);
+	return providers.includes(DEFAULT_MODEL_PROVIDER) ? DEFAULT_MODEL_PROVIDER : providers[0] ?? DEFAULT_MODEL_PROVIDER;
+}
+
+export function defaultModelForProvider(models: DesktopModelOption[], provider: string): string {
+	const providerModels = models.filter((model) => model.provider === provider);
+	const preferred = provider === DEFAULT_MODEL_PROVIDER
+		? providerModels.find((model) => model.id === DEFAULT_OPENAI_MODEL_ID)
+		: undefined;
+	return preferred?.id ?? providerModels[0]?.id ?? "";
 }

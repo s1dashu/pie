@@ -5,6 +5,7 @@ import type {
 	AgentCreationDraft,
 	AgentDeleteEvent,
 	AgentDraft,
+	AgentEventLogEntry,
 	AgentLogEntry,
 	AgentOnboardEvent,
 	DesktopQuitEvent,
@@ -23,6 +24,7 @@ const api: PieDesktopApi = {
 	uploadAgentAvatar: (id: string, upload: AgentAvatarUpload) => ipcRenderer.invoke("agents:avatar-upload", id, upload),
 	downloadAgentAvatar: (id: string) => ipcRenderer.invoke("agents:avatar-download", id),
 	beginAgentCreation: () => ipcRenderer.invoke("agents:create-begin"),
+	listImportableHarnessProfiles: (kind: "openclaw" | "hermes") => ipcRenderer.invoke("agents:importable-harness-profiles", kind),
 	checkCodexEnvironment: () => ipcRenderer.invoke("agents:codex-diagnostic"),
 	installCodex: (sessionId: string) => ipcRenderer.invoke("agents:codex-install", sessionId),
 	openCodexLogin: (sessionId: string) => ipcRenderer.invoke("agents:codex-login", sessionId),
@@ -60,6 +62,10 @@ const api: PieDesktopApi = {
 	getAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt", id),
 	openAgentSystemPrompt: (id: string) => ipcRenderer.invoke("agents:system-prompt-open", id),
 	getAgentLogs: (id: string) => ipcRenderer.invoke("agents:logs", id),
+	getAgentEvents: (id: string) => ipcRenderer.invoke("agents:events", id),
+	sendAgentChatMessage: (id: string, prompt: string, sessionKey?: string, clientMessageId?: string) => ipcRenderer.invoke("agents:chat-send", id, prompt, sessionKey, clientMessageId),
+	runAgentChatSessionCommand: (id: string, command: "new" | "status" | "compact" | "clear", sessionKey?: string) => ipcRenderer.invoke("agents:chat-command", id, command, sessionKey),
+	clearAgentChatSession: (id: string, sessionKey?: string) => ipcRenderer.invoke("agents:chat-clear", id, sessionKey),
 	onAgentChange: (callback: (event: AgentChangeEvent) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentChangeEvent) => callback(payload);
 		ipcRenderer.on("agents:change", listener);
@@ -69,6 +75,11 @@ const api: PieDesktopApi = {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentLogEntry) => callback(payload);
 		ipcRenderer.on("agents:log", listener);
 		return () => ipcRenderer.removeListener("agents:log", listener);
+	},
+	onAgentEvent: (callback: (entry: AgentEventLogEntry & { agentId: string }) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: AgentEventLogEntry & { agentId: string }) => callback(payload);
+		ipcRenderer.on("agents:event", listener);
+		return () => ipcRenderer.removeListener("agents:event", listener);
 	},
 	onAgentOnboardEvent: (callback: (event: AgentOnboardEvent) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, payload: AgentOnboardEvent) => callback(payload);
