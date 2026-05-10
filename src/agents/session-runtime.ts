@@ -8,11 +8,12 @@ import {
 	extractLastAssistantError,
 	wasLastAssistantMessageAborted,
 } from "./messages.js";
-import { getAgentRoundInputText, isFirstResponseSignal } from "./types.js";
+import { getAgentPromptInputText, isFirstResponseSignal } from "./types.js";
 import type {
 	AgentConversationSession,
 	AgentConversationSessionPool,
-	AgentRoundInputLike,
+	AgentPromptInputLike,
+	AgentSessionStatus,
 	AgentSessionEvent,
 	AgentSessionRuntimeOptions,
 } from "./types.js";
@@ -23,6 +24,7 @@ export type {
 	AgentConversationSessionPool,
 	AgentSessionCapabilities,
 	AgentSessionEvent,
+	AgentSessionStatus,
 	AgentSessionRuntimeOptions,
 	HarnessDiagnostic,
 } from "./types.js";
@@ -45,8 +47,8 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function shouldRunIdleCompact(options: AgentSessionRuntimeOptions): boolean {
-	if (options.harnessKind !== "pi") {
+export function shouldRunIdleCompact(options: AgentSessionRuntimeOptions): boolean {
+	if (options.harnessKind !== "pi" && options.harnessKind !== "ousia") {
 		return false;
 	}
 	if (process.env.PIE_DISABLE_IDLE_COMPACT === "1") {
@@ -100,8 +102,8 @@ class LoggedAgentSession implements AgentConversationSession {
 		return this.inner.state;
 	}
 
-	async prompt(input: AgentRoundInputLike): Promise<void> {
-		const text = getAgentRoundInputText(input);
+	async prompt(input: AgentPromptInputLike): Promise<void> {
+		const text = getAgentPromptInputText(input);
 		logAgentPrompt(this.homeDir, text);
 		this.promptStartedAt = Date.now();
 		this.hasRecordedTtfs = false;
@@ -149,7 +151,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 			lastPromptAt?: number;
 			lastFinishedAt?: number;
 			lastCompactedAt?: number;
-			turnsSinceCompact: number;
+			runsSinceCompact: number;
 			compacting: boolean;
 		}
 	>();
@@ -186,7 +188,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		if (!this.trackedSessions.has(normalizedConversationKey)) {
 			this.trackedSessions.set(normalizedConversationKey, {
 				session: logged,
-				turnsSinceCompact: 0,
+				runsSinceCompact: 0,
 				compacting: false,
 			});
 		}
@@ -204,7 +206,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		} finally {
 			if (entry) {
 				entry.lastFinishedAt = Date.now();
-				entry.turnsSinceCompact += 1;
+				entry.runsSinceCompact += 1;
 			}
 		}
 	}
@@ -219,9 +221,21 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		const entry = this.trackedSessions.get(normalizedConversationKey);
 		if (entry) {
 			entry.lastCompactedAt = Date.now();
-			entry.turnsSinceCompact = 0;
+			entry.runsSinceCompact = 0;
 		}
 		return result;
+	}
+
+	async getSessionStatus(conversationKey: string): Promise<AgentSessionStatus> {
+		const normalizedConversationKey = normalizeConversationKey(conversationKey);
+		const getSessionStatus = this.inner.getSessionStatus;
+		if (getSessionStatus) {
+			return getSessionStatus.call(this.inner, normalizedConversationKey);
+		}
+		const session = await this.getSession(normalizedConversationKey);
+		return {
+			totalMessages: session.state?.messages.length ?? 0,
+		};
 	}
 
 	async resetSession(conversationKey: string): Promise<void> {
@@ -241,7 +255,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 		}
 		const now = Date.now();
 		for (const [conversationKey, entry] of this.trackedSessions) {
-			if (entry.compacting || entry.session.isStreaming || entry.turnsSinceCompact <= 0 || !entry.lastFinishedAt) {
+			if (entry.compacting || entry.session.isStreaming || entry.runsSinceCompact <= 0 || !entry.lastFinishedAt) {
 				continue;
 			}
 			if (now - entry.lastFinishedAt < this.idleCompactAfterMs) {
@@ -254,7 +268,7 @@ class LoggedAgentSessionPool implements AgentConversationSessionPool {
 			try {
 				await compactSession.call(this.inner, conversationKey);
 				entry.lastCompactedAt = Date.now();
-				entry.turnsSinceCompact = 0;
+				entry.runsSinceCompact = 0;
 				if (this.options.verboseLogs) {
 					console.log(`> session_idle_compact ${conversationKey}`);
 				}

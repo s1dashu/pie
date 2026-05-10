@@ -9,8 +9,12 @@ import {
 	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
+	SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import chalk from "chalk";
+import type { AgentSessionStatus } from "../../types.js";
+
+const DEFAULT_PI_PROVIDER_TIMEOUT_MS = 30_000;
 
 function sanitizePathSegment(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -109,9 +113,21 @@ export class SessionPool {
 		mkdirSync(conversationDir, { recursive: true });
 		const sessionHistoryDir = getLegacySessionHistoryDir(conversationDir, this.options.homeDir);
 		mkdirSync(sessionHistoryDir, { recursive: true });
+		const settingsManager = SettingsManager.create(this.options.homeDir, conversationDir);
+		const providerRetrySettings = settingsManager.getProviderRetrySettings();
+		settingsManager.applyOverrides({
+			retry: {
+				provider: {
+					...(providerRetrySettings.maxRetries !== undefined ? { maxRetries: providerRetrySettings.maxRetries } : {}),
+					maxRetryDelayMs: providerRetrySettings.maxRetryDelayMs,
+					timeoutMs: providerRetrySettings.timeoutMs ?? DEFAULT_PI_PROVIDER_TIMEOUT_MS,
+				},
+			},
+		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: this.options.homeDir,
 			agentDir: conversationDir,
+			settingsManager,
 			...(this.options.assistantSystemPrompt
 				? {
 						systemPromptOverride: (basePrompt: string | undefined) =>
@@ -148,6 +164,7 @@ export class SessionPool {
 			customTools: [],
 			resourceLoader,
 			sessionManager,
+			settingsManager,
 		});
 		initSteps.push({ label: "create_agent_session", durationMs: Date.now() - createStartedAt });
 
@@ -178,6 +195,11 @@ export class SessionPool {
 		return { summary };
 	}
 
+	async getSessionStatus(conversationKey: string): Promise<AgentSessionStatus> {
+		const session = await this.getSession(conversationKey);
+		return getPiSessionStatus(session);
+	}
+
 	async resetSession(conversationKey: string): Promise<void> {
 		const existing = this.sessions.get(conversationKey);
 		if (existing?.isStreaming) {
@@ -186,6 +208,34 @@ export class SessionPool {
 		this.sessions.delete(conversationKey);
 		this.freshSessionKeys.add(conversationKey);
 	}
+}
+
+function getPiSessionStatus(session: AgentSession): AgentSessionStatus {
+	const stats = (session as unknown as { getSessionStats?: () => unknown }).getSessionStats?.();
+	const typedStats = stats && typeof stats === "object" ? (stats as { totalMessages?: unknown; contextUsage?: unknown }) : undefined;
+	const contextUsage = normalizeContextUsage(typedStats?.contextUsage);
+	return {
+		totalMessages:
+			typeof typedStats?.totalMessages === "number" ? typedStats.totalMessages : session.state.messages.length,
+		...(contextUsage ? { contextUsage } : {}),
+	};
+}
+
+function normalizeContextUsage(value: unknown): AgentSessionStatus["contextUsage"] | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined;
+	}
+	const usage = value as { tokens?: unknown; contextWindow?: unknown; percent?: unknown };
+	if (typeof usage.contextWindow !== "number") {
+		return undefined;
+	}
+	const tokens = typeof usage.tokens === "number" || usage.tokens === null ? usage.tokens : null;
+	const percent = typeof usage.percent === "number" || usage.percent === null ? usage.percent : null;
+	return {
+		tokens,
+		contextWindow: usage.contextWindow,
+		percent,
+	};
 }
 
 export function extractAssistantText(session: AgentSession): string {

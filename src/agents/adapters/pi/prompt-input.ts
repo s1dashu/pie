@@ -1,6 +1,6 @@
-import { normalizeAgentRoundInput, type AgentConversationSession, type AgentRoundInputLike } from "../../types.js";
+import { normalizeAgentPromptInput, type AgentConversationSession, type AgentPromptInputLike } from "../../types.js";
 
-export function forwardPiPrompt(session: AgentConversationSession, input: AgentRoundInputLike): Promise<void> {
-	const content = normalizeAgentRoundInput(input);
+export function forwardPiPrompt(session: AgentConversationSession, input: AgentPromptInputLike): Promise<void> {
+	const content = normalizeAgentPromptInput(input);
 	return (session as any).prompt(content.text, content.images?.length ? { images: content.images } : undefined);
 }

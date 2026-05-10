@@ -4,7 +4,7 @@ import type {
 	AgentHarnessAdapter,
 	AgentConversationSession,
 	AgentConversationSessionPool,
-	AgentRoundInputLike,
+	AgentPromptInputLike,
 	AgentSessionCapabilities,
 	AgentSessionRuntimeOptions,
 } from "../types.js";
@@ -26,7 +26,7 @@ function withCapabilities(session: AgentConversationSession): AgentConversationS
 		get state() {
 			return session.state;
 		},
-		prompt(input: AgentRoundInputLike) {
+		prompt(input: AgentPromptInputLike) {
 			return forwardPiPrompt(session, input);
 		},
 		abort() {
@@ -72,6 +72,10 @@ class PiAdapterSessionPool implements AgentConversationSessionPool {
 		return this.pool.compactSession(conversationKey);
 	}
 
+	getSessionStatus(conversationKey: string) {
+		return this.pool.getSessionStatus(conversationKey);
+	}
+
 	resetSession(conversationKey: string): Promise<void> {
 		return this.pool.resetSession(conversationKey);
 	}
@@ -84,10 +88,4 @@ export const piAgentHarnessAdapter: AgentHarnessAdapter = {
 	createSessionPool(options) {
 		return new PiAdapterSessionPool(options);
 	},
-};
-
-export const ousiaAgentHarnessAdapter: AgentHarnessAdapter = {
-	...piAgentHarnessAdapter,
-	kind: "ousia",
-	label: "Ousia",
 };
