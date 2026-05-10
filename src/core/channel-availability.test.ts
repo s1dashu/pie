@@ -8,11 +8,11 @@ describe("channel availability", () => {
 		assert.equal(isChannelAvailableForRelease("discord", { developerMode: false }), true);
 	});
 
-	it("keeps Slack and Telegram behind developer mode", () => {
+	it("keeps Slack and Telegram hidden from release channel creation", () => {
 		for (const channel of ["slack", "telegram"] as const) {
 			assert.equal(isDevelopmentChannel(channel), true);
 			assert.equal(isChannelAvailableForRelease(channel, { developerMode: false }), false);
-			assert.equal(isChannelAvailableForRelease(channel, { developerMode: true }), true);
+			assert.equal(isChannelAvailableForRelease(channel, { developerMode: true }), false);
 		}
 	});
 });
