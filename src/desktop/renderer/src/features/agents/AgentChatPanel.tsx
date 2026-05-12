@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowDown, ArrowUp, CheckCircle2, Info, XCircle } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, Info, Quote, XCircle } from "lucide-react";
 import { Streamdown } from "streamdown";
 import {
 	AltArrowDownLineDuotone,
@@ -19,6 +19,7 @@ import { Spinner } from "../../components/ui/spinner-1";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { runtimeLifecycleLabel, statusLabel } from "./agent-display";
+import { shouldSubmitChatInput } from "./chat-input";
 
 const MAX_CHAT_LOG_ITEMS = 120;
 const COMMAND_BUTTON_CLASS =
@@ -32,7 +33,7 @@ function createClientMessageId(): string {
 	return `desktop-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
-type ChatItemRole = "user" | "assistant" | "system" | "error" | "tool" | "typing";
+type ChatItemRole = "user" | "assistant" | "system" | "error" | "tool" | "typing" | "thinking";
 type ChatCommand = "new" | "resume" | "compact" | "status" | "clear";
 
 interface ChatItem {
@@ -52,6 +53,7 @@ interface ChatItem {
 	toolArgs?: unknown;
 	toolResult?: unknown;
 	textStreaming?: boolean;
+	thinkingState?: "streaming" | "finished";
 }
 
 type ChatRenderItem =
@@ -83,6 +85,7 @@ export function AgentChatPanel({
 	const programmaticScrollRef = useRef(false);
 	const lastScrollTopRef = useRef(0);
 	const pendingCompactSessionsRef = useRef(new Set<string>());
+	const inputComposingRef = useRef(false);
 
 	const scrollToBottom = () => {
 		const node = scrollRef.current;
@@ -451,20 +454,18 @@ export function AgentChatPanel({
 							<EmptyChat agent={agent} />
 						)}
 					</div>
-					{isAutoFollowPaused ? (
-						<div className="pointer-events-none absolute bottom-3 right-5 flex justify-end">
-							<button
-								type="button"
-								className="pie-smooth-corner pointer-events-auto grid size-8 place-items-center rounded-full bg-[var(--slate-a4)] text-muted-foreground shadow-[0_6px_18px_rgba(15,23,42,0.08)] backdrop-blur transition-[transform,background-color,color] hover:bg-[var(--slate-a5)] hover:text-foreground active:scale-95"
-								onClick={resumeAutoFollow}
-								aria-label={language === "en" ? "Jump to latest" : "回到最新"}
-							>
-								<ArrowDown className="size-4" strokeWidth={2.2} />
-							</button>
-						</div>
-					) : null}
 				</div>
-				<form onSubmit={handleSubmit} className="mt-2 space-y-2">
+				<form onSubmit={handleSubmit} className="relative mt-2 space-y-2">
+					{isAutoFollowPaused ? (
+						<button
+							type="button"
+							className="pie-smooth-corner absolute -top-10 left-1/2 z-10 grid size-8 -translate-x-1/2 place-items-center rounded-full bg-[var(--slate-a4)] text-muted-foreground shadow-[0_2px_7px_rgba(15,23,42,0.10)] backdrop-blur transition-[transform,background-color,color] hover:bg-[var(--slate-a5)] hover:text-foreground active:scale-95"
+							onClick={resumeAutoFollow}
+							aria-label={language === "en" ? "Jump to latest" : "回到最新"}
+						>
+							<ArrowDown className="size-4" strokeWidth={2.2} />
+						</button>
+					) : null}
 					<CommandBar
 						supportedCommands={supportedCommands}
 						sessions={sessions}
@@ -479,8 +480,14 @@ export function AgentChatPanel({
 							ref={inputRef}
 							value={draft}
 							onChange={(event) => setDraft(event.target.value)}
+							onCompositionStart={() => {
+								inputComposingRef.current = true;
+							}}
+							onCompositionEnd={() => {
+								inputComposingRef.current = false;
+							}}
 							onKeyDown={(event) => {
-								if (event.key === "Enter" && !event.shiftKey) {
+								if (shouldSubmitChatInput(event, inputComposingRef.current)) {
 									event.preventDefault();
 									event.currentTarget.form?.requestSubmit();
 								}
@@ -612,7 +619,7 @@ function CommandLabel({ command }: { command: string }): JSX.Element {
 	);
 }
 
-function SystemStatusIcon({ item }: { item: ChatItem }): JSX.Element {
+function SystemStatusIcon({ item }: { item: ChatItem }): JSX.Element | null {
 	if (item.status === "pending") {
 		return <span className="grid size-4 shrink-0 place-items-center"><Spinner size={12} color="currentColor" /></span>;
 	}
@@ -625,7 +632,7 @@ function SystemStatusIcon({ item }: { item: ChatItem }): JSX.Element {
 	if (item.systemTone === "info") {
 		return <Info className="size-4 shrink-0 text-muted-foreground/65" strokeWidth={2} />;
 	}
-	return <span className="size-4 shrink-0" />;
+	return null;
 }
 
 const ChatBubble = memo(function ChatBubble({
@@ -641,9 +648,10 @@ const ChatBubble = memo(function ChatBubble({
 	const isSystem = item.role === "system";
 	const isTyping = item.role === "typing";
 	if (isSystem) {
+		const icon = <SystemStatusIcon item={item} />;
 		return (
-			<div className="flex items-center gap-2 px-2 py-0.5 text-[11px] leading-5 text-muted-foreground/70 tabular-nums">
-				<SystemStatusIcon item={item} />
+			<div className="flex items-start gap-2 px-2 py-0.5 text-left text-[11px] leading-5 text-muted-foreground/70 tabular-nums">
+				{icon}
 				<span>{new Date(item.timestamp).toLocaleTimeString()}</span>
 				<span className="whitespace-pre-wrap break-words">{item.text}</span>
 			</div>
@@ -655,6 +663,9 @@ const ChatBubble = memo(function ChatBubble({
 				<WaveDots />
 			</div>
 		);
+	}
+	if (item.role === "thinking") {
+		return <ThinkingBlock item={item} />;
 	}
 	return (
 		<div className="flex justify-start">
@@ -672,10 +683,10 @@ const ChatBubble = memo(function ChatBubble({
 				)}>
 					{item.role === "assistant" ? (
 						<Streamdown
-							animated={item.textStreaming ? { animation: "fadeIn", duration: 100, stagger: 8 } : false}
+							animated={false}
 							className="pie-chat-markdown space-y-2 text-sm leading-5"
 							controls={false}
-							isAnimating={item.textStreaming === true}
+							isAnimating={false}
 							lineNumbers={false}
 						>
 							{item.text}
@@ -700,6 +711,37 @@ const ChatBubble = memo(function ChatBubble({
 		</div>
 	);
 });
+
+function ThinkingBlock({ item }: { item: ChatItem }): JSX.Element {
+	const [expanded, setExpanded] = useState(item.thinkingState !== "finished");
+	const isStreaming = item.thinkingState !== "finished";
+	useEffect(() => {
+		if (isStreaming) {
+			setExpanded(true);
+			return;
+		}
+		setExpanded(false);
+	}, [isStreaming]);
+	const preview = truncateToolText(item.text, 72) || "Thinking";
+	return (
+		<div className="max-w-[82%] py-0.5 text-xs leading-5 text-muted-foreground/65">
+			<button
+				type="button"
+				className="flex max-w-full items-center gap-1.5 rounded-3xl px-1.5 py-0.5 text-left transition-[background-color,color] hover:bg-[var(--slate-2)] hover:text-muted-foreground"
+				onClick={() => setExpanded((current) => !current)}
+			>
+				<Quote className="size-3.5 shrink-0 text-muted-foreground/45" strokeWidth={2} />
+				<span className="min-w-0 truncate italic">{isStreaming ? "Thinking..." : preview}</span>
+				<ChevronDown className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", expanded && "rotate-180")} strokeWidth={2} />
+			</button>
+			{expanded ? (
+				<div className="ml-3 mt-1 border-l border-[var(--slate-a5)] py-0.5 pl-3 pr-2 text-[11px] leading-5 text-muted-foreground/55">
+					<div className="whitespace-pre-wrap break-words italic">{item.text || "Thinking..."}</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
 
 function WaveDots(): JSX.Element {
 	return (
@@ -806,6 +848,7 @@ function eventsToChatItems(entries: AgentEventLogEntry[], localItemsById: Map<st
 	const items: ChatItem[] = [];
 	const userById = new Map<string, ChatItem>();
 	const textById = new Map<string, ChatItem>();
+	const thinkingById = new Map<string, ChatItem>();
 	const toolById = new Map<string, ChatItem>();
 	const runInstanceByRunId = new Map<string, string>();
 	const activeRunInstances = new Set<string>();
@@ -866,8 +909,68 @@ function eventsToChatItems(entries: AgentEventLogEntry[], localItemsById: Map<st
 			}
 			continue;
 		}
-		if (event.type === "thinking_start" || event.type === "thinking_delta" || event.type === "thinking_finished") {
-			removeTypingItem(items, runInstanceForEvent(event, runInstanceByRunId));
+		if (event.type === "thinking_start") {
+			const runInstanceId = runInstanceForEvent(event, runInstanceByRunId);
+			removeTypingItem(items, runInstanceId);
+			const thinkingId = scopedEventItemId(event, "thinkingId", runInstanceByRunId, `thinking-${entry.timestamp}-${items.length}`);
+			const item: ChatItem = {
+				id: thinkingId,
+				role: "thinking",
+				text: "",
+				timestamp: entry.timestamp,
+				sequence: entry.sequence,
+				runId: runInstanceId,
+				thinkingState: "streaming",
+			};
+			thinkingById.set(thinkingId, item);
+			items.push(item);
+			continue;
+		}
+		if (event.type === "thinking_delta") {
+			const runInstanceId = runInstanceForEvent(event, runInstanceByRunId);
+			removeTypingItem(items, runInstanceId);
+			const thinkingId = scopedEventItemId(event, "thinkingId", runInstanceByRunId);
+			const delta = readString(event.delta) ?? "";
+			const item = thinkingId ? thinkingById.get(thinkingId) : undefined;
+			if (item) {
+				item.text += delta;
+				item.thinkingState = "streaming";
+			} else if (delta) {
+				const fallbackThinkingId = thinkingId ?? `thinking-${entry.timestamp}-${items.length}`;
+				const fallbackItem: ChatItem = {
+					id: fallbackThinkingId,
+					role: "thinking",
+					text: delta,
+					timestamp: entry.timestamp,
+					sequence: entry.sequence,
+					runId: runInstanceId,
+					thinkingState: "streaming",
+				};
+				thinkingById.set(fallbackThinkingId, fallbackItem);
+				items.push(fallbackItem);
+			}
+			continue;
+		}
+		if (event.type === "thinking_finished") {
+			const runInstanceId = runInstanceForEvent(event, runInstanceByRunId);
+			removeTypingItem(items, runInstanceId);
+			const thinkingId = scopedEventItemId(event, "thinkingId", runInstanceByRunId);
+			const thinking = readString(event.thinking) ?? "";
+			const item = thinkingId ? thinkingById.get(thinkingId) : undefined;
+			if (item) {
+				item.text = thinking || item.text;
+				item.thinkingState = "finished";
+			} else if (thinking) {
+				items.push({
+					id: `thinking-${entry.timestamp}-${items.length}`,
+					role: "thinking",
+					text: thinking,
+					timestamp: entry.timestamp,
+					sequence: entry.sequence,
+					runId: runInstanceId,
+					thinkingState: "finished",
+				});
+			}
 			continue;
 		}
 		if (event.type === "text_start") {
@@ -1056,7 +1159,7 @@ function readStatus(value: unknown): ChatItem["status"] | undefined {
 
 function scopedEventItemId(
 	event: Record<string, unknown>,
-	idKey: "textId" | "toolCallId",
+	idKey: "textId" | "thinkingId" | "toolCallId",
 	runInstanceByRunId: Map<string, string>,
 	fallback?: string,
 ): string | undefined {

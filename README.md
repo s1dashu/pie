@@ -77,11 +77,10 @@ Pie does not provide a security sandbox yet. The Runtime Environment sets an Age
 
 ## Download
 
-Desktop app downloads are coming soon.
+The latest pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2).
 
-- [Download for macOS](#download-coming-soon)
-- [Download for Windows](#download-coming-soon)
-- [Download for Linux](#download-coming-soon)
+- [Download for macOS Apple Silicon](https://github.com/s1dashu/pie/releases/download/v0.2.2/Pie-0.2.2-arm64.dmg)
+- Windows and Linux builds are not published yet.
 
 ## Quick Start
 
