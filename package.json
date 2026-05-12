@@ -2,7 +2,7 @@
   "name": "pie",
   "productName": "Pie",
   "version": "0.2.2",
-  "private": true,
+  "private": false,
   "workspaces": [
     "packages/*"
   ],
@@ -15,10 +15,13 @@
     "pie": "dist/cli/index.js"
   },
   "files": [
-    "dist",
-    "docs",
-    "out",
-    "resources",
+    "dist/cli",
+    "dist/core",
+    "dist/agents",
+    "dist/channels",
+    "dist/runtime",
+    "dist/index.js",
+    "dist/index.d.ts",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "README.md",

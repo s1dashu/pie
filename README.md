@@ -119,3 +119,8 @@ See [Development Guide](docs/development.md) for local setup, commands, data lay
 ## License
 
 MIT
+
+## Notice
+
+The Feishu/Lark messaging delivery code in `src/channels/feishu/platform/messaging/send.ts`
+is adapted from `larksuite/openclaw-lark`, which is distributed under the MIT License.
