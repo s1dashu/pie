@@ -11,6 +11,7 @@ This document describes the intended first public release scope for Pie.
 5. Feishu/Lark as the primary IM channel.
 6. WeChat as early channel support.
 7. Discord as an available desktop creation and runtime channel.
+8. DingTalk as early text channel support through app bot Stream mode.
 8. Profile-scoped config, secrets, sessions, logs, usage, skills, and runtime state.
 9. Runtime Environment with `homeDir`, `workDir`, and persisted lifecycle state.
 10. Model provider/model selection and profile-scoped API key storage.
@@ -22,7 +23,8 @@ This document describes the intended first public release scope for Pie.
 2. Ousia internal run gateway.
 3. WeChat channel stability, especially login expiry, send rate limits, long message splitting, and multiple WeChat Agents.
 4. Discord channel stability, especially bot permissions, message-content access, and live delivery behavior.
-5. Slack and Telegram adapters are still hidden development channels.
+5. DingTalk channel stability, especially Stream reconnect behavior, sessionWebhook expiry, and long message splitting.
+6. Slack and Telegram adapters are still hidden development channels.
 6. Codex, Hermes, and OpenClaw adapters are real local runtime integrations with desktop diagnostics and setup surfaces, but are not the default stable path yet.
 7. Restore enabled Agents on desktop launch.
 8. Runtime lifecycle persistence for crash/restart visibility.

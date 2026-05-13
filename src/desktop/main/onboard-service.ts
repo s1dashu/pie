@@ -1607,6 +1607,9 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	if (channels.includes("discord") && !draft.discord?.botToken.trim()) {
 		throw new Error("Discord Bot Token 必填");
 	}
+	if (channels.includes("dingtalk") && (!draft.dingtalk?.clientId.trim() || !draft.dingtalk.clientSecret.trim())) {
+		throw new Error("钉钉 Client ID 和 Client Secret 必填");
+	}
 	if (channels.includes("telegram") && !draft.telegram?.botToken.trim()) {
 		throw new Error("Telegram Bot Token 必填");
 	}
@@ -1741,6 +1744,14 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 						guildId: draft.discord?.guildId?.trim() || undefined,
 					}]
 				: []),
+			...(channels.includes("dingtalk") && draft.dingtalk
+				? [{
+						kind: "dingtalk" as const,
+						id: "dingtalk",
+						enabled: true,
+						clientId: draft.dingtalk.clientId.trim(),
+					}]
+				: []),
 			...(channels.includes("telegram")
 				? [{
 						kind: "telegram" as const,
@@ -1763,6 +1774,9 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 	}
 	if (channels.includes("discord") && draft.discord) {
 		savedEnv.DISCORD_BOT_TOKEN = draft.discord.botToken.trim();
+	}
+	if (channels.includes("dingtalk") && draft.dingtalk) {
+		savedEnv.DINGTALK_CLIENT_SECRET = draft.dingtalk.clientSecret.trim();
 	}
 	if (channels.includes("telegram") && draft.telegram) {
 		savedEnv.TELEGRAM_BOT_TOKEN = draft.telegram.botToken.trim();
@@ -1808,6 +1822,7 @@ export async function completeAgentCreation(draft: AgentCreationDraft): Promise<
 			: draft.feishu?.appName?.trim() || importedProfile.id
 		: draft.feishu?.appName?.trim() ||
 			draft.discord?.botName?.trim() ||
+			(channels.includes("dingtalk") ? "DingTalk Agent" : undefined) ||
 			draft.telegram?.botUsername?.trim() ||
 			draft.name?.trim() ||
 			profileId;

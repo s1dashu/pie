@@ -5,11 +5,11 @@
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
-![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord-4F7A8A)
+![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord%20%7C%20DingTalk-4F7A8A)
 
 Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels. Learn more at [pieim.com](https://pieim.com/).
 
-The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat is early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
+The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat and DingTalk are early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
 
 <a href="docs/assets/pie-latest-intro.mp4">
   <img src="docs/assets/pie-latest-intro-preview.gif" alt="Pie intro video" width="100%">
@@ -82,7 +82,8 @@ Current channel status:
 1. Feishu/Lark is the primary and most complete IM channel.
 2. WeChat can log in, poll, receive, and send messages, but should still be treated as early support.
 3. Discord is available in the desktop creation flow and runtime.
-4. Slack and Telegram remain hidden development channels.
+4. DingTalk is available in the desktop creation flow and runtime with app bot Stream mode text replies.
+5. Slack and Telegram remain hidden development channels.
 
 Current harness status:
 
@@ -96,7 +97,7 @@ Pie does not provide a security sandbox yet. The Runtime Environment sets an Age
 
 ## Download
 
-The latest tagged pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2). The current source version is 0.2.3.
+The latest tagged pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2). The current source version is 0.2.4.
 
 - [Download for macOS Apple Silicon](https://github.com/s1dashu/pie/releases/download/v0.2.2/Pie-0.2.2-arm64.dmg)
 - Windows and Linux builds are not published yet.
@@ -135,7 +136,7 @@ Pie is organized around a small set of boundaries:
 1. **Desktop app**: manage Agents, channels, models, logs, folders, Skills, and global preferences.
 2. **Runtime**: start one profile/Agent instance with its selected channels and harness capability.
 3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, OpenClaw, and future backends into Pie's session and event surface.
-4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, Discord, and future adapters.
+4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, Discord, DingTalk, and future adapters.
 5. **Profile state**: keep profile-scoped config, secrets, runtime logs, usage events, normalized agent events, Skills, and working directories under the Agent profile home.
 
 ## Development

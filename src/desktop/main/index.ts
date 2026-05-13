@@ -15,6 +15,7 @@ import { getDefaultResumeSessionsForHarness } from "../../core/session-policy.js
 import {
 	getPrimaryFeishuChannel,
 	getPrimaryDiscordChannel,
+	getPrimaryDingTalkChannel,
 	getPrimarySlackChannel,
 	getPrimaryTelegramChannel,
 	getPrimaryWechatChannel,
@@ -853,6 +854,7 @@ async function getAgent(id: string): Promise<AgentDetails> {
 	const wechatChannel = getPrimaryWechatChannel(profile);
 	const slackChannel = getPrimarySlackChannel(profile);
 	const discordChannel = getPrimaryDiscordChannel(profile);
+	const dingtalkChannel = getPrimaryDingTalkChannel(profile);
 	const telegramChannel = getPrimaryTelegramChannel(profile);
 	const model = getProfileModel(profile);
 	const apiKeyEnv = model?.provider ? getProviderCredentialEnv(model.provider) : undefined;
@@ -882,6 +884,12 @@ async function getAgent(id: string): Promise<AgentDetails> {
 					botToken: env.DISCORD_BOT_TOKEN ?? "",
 					applicationId: discordChannel.applicationId,
 					guildId: discordChannel.guildId,
+				}
+			: undefined,
+		dingtalk: dingtalkChannel
+			? {
+					clientId: dingtalkChannel.clientId,
+					clientSecret: env.DINGTALK_CLIENT_SECRET ?? "",
 				}
 			: undefined,
 		telegram: telegramChannel

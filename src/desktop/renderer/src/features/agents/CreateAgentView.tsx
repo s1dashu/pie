@@ -48,9 +48,10 @@ const channelOptions = [
 	{ value: "feishu", labelKey: "feishu", enabled: true, developerOnly: false },
 	{ value: "wechat", labelKey: "wechat", enabled: true, developerOnly: false },
 	{ value: "discord", label: "Discord", enabled: true, developerOnly: false },
+	{ value: "dingtalk", labelKey: "dingtalk", enabled: true, developerOnly: false },
 ] as const;
 
-const manualChannelKinds: DesktopChannelKind[] = ["discord"];
+const manualChannelKinds: DesktopChannelKind[] = ["discord", "dingtalk"];
 const controlSurfaceClass = "border-transparent bg-[var(--slate-2)] hover:border-transparent focus-visible:border-transparent";
 type CreateAgentStep = "config" | "identity" | "auth" | "credentials" | "model" | "runtime";
 type AgentCreationMode = "create" | "import";
@@ -164,6 +165,8 @@ export function CreateAgentView({
 	const [discordGuildId, setDiscordGuildId] = useState("");
 	const [discordProfile, setDiscordProfile] = useState<DesktopDiscordBotProfile | undefined>();
 	const [discordSyncStatus, setDiscordSyncStatus] = useState("");
+	const [dingtalkClientId, setDingTalkClientId] = useState("");
+	const [dingtalkClientSecret, setDingTalkClientSecret] = useState("");
 	const [qrEvent, setQrEvent] = useState<AgentOnboardEvent | undefined>();
 	const [qrExpiresAt, setQrExpiresAt] = useState<number | undefined>();
 	const [qrExpired, setQrExpired] = useState(false);
@@ -370,6 +373,9 @@ export function CreateAgentView({
 			if (channels.includes("discord") && !discordBotToken.trim()) {
 				throw new Error(t("discordTokenRequired"));
 			}
+			if (channels.includes("dingtalk") && (!dingtalkClientId.trim() || !dingtalkClientSecret.trim())) {
+				throw new Error(t("dingtalkCredentialsRequired"));
+			}
 			if (harness === "codex" && (!codexDiagnostic.data?.installed || !codexDiagnostic.data.authenticated)) {
 				throw new Error(t("codexNeedInstalled"));
 			}
@@ -393,6 +399,14 @@ export function CreateAgentView({
 								guildId: discordGuildId,
 								botName: name,
 								avatarUrl: discordProfile?.avatarUrl,
+							},
+						}
+					: {}),
+				...(channels.includes("dingtalk")
+					? {
+							dingtalk: {
+								clientId: dingtalkClientId,
+								clientSecret: dingtalkClientSecret,
 							},
 						}
 					: {}),
@@ -1006,9 +1020,13 @@ export function CreateAgentView({
 											discordProfile={discordProfile}
 											discordSyncStatus={discordSyncStatus}
 											isSyncingDiscord={syncDiscordProfile.isPending}
+											dingtalkClientId={dingtalkClientId}
+											dingtalkClientSecret={dingtalkClientSecret}
 											setDiscordBotToken={setDiscordBotToken}
 											setDiscordApplicationId={setDiscordApplicationId}
 											setDiscordGuildId={setDiscordGuildId}
+											setDingTalkClientId={setDingTalkClientId}
+											setDingTalkClientSecret={setDingTalkClientSecret}
 											onSyncDiscordProfile={() => syncDiscordProfile.mutate()}
 										/>
 									</div>
@@ -1660,9 +1678,13 @@ function ManualChannelCredentials(props: {
 	discordProfile: DesktopDiscordBotProfile | undefined;
 	discordSyncStatus: string;
 	isSyncingDiscord: boolean;
+	dingtalkClientId: string;
+	dingtalkClientSecret: string;
 	setDiscordBotToken: (value: string) => void;
 	setDiscordApplicationId: (value: string) => void;
 	setDiscordGuildId: (value: string) => void;
+	setDingTalkClientId: (value: string) => void;
+	setDingTalkClientSecret: (value: string) => void;
 	onSyncDiscordProfile: () => void;
 }): JSX.Element {
 	const { t } = useI18n();
@@ -1711,6 +1733,18 @@ function ManualChannelCredentials(props: {
 							</div>
 						</div>
 					) : null}
+				</div>
+			) : null}
+			{props.channels.includes("dingtalk") ? (
+				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
+					<div className="text-sm font-semibold leading-snug text-foreground">{t("dingtalk")}</div>
+					<div className="text-xs leading-5 text-muted-foreground">{t("dingtalkDesc")}</div>
+					<Field label="Client ID">
+						<Input className={controlSurfaceClass} value={props.dingtalkClientId} onChange={(event) => props.setDingTalkClientId(event.target.value)} />
+					</Field>
+					<Field label="Client Secret">
+						<Input className={controlSurfaceClass} type="password" value={props.dingtalkClientSecret} onChange={(event) => props.setDingTalkClientSecret(event.target.value)} />
+					</Field>
 				</div>
 			) : null}
 		</div>

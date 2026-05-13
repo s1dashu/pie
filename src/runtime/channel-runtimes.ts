@@ -2,6 +2,8 @@ import { isChannelAvailableForRelease } from "../core/channel-availability.js";
 import type { AgentProfile, ChannelKind } from "../core/config-store.js";
 import { loadConfig as loadDiscordConfig } from "../channels/discord/config.js";
 import { createDiscordBotRuntime } from "../channels/discord/main.js";
+import { loadConfig as loadDingTalkConfig } from "../channels/dingtalk/config.js";
+import { createDingTalkBotRuntime } from "../channels/dingtalk/main.js";
 import { loadConfig as loadFeishuConfig } from "../channels/feishu/config.js";
 import { createFeishuBotRuntime } from "../channels/feishu/main.js";
 import { loadConfig as loadSlackConfig } from "../channels/slack/config.js";
@@ -38,6 +40,9 @@ function createChannelRuntime(kind: ChannelKind): ChannelRuntime | undefined {
 	}
 	if (kind === "telegram") {
 		return createTelegramBotRuntime(loadTelegramConfig());
+	}
+	if (kind === "dingtalk") {
+		return createDingTalkBotRuntime(loadDingTalkConfig());
 	}
 	return undefined;
 }

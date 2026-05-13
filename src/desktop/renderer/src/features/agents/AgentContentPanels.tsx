@@ -106,10 +106,12 @@ export function AgentContentPanels({
 	const isFeishuCredentialInvalidated = agent.feishuCredentialState === "invalidated";
 	const hasWechatChannel = Boolean(agent.channelKinds?.includes("wechat") || agent.wechat);
 	const hasDiscordChannel = Boolean(agent.channelKinds?.includes("discord") || agent.discord);
+	const hasDingTalkChannel = Boolean(agent.channelKinds?.includes("dingtalk") || agent.dingtalk);
 	const channelKinds = [
 		...(hasFeishuChannel ? ["feishu"] : []),
 		...(hasWechatChannel ? ["wechat"] : []),
 		...(hasDiscordChannel ? ["discord"] : []),
+		...(hasDingTalkChannel ? ["dingtalk"] : []),
 	];
 	const usesCodexCli = draft.provider === "codex-cli" || agent.harnessKind === "codex";
 	const showsSystemPrompt = agent.harnessKind === "ousia";
@@ -379,6 +381,19 @@ export function AgentContentPanels({
 								</Field>
 								<Field label="Guild ID">
 									<Input value={channelDraft.discordGuildId ?? ""} onChange={(event) => onUpdateChannelField("discordGuildId", event.target.value)} />
+								</Field>
+							</div>
+						</div>
+					) : null}
+					{hasDingTalkChannel ? (
+						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
+							<SectionTitle title={t("dingtalk")} description={t("dingtalkDesc")} />
+							<div className="grid grid-cols-2 gap-4">
+								<Field label="Client ID">
+									<Input value={channelDraft.dingtalkClientId ?? ""} onChange={(event) => onUpdateChannelField("dingtalkClientId", event.target.value)} />
+								</Field>
+								<Field label="Client Secret">
+									<SecretInput value={channelDraft.dingtalkClientSecret ?? ""} onChange={(event) => onUpdateChannelField("dingtalkClientSecret", event.target.value)} />
 								</Field>
 							</div>
 						</div>

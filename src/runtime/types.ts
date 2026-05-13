@@ -1,6 +1,6 @@
 export type AgentHarnessKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 
-export type PieChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
+export type PieChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram" | "dingtalk";
 
 export interface AgentRuntimeIdentity {
 	harness: AgentHarnessKind;

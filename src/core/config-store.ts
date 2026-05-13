@@ -30,7 +30,7 @@ export {
 	upsertAgentEnv,
 } from "./agent-home.js";
 
-export type ChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
+export type ChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram" | "dingtalk";
 export type AgentHarnessKind = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
 
 export interface FeishuChannelProfile {
@@ -81,6 +81,13 @@ export interface TelegramChannelProfile {
 	botUsername?: string;
 }
 
+export interface DingTalkChannelProfile {
+	kind: "dingtalk";
+	id: string;
+	enabled: boolean;
+	clientId: string;
+}
+
 export interface ModelProfile {
 	provider?: string;
 	model?: string;
@@ -106,7 +113,8 @@ export type ChannelProfile =
 	| WechatChannelProfile
 	| SlackChannelProfile
 	| DiscordChannelProfile
-	| TelegramChannelProfile;
+	| TelegramChannelProfile
+	| DingTalkChannelProfile;
 
 /** Stored agent instance profile. One profile is one agent instance and may expose multiple channels. */
 export interface AgentProfile {
@@ -242,6 +250,22 @@ function normalizeTelegramChannel(value: unknown): TelegramChannelProfile | unde
 		enabled: typeof value.enabled === "boolean" ? value.enabled : true,
 		botUsername:
 			typeof value.botUsername === "string" && value.botUsername.trim() ? value.botUsername.trim() : undefined,
+	};
+}
+
+function normalizeDingTalkChannel(value: unknown): DingTalkChannelProfile | undefined {
+	if (!isRecord(value) || value.kind !== "dingtalk") {
+		return undefined;
+	}
+	const clientId = typeof value.clientId === "string" ? value.clientId.trim() : "";
+	if (!clientId) {
+		return undefined;
+	}
+	return {
+		kind: "dingtalk",
+		id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : "dingtalk",
+		enabled: typeof value.enabled === "boolean" ? value.enabled : true,
+		clientId,
 	};
 }
 
@@ -384,7 +408,8 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | undefined 
 				normalizeWechatChannel(channel) ??
 				normalizeSlackChannel(channel) ??
 				normalizeDiscordChannel(channel) ??
-				normalizeTelegramChannel(channel),
+				normalizeTelegramChannel(channel) ??
+				normalizeDingTalkChannel(channel),
 		)
 		.filter((channel): channel is ChannelProfile => Boolean(channel));
 	return createAgentProfile({
@@ -458,6 +483,12 @@ export function getPrimaryDiscordChannel(profile: AgentProfile | undefined): Dis
 export function getPrimaryTelegramChannel(profile: AgentProfile | undefined): TelegramChannelProfile | undefined {
 	return profile?.channels.find(
 		(channel): channel is TelegramChannelProfile => channel.kind === "telegram" && channel.enabled !== false,
+	);
+}
+
+export function getPrimaryDingTalkChannel(profile: AgentProfile | undefined): DingTalkChannelProfile | undefined {
+	return profile?.channels.find(
+		(channel): channel is DingTalkChannelProfile => channel.kind === "dingtalk" && channel.enabled !== false,
 	);
 }
 
@@ -547,6 +578,10 @@ export function upsertDiscordChannel(profile: AgentProfile | undefined, channel:
 
 export function upsertTelegramChannel(profile: AgentProfile | undefined, channel: TelegramChannelProfile): AgentProfile {
 	return upsertChannel(profile, channel, normalizeTelegramChannel);
+}
+
+export function upsertDingTalkChannel(profile: AgentProfile | undefined, channel: DingTalkChannelProfile): AgentProfile {
+	return upsertChannel(profile, channel, normalizeDingTalkChannel);
 }
 
 export function normalizeConfigStore(value: unknown): AgentConfigStore {

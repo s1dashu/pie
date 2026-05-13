@@ -3,9 +3,11 @@ import { describe, it } from "node:test";
 import { isChannelAvailableForRelease, isDevelopmentChannel } from "./channel-availability.js";
 
 describe("channel availability", () => {
-	it("treats Discord as a release channel", () => {
+	it("treats Discord and DingTalk as release channels", () => {
 		assert.equal(isDevelopmentChannel("discord"), false);
 		assert.equal(isChannelAvailableForRelease("discord", { developerMode: false }), true);
+		assert.equal(isDevelopmentChannel("dingtalk"), false);
+		assert.equal(isChannelAvailableForRelease("dingtalk", { developerMode: false }), true);
 	});
 
 	it("keeps Slack and Telegram hidden from release channel creation", () => {

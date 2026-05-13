@@ -11,6 +11,7 @@ const harnessLabels: Record<string, string> = {
 
 const channelLabels: Record<string, string> = {
 	discord: "Discord",
+	dingtalk: "DingTalk",
 	feishu: "Feishu",
 	slack: "Slack",
 	telegram: "Telegram",

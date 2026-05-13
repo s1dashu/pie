@@ -1,6 +1,7 @@
 import { toOpenClawModelRef } from "../../agents/openclaw-models.js";
 import {
 	getPrimaryDiscordChannel,
+	getPrimaryDingTalkChannel,
 	getPrimaryFeishuChannel,
 	getPrimarySlackChannel,
 	getPrimaryTelegramChannel,
@@ -10,6 +11,7 @@ import {
 	setProfileModel,
 	setImBehavior,
 	upsertDiscordChannel,
+	upsertDingTalkChannel,
 	upsertFeishuChannel,
 	upsertSlackChannel,
 	upsertTelegramChannel,
@@ -51,6 +53,7 @@ export function planAgentProfileMutation(options: {
 	const wechatChannel = getPrimaryWechatChannel(currentProfile);
 	const slackChannel = getPrimarySlackChannel(currentProfile);
 	const discordChannel = getPrimaryDiscordChannel(currentProfile);
+	const dingtalkChannel = getPrimaryDingTalkChannel(currentProfile);
 	const telegramChannel = getPrimaryTelegramChannel(currentProfile);
 	const model = getProfileModel(currentProfile) ?? {};
 	const hasFeishuDraft =
@@ -70,6 +73,9 @@ export function planAgentProfileMutation(options: {
 		draft.discordBotToken !== undefined ||
 		draft.discordApplicationId !== undefined ||
 		draft.discordGuildId !== undefined;
+	const hasDingTalkDraft =
+		draft.dingtalkClientId !== undefined ||
+		draft.dingtalkClientSecret !== undefined;
 	const hasTelegramDraft = draft.telegramBotToken !== undefined || draft.telegramBotUsername !== undefined;
 	const hasModelUpdate =
 		draft.provider !== undefined ||
@@ -88,6 +94,9 @@ export function planAgentProfileMutation(options: {
 	const hasDiscordUpdate = discordChannel
 		? hasDiscordDraft
 		: hasNonEmptyDraftValue(draft.discordBotToken, draft.discordApplicationId, draft.discordGuildId);
+	const hasDingTalkUpdate = dingtalkChannel
+		? hasDingTalkDraft
+		: hasNonEmptyDraftValue(draft.dingtalkClientId, draft.dingtalkClientSecret);
 	const hasTelegramUpdate = telegramChannel
 		? hasTelegramDraft
 		: hasNonEmptyDraftValue(draft.telegramBotToken, draft.telegramBotUsername);
@@ -117,6 +126,13 @@ export function planAgentProfileMutation(options: {
 		const token = draft.discordBotToken ?? env.DISCORD_BOT_TOKEN ?? "";
 		if (!token.trim()) {
 			throw new Error("Discord Bot Token 必填");
+		}
+	}
+	if (hasDingTalkUpdate) {
+		const clientId = draft.dingtalkClientId ?? dingtalkChannel?.clientId ?? "";
+		const clientSecret = draft.dingtalkClientSecret ?? env.DINGTALK_CLIENT_SECRET ?? "";
+		if (!clientId.trim() || !clientSecret.trim()) {
+			throw new Error("钉钉 Client ID 和 Client Secret 必填");
 		}
 	}
 	if (hasTelegramUpdate) {
@@ -155,6 +171,12 @@ export function planAgentProfileMutation(options: {
 			...(discordChannel ?? { kind: "discord" as const, id: "discord", enabled: true }),
 			applicationId: draft.discordApplicationId ?? discordChannel?.applicationId,
 			guildId: draft.discordGuildId ?? discordChannel?.guildId,
+		});
+	}
+	if (dingtalkChannel || hasDingTalkUpdate) {
+		nextProfileWithChannel = upsertDingTalkChannel(nextProfileWithChannel, {
+			...(dingtalkChannel ?? { kind: "dingtalk" as const, id: "dingtalk", enabled: true }),
+			clientId: (draft.dingtalkClientId ?? dingtalkChannel?.clientId ?? "").trim(),
 		});
 	}
 	if (telegramChannel || hasTelegramUpdate) {
@@ -219,6 +241,9 @@ export function planAgentProfileMutation(options: {
 	}
 	if (hasDiscordUpdate && draft.discordBotToken !== undefined) {
 		envUpdates.DISCORD_BOT_TOKEN = draft.discordBotToken.trim();
+	}
+	if (hasDingTalkUpdate && draft.dingtalkClientSecret !== undefined) {
+		envUpdates.DINGTALK_CLIENT_SECRET = draft.dingtalkClientSecret.trim();
 	}
 	if (hasTelegramUpdate && draft.telegramBotToken !== undefined) {
 		envUpdates.TELEGRAM_BOT_TOKEN = draft.telegramBotToken.trim();

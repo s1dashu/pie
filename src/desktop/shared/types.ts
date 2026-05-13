@@ -69,6 +69,10 @@ export interface AgentDetails extends AgentSummary {
 		applicationId?: string;
 		guildId?: string;
 	};
+	dingtalk?: {
+		clientId?: string;
+		clientSecret?: string;
+	};
 	telegram?: {
 		botToken?: string;
 		botUsername?: string;
@@ -88,7 +92,7 @@ export interface AgentDetails extends AgentSummary {
 
 export type DesktopThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type DesktopAgentHarness = "ousia" | "pi" | "codex" | "claude-code" | "openclaw" | "hermes";
-export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram";
+export type DesktopChannelKind = "feishu" | "wechat" | "slack" | "discord" | "telegram" | "dingtalk";
 export type DesktopCodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type DesktopCodexWebSearchMode = "disabled" | "cached" | "live";
 export type DesktopFeishuMessageOutputMode = "bubble" | "card";
@@ -155,6 +159,8 @@ export interface AgentDraft {
 	discordBotToken?: string;
 	discordApplicationId?: string;
 	discordGuildId?: string;
+	dingtalkClientId?: string;
+	dingtalkClientSecret?: string;
 	telegramBotToken?: string;
 	telegramBotUsername?: string;
 }
@@ -289,6 +295,10 @@ export interface AgentCreationDraft {
 		guildId?: string;
 		botName?: string;
 		avatarUrl?: string;
+	};
+	dingtalk?: {
+		clientId: string;
+		clientSecret: string;
 	};
 	telegram?: {
 		botToken: string;

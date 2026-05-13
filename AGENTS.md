@@ -19,9 +19,8 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 
 - 根目录 `pie` 是客户端产品 runtime：desktop、CLI/onboard、channel adapters、profile/config/agent home 管理。
 - 当前主要开发对象是桌面端；CLI/onboard、channel adapters 等能力服务于桌面端 Agent 客户端体验。
-- `feishu` 是当前完成度较高的 channel。
-- `wechat` 已有扫码登录、轮询和收发消息实现，但仍按早期集成处理。
-- `discord` 已接入桌面创建入口和 runtime，可按当前实现维护；`slack`、`telegram` 仍是开发中 channel，桌面开发者模式开启后才开放，本地 runtime 在非开发者模式下会跳过它们。
+- 当前支持的 IM channel 是 `feishu`、`wechat`、`discord` 和 `dingtalk`；其中 `feishu` 完成度较高，`wechat` 已有扫码登录、轮询和收发消息实现，`discord` 已接入桌面创建入口和 runtime，`dingtalk` 已接入应用机器人 Stream 模式文本收发。
+- `slack`、`telegram` 仍在支持中，桌面开发者模式开启后才开放，本地 runtime 在非开发者模式下会跳过它们。
 - Pi / `pi-coding-agent` 是当前真正稳定运行的 harness/backend，默认创建新 Agent 时选择 Pi。
 - Ousia 复用 `pi-coding-agent` session，但有自己的 system prompt、tools 配置、Task Engine 和 `/agent/run` gateway。
 - Codex 通过本机官方 Codex CLI 的 `app-server --listen stdio://` 接入；桌面有安装/登录诊断和模型选择，但 permission/plan approval 的 IM 交互仍未完成。
@@ -47,6 +46,20 @@ Pie 是一个个人 Agent 客户端产品，不是单纯的 coding bot。Pie 是
 ## Design Instructions
 
 Desktop UI、视觉 tokens、组件样式和交互规范统一维护在 [DESIGN.md](./DESIGN.md)。不要在 AGENTS.md 里重复 UI/design 规则。
+
+## Official Website / Landing Page
+
+Pie 官网是相邻独立 repo `/Users/bytedance/code/pie-landing-page`，不是本 repo 的 workspace package。用户提到官网、landing page、下载页、SEO、非登录态首页或公开产品介绍时，优先切到该 repo，并先读它自己的 `AGENTS.md`。
+
+官网维护规则：
+
+- `pie-landing-page` 是 Next.js app，基于 SaaS landing page template；尽量保留模板视觉风格，除非用户明确要求改视觉资产。
+- 官网内容以本 repo 的 `README.md` 和 `AGENTS.md` 为产品事实源；文案要营销友好但保守，不要把原型、早期接入或未稳定能力写成已稳定发布。
+- 当前官网已有英文根路径 `/` 和中文路径 `/zh`；如要做地区或语言默认跳转，应在 `pie-landing-page` 中实现并验证，不要在 Pie desktop/runtime 里处理。
+- 当前公开下载主要面向 macOS；不要添加 Windows/Linux 下载按钮，除非 Pie 实际已经发布对应构建。
+- DMG 体积过大，不能放入官网 `public/`；下载链接使用 Vercel Blob URL，更新安装包时按 `pie-landing-page/AGENTS.md` 的 Vercel Blob 流程处理。
+- 官网常见同步文件包括 `src/app/layout.tsx`、`src/app/page.tsx`、`src/app/zh/page.tsx`、`src/components/Hero.tsx`、`src/components/PrimaryFeatures.tsx`、`src/components/Faqs.tsx`、`src/components/Testimonials.tsx` 和官网 `README.md`。
+- 修改官网后在 `/Users/bytedance/code/pie-landing-page` 运行 `npm run lint` 和 `npm run build`。用户要求更新线上站点时，通常 commit + push `origin/main` 触发 Vercel Git 部署；不要默认跑 `npx vercel --prod`，除非用户明确要求或 Git 部署不可用。
 
 ## Architecture Rules
 
@@ -182,7 +195,7 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 
 - `src/cli/index.ts`：根 CLI 入口；`npm run start` / `pie` 启动 runtime；`pie onboard` 或 `pie --onboard` 进入配置。
 - `src/runtime/main.ts`：Pie 客户端 runtime 编排入口，初始化 profile home，并按 `AgentHarnessDefinition.lifecycleHooks` 启动当前可用 channel、framework companion 和 managed harness service。
-- `src/runtime/channel-runtimes.ts`：按 profile enabled channels 和 developerMode 创建 Feishu/Wechat/Discord/Slack/Telegram runtime。
+- `src/runtime/channel-runtimes.ts`：按 profile enabled channels 和 developerMode 创建 Feishu/Wechat/Discord/DingTalk/Slack/Telegram runtime。
 - `src/runtime/environment.ts`：Runtime Environment 抽象，负责解析/创建工作目录并表达生命周期状态；当前不是安全沙盒。
 - `src/agents/harness-registry.ts`：harness/backend 集中注册入口；每个 harness 同时声明 `AgentHarnessAdapter`、可选 `HarnessLifecycleHooks` 和 skill sources。不要再维护第二套 harness runtime registry。
 - `src/agents/types.ts`：Pie agent session port 与统一事件协议定义。
@@ -200,6 +213,7 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 - `src/agents/harness-services/openclaw.ts`：OpenClaw managed harness service；负责可选启动/管理 OpenClaw gateway，不承载通用 agent 事件协议。
 - `src/channels/feishu/main.ts`：Feishu channel adapter。
 - `src/channels/wechat/main.ts`：WeChat channel adapter；当前仍属于早期集成。
+- `src/channels/dingtalk/main.ts`：DingTalk channel adapter；当前基于应用机器人 Stream 模式和 sessionWebhook 文本回复。
 - `src/channels/common/`：Slack/Discord/Telegram 等 text channel adapter 共享 runtime。
 - `src/channels/common/channel-model.ts`：channel message parts 与 `AgentPromptInput` 转换，包含图片下载/读取到 base64 的共享逻辑。
 - `src/channels/common/run-orchestration.ts`：跨 channel 的 owner session、scheduled run queue 和 agent task prompt 规则。
@@ -212,6 +226,7 @@ Desktop 启动恢复 agent 时不能简单并发拉起所有 profile。不同 ha
 - `src/core/startup-spans.ts`：启动路径轻量 JSONL span，用于分析 desktop/runtime/harness service 启动耗时。
 - `src/core/harness-service-state.ts`：共享 harness service 状态文件读写。
 - `packages/ousia/`：Ousia workspace package；包含 Ousia system prompt、Task Engine、run gateway、project/task/docs layout，并通过 `@pie/ousia` 暴露 public API 给 Pie host。
+- `/Users/bytedance/code/pie-landing-page`：Pie 官网 / landing page 独立 repo；官网文案和下载页维护入口，详细规则见该 repo 的 `AGENTS.md`。
 - `src/desktop/`：Electron desktop。
 - `src/desktop/main/agent-process-manager.ts`：桌面端 agent runtime 子进程启动/停止、日志采集、ready 识别和 runtime state 持久化。
 - `src/desktop/main/agent-runtime-launcher.ts`：选择 tsx 源码入口或 dist runtime 入口，并分配本地 gateway port。

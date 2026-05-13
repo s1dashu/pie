@@ -13,6 +13,8 @@ export interface ChannelTarget {
 	channelId: string;
 	threadId?: string;
 	userId?: string;
+	dingtalkSessionWebhook?: string;
+	dingtalkSessionWebhookExpiredTime?: number;
 }
 
 export interface IncomingChannelMessage {

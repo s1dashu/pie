@@ -96,6 +96,23 @@ export function getPresentationRules(input: {
 			},
 		};
 	}
+	if (input.channel === "dingtalk") {
+		return {
+			...defaultRules,
+			text: {
+				naturalSplitAfterChars: 2500,
+				maxChars: 4000,
+				sentenceEndChars: SENTENCE_END_CHARS,
+			},
+			toolCalls: {
+				linesPerMessage: 8,
+			},
+			markdown: {
+				mode: "chat-markdown",
+				allowTables: false,
+			},
+		};
+	}
 	if (input.channel === "feishu" && input.surface === "card") {
 		return {
 			...defaultRules,
