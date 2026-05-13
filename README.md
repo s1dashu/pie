@@ -29,37 +29,43 @@ Pie gives you one desktop surface for day-to-day Agent work:
 
 Follow messages, runtime state, CPU, memory, and recent activity from the desktop view.
 
-<img src="docs/assets/screenshots/dashboard.png" alt="Pie desktop dashboard" width="100%">
+<img src="docs/assets/screenshots/monitor.png" alt="Pie agent monitor view" width="100%">
 
 ### Create Local Agent Profiles
 
-Create a profile, choose a harness, connect channels, and set the working directory.
+Create a profile by choosing the agent harness and IM channel that should back one agent instance.
 
-<img src="docs/assets/screenshots/create-easily.png" alt="Create an Agent profile in Pie" width="100%">
+<img src="docs/assets/screenshots/create-new-agents.png" alt="Create an Agent profile in Pie" width="100%">
 
-### Connect Channels And Choose Models
+### Configure IM Channels
 
-Configure IM channels and model settings from the desktop app.
+Configure channel credentials and behavior from the desktop app.
 
-<img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%"> <img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%">
+<img src="docs/assets/screenshots/channels.png" alt="Configure an IM channel in Pie" width="100%">
 
-### Manage Skills
+### Tune Agent Runtime
 
-Manage Skill sources from the desktop app.
+Choose provider, model, thinking level, API key, system prompt, and working-directory settings for each profile.
 
-<img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="100%">
+<img src="docs/assets/screenshots/agent-config.png" alt="Agent runtime configuration in Pie" width="100%">
+
+### Quick Local Debugging
+
+Use the local chat view for quick checks while keeping day-to-day conversations in connected IM channels.
+
+<img src="docs/assets/screenshots/chat.png" alt="Local debug chat in Pie" width="100%">
 
 ### Inspect Runtime Output
 
 Review logs and terminal output when an Agent is running for a long time.
 
-<img src="docs/assets/screenshots/agent-terminal-logs.png" alt="Agent terminal logs in Pie" width="100%">
+<img src="docs/assets/screenshots/logs.png" alt="Agent runtime logs in Pie" width="100%">
 
-### Customize The Workspace
+### Manage Desktop Settings
 
-Adjust the desktop theme and profile presentation details.
+Adjust desktop language, appearance, lifecycle, and launch behavior.
 
-<img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="48%"> <img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
+<img src="docs/assets/screenshots/settings.png" alt="Pie desktop settings" width="100%">
 
 ## Status
 

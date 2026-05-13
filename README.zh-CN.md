@@ -29,37 +29,43 @@ Pie 给日常 Agent 工作提供一个统一的桌面入口：
 
 在桌面视图里跟踪消息、运行状态、CPU、内存和近期活动。
 
-<img src="docs/assets/screenshots/dashboard.png" alt="Pie desktop dashboard" width="100%">
+<img src="docs/assets/screenshots/monitor.png" alt="Pie agent monitor view" width="100%">
 
 ### 创建本地 Agent Profile
 
-创建 profile，选择 harness，连接渠道，并设置工作目录。
+创建 profile 时选择 Agent Harness 和 IM 渠道，让一个 profile 对应一个 agent instance。
 
-<img src="docs/assets/screenshots/create-easily.png" alt="Create an Agent profile in Pie" width="100%">
+<img src="docs/assets/screenshots/create-new-agents.png" alt="Create an Agent profile in Pie" width="100%">
 
-### 连接渠道和选择模型
+### 配置 IM 渠道
 
-在桌面端配置 IM 渠道和模型设置。
+在桌面端配置渠道凭证和 IM 行为。
 
-<img src="docs/assets/screenshots/channel-config.png" alt="Configure an IM channel in Pie" width="48%"> <img src="docs/assets/screenshots/model-configuration.png" alt="Model configuration in Pie" width="48%">
+<img src="docs/assets/screenshots/channels.png" alt="Configure an IM channel in Pie" width="100%">
 
-### 管理 Skills
+### 调整 Agent Runtime
 
-在桌面端管理 Skill 来源。
+为每个 profile 设置 provider、model、thinking level、API key、system prompt 和工作目录等运行参数。
 
-<img src="docs/assets/screenshots/skills-management.png" alt="Skills management in Pie" width="100%">
+<img src="docs/assets/screenshots/agent-config.png" alt="Agent runtime configuration in Pie" width="100%">
+
+### 本地快速调试
+
+本地 chat 视图用于快速检查；日常完整对话仍通过已连接的 IM 渠道进行。
+
+<img src="docs/assets/screenshots/chat.png" alt="Local debug chat in Pie" width="100%">
 
 ### 检查运行输出
 
 查看长期运行 Agent 的日志和终端输出。
 
-<img src="docs/assets/screenshots/agent-terminal-logs.png" alt="Agent terminal logs in Pie" width="100%">
+<img src="docs/assets/screenshots/logs.png" alt="Agent runtime logs in Pie" width="100%">
 
-### 自定义工作区
+### 管理桌面端设置
 
-调整桌面主题和 profile 展示细节。
+调整桌面语言、外观、生命周期和开机启动行为。
 
-<img src="docs/assets/screenshots/customizable-theme.png" alt="Theme customization in Pie" width="48%"> <img src="docs/assets/screenshots/cute-avatars.png" alt="Agent avatars in Pie" width="48%">
+<img src="docs/assets/screenshots/settings.png" alt="Pie desktop settings" width="100%">
 
 ## 当前状态
 
