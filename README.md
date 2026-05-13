@@ -7,7 +7,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
 ![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord-4F7A8A)
 
-Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels.
+Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels. Learn more at [pieim.com](https://pieim.com/).
 
 The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat is early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
 

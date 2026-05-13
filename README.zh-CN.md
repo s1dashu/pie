@@ -7,7 +7,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
 ![支持的 IM 渠道](https://img.shields.io/badge/IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord-4F7A8A)
 
-Pie 是一个 desktop-first 的个人 Agent 客户端，用来创建、运行和观察通过 IM 渠道工作的本地 Agent。
+Pie 是一个 desktop-first 的个人 Agent 客户端，用来创建、运行和观察通过 IM 渠道工作的本地 Agent。更多介绍见 [pieim.com](https://pieim.com/)。
 
 当前最稳定的路径是 Pie Desktop + Pi Agent Harness + Feishu/Lark 渠道。WeChat 属于早期支持，Discord 已在桌面端创建流程和 runtime 中开放，Slack 和 Telegram 仍是隐藏的开发中渠道；Ousia、Codex、Hermes、OpenClaw 是高级 harness 选择，不是默认稳定路径。
 
