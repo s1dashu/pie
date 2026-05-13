@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createAgentProfile, getImBehavior, getPrimaryFeishuChannel, getPrimaryWechatChannel, getProfileModel } from "../../core/config-store.js";
+import {
+	createAgentProfile,
+	getImBehavior,
+	getPrimaryDingTalkChannel,
+	getPrimaryFeishuChannel,
+	getPrimaryWechatChannel,
+	getProfileModel,
+} from "../../core/config-store.js";
 import { planAgentProfileMutation } from "./agent-profile-mutation.js";
 
 describe("planAgentProfileMutation", () => {
@@ -147,6 +154,22 @@ describe("planAgentProfileMutation", () => {
 			WECHAT_ACCOUNT_ID: "account-1",
 			WECHAT_BASE_URL: "https://example.test",
 			WECHAT_BOT_TOKEN: "wechat-token",
+		});
+	});
+
+	it("creates DingTalk channel and stores only the secret in env updates", () => {
+		const plan = planAgentProfileMutation({
+			currentProfile: createAgentProfile({}),
+			draft: {
+				dingtalkClientId: "ding-client",
+				dingtalkClientSecret: "ding-secret",
+			},
+			env: {},
+		});
+
+		assert.equal(getPrimaryDingTalkChannel(plan.nextProfile)?.clientId, "ding-client");
+		assert.deepEqual(plan.envUpdates, {
+			DINGTALK_CLIENT_SECRET: "ding-secret",
 		});
 	});
 });
