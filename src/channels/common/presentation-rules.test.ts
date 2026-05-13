@@ -9,7 +9,7 @@ describe("presentation rules", () => {
 
 		assert.ok(prompt?.startsWith("## Channel response rules"));
 		assert.ok(prompt?.includes("Never use Markdown tables"));
-		assert.ok(prompt?.includes("Reply in Chinese"));
+		assert.equal(prompt?.includes("Reply in Chinese"), false);
 		assert.equal(prompt?.includes("## User message"), false);
 	});
 

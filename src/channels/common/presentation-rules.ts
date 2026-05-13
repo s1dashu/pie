@@ -46,7 +46,6 @@ const defaultRules: PresentationRules = {
 
 const FEISHU_PROMPT_HINTS = [
 	"Never use Markdown tables in Feishu replies; use bullet lists, numbered lists, or plain text instead.",
-	"Reply in Chinese unless the user explicitly asks for another language.",
 ] as const;
 
 export function formatPresentationPromptHints(rules: Pick<PresentationRules, "promptHints">): string | undefined {
