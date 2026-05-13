@@ -10,20 +10,22 @@ This document describes the intended first public release scope for Pie.
 4. Ousia Agent Harness as an explicit advanced/experimental harness.
 5. Feishu/Lark as the primary IM channel.
 6. WeChat as early channel support.
-7. Profile-scoped config, secrets, sessions, logs, usage, skills, and runtime state.
-8. Runtime Environment with `homeDir`, `workDir`, and persisted lifecycle state.
-9. Model provider/model selection and profile-scoped API key storage.
-10. Local API key reuse across profiles as a setup convenience.
+7. Discord as an available desktop creation and runtime channel.
+8. Profile-scoped config, secrets, sessions, logs, usage, skills, and runtime state.
+9. Runtime Environment with `homeDir`, `workDir`, and persisted lifecycle state.
+10. Model provider/model selection and profile-scoped API key storage.
+11. Local API key reuse across profiles as a setup convenience.
 
 ## Experimental
 
 1. Ousia Task Engine: scheduled work, exec tasks, agent tasks, heartbeat, and observability.
 2. Ousia internal run gateway.
 3. WeChat channel stability, especially login expiry, send rate limits, long message splitting, and multiple WeChat Agents.
-4. Overseas IM channel adapters are still in development and are not exposed in the release UI.
-5. Hermes and OpenClaw adapters are still in development and are not exposed in the release UI.
-6. Restore enabled Agents on desktop launch.
-7. Runtime lifecycle persistence for crash/restart visibility.
+4. Discord channel stability, especially bot permissions, message-content access, and live delivery behavior.
+5. Slack and Telegram adapters are still hidden development channels.
+6. Codex, Hermes, and OpenClaw adapters are real local runtime integrations with desktop diagnostics and setup surfaces, but are not the default stable path yet.
+7. Restore enabled Agents on desktop launch.
+8. Runtime lifecycle persistence for crash/restart visibility.
 
 Experimental features can be used for local testing, but should not be presented as stable automation or production channel support.
 
@@ -32,8 +34,8 @@ Experimental features can be used for local testing, but should not be presented
 1. Runtime Environment is not a security sandbox. It sets the runtime working directory and tracks lifecycle state only.
 2. Shell/file/network permissions are still controlled by the underlying agent runtime and provider behavior.
 3. Ousia Task Engine is prototype-level and should not be used for critical scheduled work.
-4. Slack, Discord, and Telegram are not release channels yet.
-5. Hermes and OpenClaw are not release harnesses yet.
+4. Slack and Telegram are not release channels yet.
+5. Codex, Hermes, and OpenClaw should still be treated as advanced harness choices rather than the default stable path.
 6. Multi-channel per Agent is part of the architecture, but the first release should still treat channel setup conservatively.
 7. Restore-on-launch supports multiple enabled profiles, but still lacks polished recovery UI, backoff controls, and detailed failure remediation.
 8. Config writes are not fully atomic yet. Avoid editing the same profile from multiple Pie processes at once.

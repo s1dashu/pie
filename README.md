@@ -1,13 +1,15 @@
 # Pie
 
+[简体中文](README.zh-CN.md)
+
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
-![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat-4F7A8A)
+![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord-4F7A8A)
 
 Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels.
 
-The stable path today is Pie Desktop with a Pi Agent Harness and Feishu/Lark channel. WeChat is early, overseas IM channels are still in development, Hermes and OpenClaw are not exposed in the release UI yet, and Ousia/Codex remain experimental integration surfaces.
+The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat is early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
 
 <a href="docs/assets/pie-intro-video.mp4">
   <img src="docs/assets/pie-intro-video-preview.gif" alt="Pie intro video" width="100%">
@@ -63,13 +65,24 @@ Adjust the desktop theme and profile presentation details.
 
 Pie is pre-release software. The main development target is the desktop app.
 
-The most complete path today is:
+The default and most complete path today is:
 
 ```text
 Desktop app -> Pi Agent Harness -> Feishu/Lark channel
 ```
 
-WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Overseas IM channels, Hermes, and OpenClaw are still in development. Codex has integration surfaces in the repo, but is not a first-class stable release path yet.
+Current channel status:
+
+1. Feishu/Lark is the primary and most complete IM channel.
+2. WeChat can log in, poll, receive, and send messages, but should still be treated as early support.
+3. Discord is available in the desktop creation flow and runtime.
+4. Slack and Telegram remain hidden development channels.
+
+Current harness status:
+
+1. Pi is the default stable harness for new Agents.
+2. Ousia is an explicit advanced harness that reuses Pi session capabilities and adds its own framework companion features.
+3. Codex, Hermes, and OpenClaw are real local runtime adapters with desktop diagnostics and setup surfaces, but they are not the default stable path yet.
 
 Ousia's Task Engine is prototype-level. It is useful for exploring scheduled or longer-running Agent work, but should not be used for critical automation.
 
@@ -77,7 +90,7 @@ Pie does not provide a security sandbox yet. The Runtime Environment sets an Age
 
 ## Download
 
-The latest pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2).
+The latest tagged pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2). The current source version is 0.2.3.
 
 - [Download for macOS Apple Silicon](https://github.com/s1dashu/pie/releases/download/v0.2.2/Pie-0.2.2-arm64.dmg)
 - Windows and Linux builds are not published yet.
@@ -103,14 +116,21 @@ npm run start:onboard
 npm run start
 ```
 
+Build the desktop app:
+
+```bash
+npm run desktop:build
+```
+
 ## Architecture
 
 Pie is organized around a small set of boundaries:
 
 1. **Desktop app**: manage Agents, channels, models, logs, folders, Skills, and global preferences.
 2. **Runtime**: start one profile/Agent instance with its selected channels and harness capability.
-3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, Openclaw, and future backends into Pie's session and event surface.
-4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, and future adapters.
+3. **Agent Harnesses**: adapt Pi, Ousia, Codex, Hermes, OpenClaw, and future backends into Pie's session and event surface.
+4. **Channels**: receive messages, send replies, and translate IM events for Feishu/Lark, WeChat, Discord, and future adapters.
+5. **Profile state**: keep profile-scoped config, secrets, runtime logs, usage events, normalized agent events, Skills, and working directories under the Agent profile home.
 
 ## Development
 

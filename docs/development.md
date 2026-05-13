@@ -74,13 +74,15 @@ Do not commit local profile folders, generated runtime files, or secrets.
 
 Pie is pre-release software. The main development target is the desktop app.
 
-The most complete path today is:
+The default and most complete path today is:
 
 ```text
 Desktop app -> Pi Agent Harness -> Feishu/Lark channel
 ```
 
-WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Overseas IM channels, Hermes, and OpenClaw are still in development. Codex has integration surfaces in the repo, but is not a first-class stable release path yet.
+Feishu/Lark is the primary IM channel. WeChat can log in, poll, receive, and send messages, but should still be treated as early support. Discord is available in the desktop creation flow and runtime. Slack and Telegram remain hidden development channels.
+
+Pi is the default stable harness for new Agents. Ousia is an explicit advanced harness that reuses Pi session capabilities and adds its own framework companion features. Codex, Hermes, and OpenClaw are real local runtime adapters with desktop diagnostics and setup surfaces, but they are not the default stable path yet.
 
 Ousia's Task Engine is prototype-level. It is useful for exploring scheduled or longer-running Agent work, but should not be used for critical automation.
 
