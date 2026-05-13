@@ -11,8 +11,8 @@ Pie is a desktop-first Agent client for creating, running, and observing local A
 
 The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat is early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
 
-<a href="docs/assets/pie-intro-video.mp4">
-  <img src="docs/assets/pie-intro-video-preview.gif" alt="Pie intro video" width="100%">
+<a href="docs/assets/pie-latest-intro.mp4">
+  <img src="docs/assets/pie-latest-intro-preview.gif" alt="Pie intro video" width="100%">
 </a>
 
 ## What Pie Does

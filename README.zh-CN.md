@@ -11,8 +11,8 @@ Pie 是一个 desktop-first 的个人 Agent 客户端，用来创建、运行和
 
 当前最稳定的路径是 Pie Desktop + Pi Agent Harness + Feishu/Lark 渠道。WeChat 属于早期支持，Discord 已在桌面端创建流程和 runtime 中开放，Slack 和 Telegram 仍是隐藏的开发中渠道；Ousia、Codex、Hermes、OpenClaw 是高级 harness 选择，不是默认稳定路径。
 
-<a href="docs/assets/pie-intro-video.mp4">
-  <img src="docs/assets/pie-intro-video-preview.gif" alt="Pie intro video" width="100%">
+<a href="docs/assets/pie-latest-intro.mp4">
+  <img src="docs/assets/pie-latest-intro-preview.gif" alt="Pie intro video" width="100%">
 </a>
 
 ## Pie 能做什么
