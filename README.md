@@ -2,11 +2,6 @@
 
 [简体中文](README.zh-CN.md)
 
-<p align="center">
-  <a href="https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg">
-    <img src="https://img.shields.io/badge/Download%20Pie-macOS%20Apple%20Silicon-0A7AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Pie for macOS Apple Silicon">
-  </a>
-</p>
 
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
@@ -14,6 +9,12 @@
 ![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord%20%7C%20DingTalk-4F7A8A)
 
 Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels. Learn more at [pieim.com](https://pieim.com/).
+
+<p align="center">
+  <a href="https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg">
+    <img src="https://img.shields.io/badge/Download%20Pie-macOS%20Apple%20Silicon-0A7AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Pie for macOS Apple Silicon">
+  </a>
+</p>
 
 The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/Lark channel. WeChat and DingTalk are early support, Discord is available in the desktop app, Slack and Telegram remain hidden development channels, and Ousia, Codex, Hermes, and OpenClaw are advanced harness choices rather than the default stable path.
 
