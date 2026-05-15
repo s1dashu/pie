@@ -2,6 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <a href="https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg">
+    <img src="https://img.shields.io/badge/Download%20Pie-macOS%20Apple%20Silicon-0A7AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Pie for macOS Apple Silicon">
+  </a>
+</p>
+
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
@@ -97,9 +103,9 @@ Pie does not provide a security sandbox yet. The Runtime Environment sets an Age
 
 ## Download
 
-The latest tagged pre-release build is [Pie 0.2.2](https://github.com/s1dashu/pie/releases/tag/v0.2.2). The current source version is 0.2.4.
+The current public pre-release build is Pie 0.2.4 for macOS Apple Silicon.
 
-- [Download for macOS Apple Silicon](https://github.com/s1dashu/pie/releases/download/v0.2.2/Pie-0.2.2-arm64.dmg)
+- [Download for macOS Apple Silicon](https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg)
 - Windows and Linux builds are not published yet.
 
 ## Quick Start
