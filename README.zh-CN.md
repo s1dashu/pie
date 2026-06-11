@@ -7,7 +7,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
 ![支持的 IM 渠道](https://img.shields.io/badge/IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord%20%7C%20DingTalk-4F7A8A)
 
-Pie 是一个 desktop-first 的个人 Agent 客户端，用来创建、运行和观察通过 IM 渠道工作的本地 Agent。更多介绍见 [pieim.com](https://pieim.com/)。
+Pie 是一个开源的 Agent 到 IM 连接器：用 Mac 桌面端创建本地 Agent profile，把它们接入 IM 渠道，并持续观察运行状态。更多介绍见 [pieim.com](https://pieim.com/)。
 
 当前最稳定的路径是 Pie Desktop + Pi Agent Harness + Feishu/Lark 渠道。WeChat 和 DingTalk 属于早期支持，Discord 已在桌面端创建流程和 runtime 中开放，Slack 和 Telegram 仍是隐藏的开发中渠道；Ousia、Codex、Hermes、OpenClaw 是高级 harness 选择，不是默认稳定路径。
 
@@ -17,11 +17,12 @@ Pie 是一个 desktop-first 的个人 Agent 客户端，用来创建、运行和
 
 ## Pie 能做什么
 
-Pie 给日常 Agent 工作提供一个统一的桌面入口：
+Pie 把 Agent 到 IM 的连接链路做得小而清楚：
 
-1. 创建 Agent profile，选择 Agent Harness，连接 IM 渠道，选择模型并启动运行。
-2. 查看已有 Agent、已连接渠道、运行状态、模型配置和使用情况。
-3. 在桌面端检查 runtime 输出、profile 文件夹、日志、配置、密钥、Skills 和工作目录，不必在多个终端会话里查找。
+1. 为一个 Agent instance 创建一个 Agent profile。
+2. 选择背后的本地 Agent Harness。
+3. 把 Agent 接入飞书/Lark、微信、Discord 或 DingTalk 等 IM 渠道。
+4. 在桌面端观察渠道状态、runtime 输出、日志、配置、密钥、Skills 和工作目录。
 
 ## 核心功能
 

@@ -14,6 +14,7 @@ import { Input } from "../../components/ui/input";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { brandOptions, formatCount, formatDuration, formatTokenCount, thinkingLevelOptions, type AgentTab } from "./agent-display";
+import { DingTalkSetupGuide } from "./DingTalkSetupGuide";
 import { ProviderSelect } from "./ProviderSelect";
 
 const AgentLogsPanel = lazy(() => import("./AgentLogsPanel").then((module) => ({ default: module.AgentLogsPanel })));
@@ -388,6 +389,7 @@ export function AgentContentPanels({
 					{hasDingTalkChannel ? (
 						<div className="pie-smooth-corner space-y-4 rounded-[42px] bg-[var(--slate-2)] p-4">
 							<SectionTitle title={t("dingtalk")} description={t("dingtalkDesc")} />
+							<DingTalkSetupGuide />
 							<div className="grid grid-cols-2 gap-4">
 								<Field label="Client ID">
 									<Input value={channelDraft.dingtalkClientId ?? ""} onChange={(event) => onUpdateChannelField("dingtalkClientId", event.target.value)} />

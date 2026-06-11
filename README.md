@@ -2,13 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
-
 ![Pre-release](https://img.shields.io/badge/status-pre--release-8A8F98)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-5E8C61)
 ![License: MIT](https://img.shields.io/badge/license-MIT-6E7781)
 ![Supported IM channels](https://img.shields.io/badge/supported%20IM-Feishu%2FLark%20%7C%20WeChat%20%7C%20Discord%20%7C%20DingTalk-4F7A8A)
 
-Pie is a desktop-first Agent client for creating, running, and observing local Agents that work through IM channels. Learn more at [pieim.com](https://pieim.com/).
+Pie is an open-source Agent-to-IM connector: a Mac desktop app for creating local Agent profiles, connecting them to IM channels, and keeping their runtime visible. Learn more at [pieim.com](https://pieim.com/).
 
 <p align="center">
   <a href="https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg">
@@ -24,11 +23,12 @@ The stable path today is Pie Desktop with the Pi Agent Harness and the Feishu/La
 
 ## What Pie Does
 
-Pie gives you one desktop surface for day-to-day Agent work:
+Pie keeps the Agent-to-IM loop small and explicit:
 
-1. Create an Agent profile, choose an Agent Harness, connect an IM channel, select a model, and start running.
-2. See which Agents exist, which channels they are connected to, whether they are running, what model they use, and how much they have been used.
-3. Inspect recent runtime output, profile folders, logs, config, secrets, Skills, and working directories without hunting through terminal sessions.
+1. Create one Agent profile for one Agent instance.
+2. Choose the local Agent Harness behind it.
+3. Connect the Agent to an IM channel such as Feishu/Lark, WeChat, Discord, or DingTalk.
+4. Observe channel state, runtime output, logs, config, secrets, Skills, and working directories from the desktop app.
 
 ## Key Features
 
@@ -107,6 +107,7 @@ Pie does not provide a security sandbox yet. The Runtime Environment sets an Age
 The current public pre-release build is Pie 0.2.4 for macOS Apple Silicon.
 
 - [Download for macOS Apple Silicon](https://fjfojqvnpzva7elb.public.blob.vercel-storage.com/Pie-0.2.4-arm64.dmg)
+- SHA-256: `c38848dc2f7a1ddd7fbc68df52c670f8a2c92dd58f5d69f4134520533c303f92`
 - Windows and Linux builds are not published yet.
 
 ## Quick Start

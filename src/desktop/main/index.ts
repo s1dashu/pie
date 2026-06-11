@@ -1783,7 +1783,7 @@ function createWindow(): BrowserWindow {
 	const preloadPath = join(appRoot, "out/preload/index.cjs");
 	const win = new BrowserWindow({
 		width: 1024,
-		height: 576,
+		height: 691,
 		minWidth: 840,
 		minHeight: 520,
 		show: false,

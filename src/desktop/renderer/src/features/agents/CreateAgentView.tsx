@@ -42,6 +42,7 @@ import { Spinner } from "../../components/ui/spinner-1";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { thinkingLevelOptions } from "./agent-display";
+import { DingTalkSetupGuide } from "./DingTalkSetupGuide";
 import { ProviderSelect } from "./ProviderSelect";
 
 const channelOptions = [
@@ -804,7 +805,7 @@ export function CreateAgentView({
 		runtime: t("installRuntimeDesc"),
 	}[step];
 	const stepTitle = {
-		config: creationMode === "import" ? t("importMyAgent") : t("chooseAgentType"),
+		config: t("createNewAgent"),
 		identity: t("setAgentInfo"),
 		auth: t("scanAuth"),
 		credentials: t("connectChannel"),
@@ -891,7 +892,7 @@ export function CreateAgentView({
 		<div className="flex h-full flex-col overflow-hidden bg-white">
 			<header className="drag-region flex h-[72px] shrink-0 items-center justify-between gap-4 px-7 pt-3">
 				<div className="min-w-0">
-					<h1 className="text-xl font-semibold tracking-normal text-balance">{t("createAgent")}</h1>
+					<h1 className="text-xl font-semibold tracking-normal text-balance">{t("createNewAgent")}</h1>
 					<p className="mt-1 text-sm text-muted-foreground text-pretty">{stepDescription}</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-4">
@@ -934,10 +935,20 @@ export function CreateAgentView({
 							</div>
 						) : (
 							<div className="space-y-6">
-								<h2 className="text-center text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
+								<div className="text-center">
+									<h2 className="text-lg font-semibold tracking-normal text-foreground">{stepTitle}</h2>
+									{step === "config" ? (
+										<button
+											type="button"
+											className="mt-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+											onClick={() => updateCreationMode(creationMode === "import" ? "create" : "import")}
+										>
+											{creationMode === "import" ? t("createNewAgentInstead") : t("importMyAgent")}
+										</button>
+									) : null}
+								</div>
 								{step === "config" ? (
 									<div className="space-y-6">
-										<CreationModeSwitch value={creationMode} onChange={updateCreationMode} />
 										{creationMode === "import" ? (
 											<>
 												<ChannelPicker selected={channels[0]} developerMode={developerMode} onSelect={selectChannel} />
@@ -1739,6 +1750,7 @@ function ManualChannelCredentials(props: {
 				<div className="space-y-3 rounded-2xl bg-white/70 p-3 ring-1 ring-foreground/5">
 					<div className="text-sm font-semibold leading-snug text-foreground">{t("dingtalk")}</div>
 					<div className="text-xs leading-5 text-muted-foreground">{t("dingtalkDesc")}</div>
+					<DingTalkSetupGuide />
 					<Field label="Client ID">
 						<Input className={controlSurfaceClass} value={props.dingtalkClientId} onChange={(event) => props.setDingTalkClientId(event.target.value)} />
 					</Field>
@@ -1795,38 +1807,6 @@ function FeishuSyncPreview({ feishu }: { feishu: DesktopFeishuAppCredentials | u
 					{hasAvatar ? t("feishuAvatarLoaded") : t("feishuAvatarMissing")}
 				</div>
 			</div>
-		</div>
-	);
-}
-
-function CreationModeSwitch({
-	value,
-	onChange,
-}: {
-	value: AgentCreationMode;
-	onChange: (value: AgentCreationMode) => void;
-}): JSX.Element {
-	const { t } = useI18n();
-	return (
-		<div className="grid grid-cols-2 gap-1 rounded-2xl bg-[var(--slate-3)] p-1">
-			{([
-				["create", t("createNewAgent")],
-				["import", t("importMyAgent")],
-			] as const).map(([mode, label]) => (
-				<button
-					key={mode}
-					type="button"
-					className={cn(
-						"h-10 rounded-xl px-3 text-sm font-medium transition-[background-color,color,box-shadow,transform] active:scale-[0.96]",
-						value === mode
-							? "bg-white text-foreground shadow-none"
-							: "text-muted-foreground hover:text-foreground",
-					)}
-					onClick={() => onChange(mode)}
-				>
-					{label}
-				</button>
-			))}
 		</div>
 	);
 }
